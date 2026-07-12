@@ -862,6 +862,8 @@ class UiBridge(QObject):
         from ..services.ok_ww_daily_parser import parse_latest_ok_ww_log
         from ..services.whimbox_daily_parser import parse_latest_whimbox_log
         from ..services.bettergi_daily_parser import parse_latest_bettergi_log
+        from ..services.zzz_daily_parser import parse_latest_zzz_log
+        from ..services.starrail_daily_parser import parse_latest_starrail_log
         from ..settings import resolve_app_key
 
         parsers = (
@@ -870,6 +872,8 @@ class UiBridge(QObject):
             ("wuwa", "ok-ww", parse_latest_ok_ww_log),
             ("nikki", "whimbox", parse_latest_whimbox_log),
             ("genshin", "BetterGI", parse_latest_bettergi_log),
+            ("zzz", "OneDragon", parse_latest_zzz_log),
+            ("honkai_sr", "March7th", parse_latest_starrail_log),
         )
         for game_key, tool_name, parser_func in parsers:
             try:

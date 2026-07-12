@@ -83,6 +83,9 @@ DEFAULT_APPS = {
         "game": {"process_name": "StarRail.exe"},
         "timeouts": {"launch": 300, "monitor": 3600},
         "initial_wait": 20,
+        "starrail_daily_log_monitor": {
+            "log_dir": "",
+        },
     },
     "ZenlessZoneZero": {
         "display_name": "绝区零",
@@ -107,6 +110,9 @@ DEFAULT_APPS = {
         "game": {"process_name": "ZenlessZoneZero.exe"},
         "timeouts": {"launch": 300, "monitor": 3600},
         "initial_wait": 20,
+        "zzz_daily_log_monitor": {
+            "log_dir": "",
+        },
     },
     "WutheringWaves": {
         "display_name": "鸣潮",
