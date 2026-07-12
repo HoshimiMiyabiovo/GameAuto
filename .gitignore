@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Sensitive user config (contains tokens, cookies, paths)
+app_config.json
+
+# Logs and artifacts
+logs/
+artifacts/
+*.log
+
+# Database
+*.sqlite3
+*.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Reference / temp code not part of project
+%TEMP%/
+.trae/
+.claude/
+
+# Tesseract OCR binaries (bundled separately)
+tools/tesseract/
+
+# Flet SDK (large, bundled separately)
+tools/flet/
+
+# Tesseract installer binary
+tools/tesseract-installer.exe

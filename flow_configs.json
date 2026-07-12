@@ -1,0 +1,308 @@
+{
+  "XM": {
+    "enabled": true,
+    "exe_glob": "D:\\Program Files\\新建文件夹\\XM Seer脱机日常 ver *.exe",
+    "enable_ocr_fallback": true,
+    "window_title_keywords": [
+      "xm seer",
+      "脱机",
+      "seer"
+    ],
+    "startup_wait_sec": 12,
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8,
+      1.5,
+      0.67
+    ],
+    "match_confidences": [
+      0.92,
+      0.88,
+      0.84,
+      0.8
+    ],
+    "steps": [
+      {
+        "name": "进入脱机",
+        "action": "click_template",
+        "template": "E:\\GithubProject\\game_auto\\模板\\进入脱机.png",
+        "target_text": "进入脱机",
+        "enable_ocr_fallback": true,
+        "confirm_type": "disappear",
+        "timeout_sec": 60,
+        "clicks": 1,
+        "post_delay_sec": 1.2,
+        "confirm_templates": [
+          "E:\\GithubProject\\game_auto\\模板\\XM登录.png"
+        ],
+        "confirm_timeout_sec": 12,
+        "on_fail": "retry_step",
+        "max_attempts": 3
+      },
+      {
+        "name": "登录",
+        "action": "click_template",
+        "template": "E:\\GithubProject\\game_auto\\模板\\XM登录.png",
+        "target_text": "登录",
+        "enable_ocr_fallback": true,
+        "confirm_type": "template_match",
+        "timeout_sec": 120,
+        "clicks": 1,
+        "post_delay_sec": 2.0,
+        "confirm_templates": [
+          "E:\\GithubProject\\game_auto\\模板\\XM开始.png"
+        ],
+        "confirm_timeout_sec": 20,
+        "on_fail": "retry_step",
+        "max_attempts": 3
+      },
+      {
+        "name": "开始",
+        "action": "click_template",
+        "template": "E:\\GithubProject\\game_auto\\模板\\XM开始.png",
+        "target_text": "开始",
+        "enable_ocr_fallback": true,
+        "confirm_type": "template_match",
+        "timeout_sec": 90,
+        "clicks": 1,
+        "post_delay_sec": 1.5,
+        "confirm_templates": [
+          "E:\\GithubProject\\game_auto\\模板\\XM运行中.png"
+        ],
+        "confirm_timeout_sec": 25,
+        "on_fail": "retry_step",
+        "max_attempts": 4
+      },
+      {
+        "name": "运行中确认",
+        "action": "wait_template",
+        "template": "E:\\GithubProject\\game_auto\\模板\\XM运行中.png",
+        "target_text": "停止",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 90,
+        "post_delay_sec": 1.0
+      },
+      {
+        "name": "执行完毕",
+        "action": "wait_template",
+        "template": "E:\\GithubProject\\game_auto\\模板\\XM执行完毕.png",
+        "target_text": "选择任务已执行完毕",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 3600,
+        "post_delay_sec": 0.5
+      }
+    ],
+    "close_process_on_finish": true
+  },
+  "CJ": {
+    "enabled": true,
+    "exe_glob": "D:\\Program Files\\新建文件夹\\重聚脱机巅峰*.exe",
+    "enable_ocr_fallback": true,
+    "window_title_keywords": [
+      "重聚",
+      "脱机",
+      "巅峰"
+    ],
+    "startup_wait_sec": 10,
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8,
+      1.5,
+      0.67
+    ],
+    "match_confidences": [
+      0.92,
+      0.88,
+      0.84,
+      0.8
+    ],
+    "steps": [
+      {
+        "name": "登录1",
+        "action": "click_template",
+        "template": "E:\\GithubProject\\game_auto\\模板\\CJ登录-1.png",
+        "target_text": "登录",
+        "enable_ocr_fallback": true,
+        "confirm_type": "template_match",
+        "timeout_sec": 120,
+        "clicks": 1,
+        "post_delay_sec": 2.0,
+        "confirm_templates": [
+          "E:\\GithubProject\\game_auto\\模板\\CJ登录-2.png"
+        ],
+        "confirm_timeout_sec": 15,
+        "on_fail": "retry_step",
+        "max_attempts": 3
+      },
+      {
+        "name": "登录2",
+        "action": "click_template",
+        "template": "E:\\GithubProject\\game_auto\\模板\\CJ登录-2.png",
+        "target_text": "登录",
+        "enable_ocr_fallback": true,
+        "confirm_type": "template_match",
+        "timeout_sec": 120,
+        "clicks": 1,
+        "post_delay_sec": 2.5,
+        "confirm_templates": [
+          "E:\\GithubProject\\game_auto\\模板\\CJ登陆成功.png"
+        ],
+        "confirm_timeout_sec": 20,
+        "on_fail": "retry_step",
+        "max_attempts": 3
+      },
+      {
+        "name": "登录成功确认",
+        "action": "click_template",
+        "no_click": true,
+        "template": "E:\\GithubProject\\game_auto\\模板\\CJ登陆成功.png",
+        "target_text": "退出",
+        "enable_ocr_fallback": true,
+        "confirm_type": "template_match",
+        "timeout_sec": 180,
+        "post_delay_sec": 1.0,
+        "confirm_templates": [
+          "E:\\GithubProject\\game_auto\\模板\\CJ进入对战-1.png"
+        ],
+        "confirm_timeout_sec": 20,
+        "on_fail": "retry_prev",
+        "max_attempts": 2
+      },
+      {
+        "name": "进入对战1",
+        "action": "click_template",
+        "template": "E:\\GithubProject\\game_auto\\模板\\CJ进入对战-1.png",
+        "target_text": "进入对战",
+        "enable_ocr_fallback": true,
+        "confirm_type": "template_match",
+        "timeout_sec": 120,
+        "clicks": 1,
+        "post_delay_sec": 2.0,
+        "confirm_templates": [
+          "E:\\GithubProject\\game_auto\\模板\\CJ进入对战-2.png"
+        ],
+        "confirm_timeout_sec": 15,
+        "on_fail": "retry_step",
+        "max_attempts": 3
+      },
+      {
+        "name": "进入对战2",
+        "action": "click_template",
+        "template": "E:\\GithubProject\\game_auto\\模板\\CJ进入对战-2.png",
+        "target_text": "一键刷任务",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 120,
+        "clicks": 1,
+        "post_delay_sec": 2.0,
+        "on_fail": "retry_step",
+        "max_attempts": 2
+      }
+    ],
+    "close_process_on_finish": false
+  },
+  "NTE": {
+    "enabled": true,
+    "exe_path": "E:\\Program Files\\Game\\Neverness To Everness\\NTELauncher.exe",
+    "window_title_keywords": [
+      "neverness",
+      "nte",
+      "异环"
+    ],
+    "window_process_names": [
+      "NTEGame.exe",
+      "NTELauncher.exe",
+      "HTGame.exe"
+    ],
+    "startup_wait_sec": 10,
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8,
+      1.5,
+      0.67
+    ],
+    "match_confidences": [
+      0.92,
+      0.88,
+      0.84,
+      0.8
+    ],
+    "steps": [
+      {
+        "name": "开始更新",
+        "action": "click_template",
+        "template": "E:\\GithubProject\\game_auto\\模板\\异环-开始更新.png",
+        "target_text": "开始更新",
+        "confirm_type": "none",
+        "timeout_sec": 8,
+        "clicks": 1,
+        "post_delay_sec": 2.0,
+        "optional_if_missing": true,
+        "on_fail": "fail",
+        "max_attempts": 1
+      },
+      {
+        "name": "等待开始游戏",
+        "action": "wait_template",
+        "template": "E:\\GithubProject\\game_auto\\模板\\异环-开始游戏.png",
+        "target_text": "开始游戏",
+        "timeout_sec": 1200,
+        "post_delay_sec": 1.0
+      },
+      {
+        "name": "开始游戏",
+        "action": "click_template",
+        "template": "E:\\GithubProject\\game_auto\\模板\\异环-开始游戏.png",
+        "target_text": "开始游戏",
+        "confirm_type": "none",
+        "timeout_sec": 180,
+        "clicks": 1,
+        "post_delay_sec": 2.0,
+        "on_fail": "retry_step",
+        "max_attempts": 4
+      },
+      {
+        "name": "确定",
+        "action": "click_template",
+        "template": "E:\\GithubProject\\game_auto\\模板\\异环-确定.png",
+        "search_scope": "screen",
+        "confirm_type": "none",
+        "timeout_sec": 45,
+        "clicks": 1,
+        "post_delay_sec": 2.0,
+        "on_fail": "retry_step",
+        "max_attempts": 4
+      },
+      {
+        "name": "游戏启动确认",
+        "action": "wait_process",
+        "process_name": "HTGame.exe",
+        "target_text": "HTGame.exe",
+        "confirm_type": "none",
+        "timeout_sec": 180,
+        "switch_window_to_process": true,
+        "post_delay_sec": 15.0,
+        "on_fail": "retry_step",
+        "max_attempts": 1
+      },
+      {
+        "name": "进入游戏",
+        "action": "click_template",
+        "template": "E:\\GithubProject\\game_auto\\模板\\异环-进入游戏.png",
+        "confirm_type": "disappear",
+        "timeout_sec": 120,
+        "clicks": 1,
+        "post_delay_sec": 5.0,
+        "confirm_timeout_sec": 12,
+        "on_fail": "retry_step",
+        "max_attempts": 1
+      }
+    ],
+    "close_process_on_finish": false
+  }
+}

@@ -1,0 +1,101 @@
+import sys
+import ctypes
+import logging
+
+from ..settings import APP_ORDER, get_app_display_name, resolve_app_key
+from ..services.dependency_manager import run_full_dependency_check
+from ..services.instance_lock import acquire_instance_lock
+from ..runtime.automation_controller import AutomationController
+from ..runtime.task_batch_runner import run_task_batch
+from ..services.utils import (
+    clear_keyboard_buffer,
+    get_saved_helper_enabled,
+    get_saved_target_apps,
+    get_user_selection,
+)
+
+def require_admin():
+    if not ctypes.windll.shell32.IsUserAnAdmin():
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
+        sys.exit(0)
+
+def main():
+    require_admin()
+    bootstrap_logger = logging.getLogger("GameAutoBootstrap")
+    if not bootstrap_logger.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format='[%(asctime)s.%(msecs)03d] [%(levelname)-8s] %(name)s:%(funcName)s:%(lineno)d - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+    logging.getLogger("GameAutomation").setLevel(logging.DEBUG)
+
+    existing_pid = acquire_instance_lock()
+    if existing_pid:
+        bootstrap_logger.error("[启动] 拒绝启动，检测到重复实例 PID=%d", existing_pid)
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            f"已有 game_auto 实例在运行 (PID {existing_pid})，请先关闭它再启动 CLI。",
+            "启动失败 - 已有实例",
+            0x10,
+        )
+        return
+
+    warn_once_at_startup(bootstrap_logger)
+
+    dep_report = run_full_dependency_check(bootstrap_logger, auto_install=True)
+    if dep_report.errors:
+        bootstrap_logger.error("检测到关键依赖错误，程序继续运行但部分功能可能不可用")
+
+    controller = AutomationController()
+    report = []
+
+    try:
+        if len(sys.argv) == 1:
+            target_apps = get_saved_target_apps()
+            if target_apps:
+                print("="*50 + "\n游戏自动化助手 - 使用已保存启动设置\n" + "="*50)
+                print("将执行：" + ", ".join(get_app_display_name(app) for app, _ in target_apps))
+            else:
+                print("="*50 + "\n游戏自动化助手 - 任务选择\n" + "="*50)
+                target_apps = get_user_selection()
+        else:
+            script_choice = sys.argv[2] if len(sys.argv) > 2 else None
+            target_apps = [(resolve_app_key(sys.argv[1]), script_choice)] if len(sys.argv) > 1 else [(app, None) for app in APP_ORDER]
+
+        batch_result = run_task_batch(
+            controller,
+            target_apps,
+            xm_enabled=get_saved_helper_enabled("GenshinImpact"),
+            cj_enabled=get_saved_helper_enabled("InfinityNikki"),
+        )
+        report.extend(batch_result.report)
+        report.extend(batch_result.warnings)
+    except KeyboardInterrupt:
+        report.append("!! 操作被中断 !!")
+        controller.logger.warning("用户中断操作")
+    except Exception as e:
+        report.append(f"!! 系统错误: {str(e)} !!")
+        controller.logger.critical(f"系统错误: {str(e)}", exc_info=True)
+    finally:
+        controller._cleanup_key_listener()
+        controller.logger.info("\n" + "="*40 + "\n任务执行报告:")
+        for line in report:
+            controller.logger.info(line)
+       
+        try:
+            for handler in controller.logger.handlers:
+                handler.flush()
+        except PermissionError:
+            print("警告: 日志刷新失败，已忽略 (权限问题)")
+       
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "自动化任务执行结果:\n\n" + "\n".join(report),
+            "任务报告 - 游戏自动化助手",
+            0x40
+        )
+
+if __name__ == "__main__":
+    import logging.handlers
+    main()

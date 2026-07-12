@@ -1,0 +1,60 @@
+{
+  "_version": "1.0",
+  "_comment": "复制此文件为 app_config.json 并填写你自己的配置。路径配置可通过首次启动向导完成。",
+  "setup_completed": false,
+  "app_order": [
+    "GenshinImpact",
+    "HonkaiStarRail",
+    "ZenlessZoneZero",
+    "WutheringWaves",
+    "ArknightsEndfield",
+    "NevernessToEverness",
+    "InfinityNikki"
+  ],
+  "apps": {},
+  "wuwa_kujiequ": {
+    "auto_sign": false,
+    "phone": "",
+    "source": "android",
+    "roles": []
+  },
+  "mihoyo_sign": {
+    "startup_sign": false,
+    "cookie": "",
+    "browser": "edge",
+    "enabled_games": {
+      "genshin": true,
+      "honkai_sr": true,
+      "zzz": true
+    }
+  },
+  "nikki": {
+    "uid": "",
+    "momo_id": "",
+    "momo_token": ""
+  },
+  "tajiduo_sign": {
+    "startup_sign": false,
+    "token": "",
+    "deviceid": "",
+    "uid": "",
+    "phone": "",
+    "password": "",
+    "do_bbs_signin": true,
+    "do_game_signin": true,
+    "do_browse": false,
+    "do_like": false,
+    "do_share": false
+  },
+  "endfield_protocol": {
+    "api_key": "",
+    "framework_token": "",
+    "role_id": "",
+    "server_id": "1"
+  },
+  "skendfield_sign": {
+    "token": "",
+    "server": "cn",
+    "startup_sign": false
+  }
+}
