@@ -630,10 +630,14 @@ def _get_stoken_by_login_ticket(login_ticket: str, account_id: str) -> str:
     raise MihoyoSignError(message)
 
 
-def _get_cookie_token_by_stoken(stoken: str, account_id: str) -> str:
+def _get_cookie_token_by_stoken(stoken: str, account_id: str, mid: str = "") -> str:
+    # v2 stoken (前缀 "v2_") 必须配 mid 一起发，否则接口返回"登录状态失效"
+    cookie_parts = [f"stuid={account_id}", f"stoken={stoken}"]
+    if mid:
+        cookie_parts.append(f"mid={mid}")
     response = _request_json_simple(
         MIYOUSHE_STOKEN_COOKIE_URL,
-        headers=_build_mihoyo_mobile_headers(cookie=f"stuid={account_id};stoken={stoken}"),
+        headers=_build_mihoyo_mobile_headers(cookie=";".join(cookie_parts)),
         timeout=20,
         query={"uid": account_id, "stoken": stoken},
         method="GET",
@@ -646,6 +650,35 @@ def _get_cookie_token_by_stoken(stoken: str, account_id: str) -> str:
         return token
     message = str(response.get("message") or "无法通过 stoken 获取 cookie_token")
     raise MihoyoSignError(message)
+
+
+def _ensure_fresh_cookie_token(cookie: str) -> str:
+    """用 stoken 强制刷新 cookie_token。
+
+    签到接口 `luna/info` / `luna/sign` 需要有效的 cookie_token；stoken_cookie 中
+    的 cookie_token 可能已过期。只要 cookie 含有 stoken + account_id，就尝试刷新；
+    刷新失败时保留原 cookie 不变（不抛错，让签到流程自己暴露真实错误）。
+
+    v2 stoken (前缀 "v2_") 必须配 mid 才能通过认证。
+    """
+    cleaned = tidy_cookie(cookie)
+    if not cleaned:
+        return cleaned
+    fields = extract_cookie_fields(cleaned)
+    stoken = fields.get("stoken") or fields.get("stoken_v2") or ""
+    account_id = _resolve_cookie_account_id(fields)
+    mid = fields.get("mid") or fields.get("account_mid_v2") or ""
+    if not stoken or not account_id:
+        return cleaned
+    try:
+        fresh_token = _get_cookie_token_by_stoken(stoken, account_id, mid=mid)
+    except Exception as exc:
+        LOGGER.debug("[米游社] 强制刷新 cookie_token 失败（沿用原 cookie）: %s", exc)
+        return cleaned
+    if not fresh_token:
+        return cleaned
+    LOGGER.info("[米游社] 已通过 stoken 刷新 cookie_token")
+    return _merge_cookie_fields(cleaned, cookie_token=fresh_token)
 
 
 def enrich_cookie_for_record_api(cookie: str) -> Dict[str, Any]:
@@ -684,7 +717,8 @@ def enrich_cookie_for_record_api(cookie: str) -> Dict[str, Any]:
     cookie_token = fields.get("cookie_token") or fields.get("cookie_token_v2") or ""
     if stoken and account_id and not cookie_token:
         try:
-            cookie_token = _get_cookie_token_by_stoken(stoken, account_id)
+            mid = fields.get("mid") or fields.get("account_mid_v2") or ""
+            cookie_token = _get_cookie_token_by_stoken(stoken, account_id, mid=mid)
             if cookie_token:
                 added_fields["cookie_token"] = cookie_token
         except Exception as exc:
@@ -1521,8 +1555,8 @@ def login_by_qrcode_app() -> Dict[str, Any]:
         mihoyo_cfg = config.setdefault("mihoyo_sign", {})
         mihoyo_cfg["cookie"] = cookie_str
         mihoyo_cfg["stoken_cookie"] = cookie_str
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
+        from ..settings.manager import atomic_write_json
+        atomic_write_json(config_path, config)
         LOGGER.info("[米游社] App QR stoken 已保存到配置文件")
     except Exception as exc:
         LOGGER.warning("[米游社] App QR 保存配置失败: %s", exc)
@@ -1868,6 +1902,9 @@ def sign_games(cookie: str, game_keys: Iterable[str]) -> Dict[str, Any]:
     selected_keys = [key for key in game_keys if key in GAME_DEFINITIONS]
     if not selected_keys:
         raise MihoyoSignError("没有选择需要签到的米游社游戏。")
+
+    # 用 stoken 强制刷新 cookie_token，避免 cookie_token 过期导致签到失败（retcode -100）
+    cleaned_cookie = _ensure_fresh_cookie_token(cleaned_cookie)
 
     LOGGER.info(
         "[米游社] 开始执行签到任务：账号 %s，游戏 %s",

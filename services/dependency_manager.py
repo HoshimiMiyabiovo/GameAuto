@@ -8,12 +8,12 @@ import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
-from ..settings import APPS, QBITTORRENT
-from ..settings.paths import TESSERACT_EXE
-
+# 注意: 不要在模块顶层 import ..settings / ..settings.paths, 它们会顺带拉起
+# settings.discovery → runtime.process_supervisor, 后者依赖 psutil 等本模块要自动安装的包,
+# 会导致 import 阶段就先于 run_full_dependency_check 触发 ModuleNotFoundError,
+# 让自动安装机制形同虚设。所有需要 APPS / QBITTORRENT / TESSERACT_EXE 的位置都改成函数内 import。
 
 DEFAULT_PIP_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
-LOCAL_TESSERACT_EXE = str(TESSERACT_EXE)
 
 # import_name -> pip_package
 REQUIRED_PYTHON_PACKAGES: Dict[str, str] = {
@@ -81,6 +81,10 @@ def _install_package(pkg_name: str, mirror_url: str, logger: logging.Logger) -> 
 
 
 def _collect_app_paths() -> List[Tuple[str, str, str]]:
+    # 延迟导入: settings 在被 import 时会触发 discovery / process_supervisor 的副作用链,
+    # 那条链需要 psutil 等本模块正在尝试自动安装的依赖。函数内 import 避开循环依赖。
+    from ..settings import APPS, QBITTORRENT
+
     paths: List[Tuple[str, str, str]] = []
     if QBITTORRENT.get("path"):
         paths.append(("系统组件", "qBittorrent", QBITTORRENT["path"]))
@@ -94,7 +98,11 @@ def _collect_app_paths() -> List[Tuple[str, str, str]]:
 
 
 def _check_tesseract_capability(report: DependencyCheckReport):
-    tesseract_bin = LOCAL_TESSERACT_EXE if os.path.exists(LOCAL_TESSERACT_EXE) else shutil.which("tesseract")
+    # 延迟导入: 同 _collect_app_paths 的原因
+    from ..settings.paths import TESSERACT_EXE
+
+    local_tesseract = str(TESSERACT_EXE)
+    tesseract_bin = local_tesseract if os.path.exists(local_tesseract) else shutil.which("tesseract")
     if tesseract_bin is None:
         report.add_warning("未检测到 tesseract.exe，OCR识别点击功能可能不可用")
         return

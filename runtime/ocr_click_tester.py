@@ -637,7 +637,16 @@ def ocr_find_text(
     for r in results:
         text_normalized = _normalize_text(r["text"])
         if r["confidence"] >= min_confidence:
-            if target_normalized in text_normalized or text_normalized in target_normalized:
+            # 正向匹配：OCR文本包含目标文本（如 target="登录" 在 OCR="登录账号" 中）
+            if target_normalized in text_normalized:
+                logger.info(f"[OCR匹配] ✅ 找到 \"{target_text}\" -> \"{r['text']}\" ({r['confidence']:.2f}) @ {r['center']}")
+                return r
+            # 反向匹配：目标文本包含OCR文本（如 OCR="脱机" 漏字后仍在 target="进入脱机" 中）
+            # 要求OCR文本至少2字符且达到目标长度一半，避免单字误匹配（如"脱"匹配"进入脱机"命中窗口标题栏）
+            if (
+                text_normalized in target_normalized
+                and len(text_normalized) >= max(2, len(target_normalized) // 2)
+            ):
                 logger.info(f"[OCR匹配] ✅ 找到 \"{target_text}\" -> \"{r['text']}\" ({r['confidence']:.2f}) @ {r['center']}")
                 return r
 

@@ -395,6 +395,102 @@ except ImportError:
         )
 
 
+def _record_nikki_to_tracker(tracker, status: GameDailyStatus):
+    """把无限暖暖的 DailyTaskItem 同步到 tracker。"""
+    for task in status.tasks:
+        task_status = "success" if task.is_completed else (
+            "skipped" if task.name == "未配置凭据" else "pending"
+        )
+        tracker.record_task(
+            game_key=status.game_key, game_name=status.game_name,
+            task_key=task.name, task_name=task.name,
+            status=task_status, source="pearpal_notebook",
+            message=f"{task.current}/{task.total}" if task.total else "",
+            uid=status.uid, nickname=status.nickname,
+            extra={"current": task.current, "total": task.total},
+        )
+
+
+# 无限暖暖期望监控的 task 模板。即使 Pearpal API 不可用，也返回这组 task 让
+# DailyView 卡片始终能展示出"监控框架"（每条标 pending 或基于 notbeook gm 数据填值）。
+NIKKI_EXPECTED_TASKS: Dict[str, Dict[str, Any]] = {
+    "每日心愿": {
+        "gm_key": "daily_task",
+        "max": 500,
+        "is_required": True,   # 每日心愿全满 → 当日完成
+    },
+    "周常奖励": {
+        "gm_key": "weekly_reward_status",
+        "max": 1,
+        "is_required": True,
+    },
+    "能量/体力": {
+        "gm_key": "energy",
+        "max": 240,
+        "is_required": False,  # 不计入完成
+    },
+    "派遣进行中": {
+        "gm_key": "dispatch_active",
+        "max": 4,
+        "is_required": False,
+    },
+    "登录天数": {
+        "gm_key": "login_days",
+        "max": 0,  # 0 表示仅展示，不参与完成判断
+        "is_required": False,
+    },
+}
+
+
+def _build_nikki_tasks_from_gm(gm: Dict[str, Any], info_self: Dict[str, Any]) -> List[DailyTaskItem]:
+    """根据 Pearpal notebook 的 gm/info_self 字典，生成期望监控的 nikki task 列表。
+
+    只要 gm 字典里某个 gm_key 存在，就用真实数据填 current/total；不存在的 task
+    会以 0/0 + is_completed=False 占位（"尚未追踪"）。
+    """
+    tasks: List[DailyTaskItem] = []
+    # 计算当前活跃派遣数
+    active_dispatch = 0
+    if isinstance(gm.get("dispatch"), list):
+        try:
+            import time as _t
+            now_ts = _t.time()
+            for d in gm["dispatch"]:
+                if not isinstance(d, dict):
+                    continue
+                start = int(d.get("start_time") or 0)
+                duration_h = int(d.get("spend_time") or 0)
+                if now_ts < start + duration_h * 3600:
+                    active_dispatch += 1
+        except Exception:
+            active_dispatch = 0
+
+    for name, meta in NIKKI_EXPECTED_TASKS.items():
+        gm_key = meta["gm_key"]
+        if gm_key == "dispatch_active":
+            current = active_dispatch
+        elif gm_key == "login_days":
+            current = int(info_self.get("login_days") or 0)
+        else:
+            try:
+                current = int(gm.get(gm_key) or 0)
+            except (TypeError, ValueError):
+                current = 0
+        total = int(meta.get("max") or 0)
+        is_required = bool(meta.get("is_required"))
+        if total > 0 and is_required:
+            is_completed = current >= total
+        elif total > 0 and not is_required:
+            # 进度类指标（能量/派遣/登录天数）：只要 Pearpal 返回了非零数据就算"已追踪"
+            is_completed = current > 0
+        else:
+            is_completed = current > 0
+        tasks.append(DailyTaskItem(
+            name=name, current=current, total=total, is_completed=is_completed,
+        ))
+    return tasks
+
+
 def check_nikki_daily(
     momo_token: str,
     momo_id: str,
@@ -403,87 +499,104 @@ def check_nikki_daily(
 ) -> GameDailyStatus:
     """检查无限暖暖每日任务完成情况。
 
-    通过 Pearpal notebook API 获取每日心愿/任务完成状态。
+    通过 Pearpal notebook API 获取每日心愿/能量/派遣/登录天数等指标，
+    按 `NIKKI_EXPECTED_TASKS` 模板生成 task 列表，使 DailyView 始终能看到
+    期望监控的所有任务（每条 current/total 反映真实数据，没有则 0 占位）。
 
-    判定标准：每日心愿全部完成。
+    判定标准：每日心愿 ≥ 500 + 周常奖励已领取。
     """
-    if fetch_pearpal_notebook_payload is None:
-        LOGGER.error("[nikki] nikki_resonance_fetch 模块不可用，fetch_pearpal_notebook_payload=%s", type(fetch_pearpal_notebook_payload).__name__)
-        return GameDailyStatus(
-            game_key="nikki", game_name="无限暖暖", uid=uid, nickname="",
-            is_daily_completed=False,
-            errors=["nikki_resonance_fetch 模块不可用"],
-        )
-
-    try:
-        notebook = fetch_pearpal_notebook_payload(momo_token, momo_id, domain=domain)
-    except Exception as exc:
-        LOGGER.error("[nikki] 获取 notebook 数据失败：%s", exc, exc_info=True)
-        return GameDailyStatus(
-            game_key="nikki", game_name="无限暖暖", uid=uid, nickname="",
-            is_daily_completed=False,
-            errors=[f"获取 notebook 数据失败：{exc}"],
-        )
-
-    tasks: List[DailyTaskItem] = []
-    daily_completed = False
+    resolved_uid = uid
+    nickname = ""
+    errors: List[str] = []
     extra: Dict[str, Any] = {}
-
     gm: Dict[str, Any] = {}
     info_self: Dict[str, Any] = {}
-    if isinstance(notebook, dict):
-        gm = notebook.get("info_from_gm") or {}
-        info_self = notebook.get("info_from_self") or {}
-        if not isinstance(gm, dict):
-            gm = {}
-        if not isinstance(info_self, dict):
-            info_self = {}
+
+    if fetch_pearpal_notebook_payload is None:
+        errors.append("nikki_resonance_fetch 模块不可用")
+    elif not (momo_token and momo_id):
+        errors.append("未配置 momo_token / momo_id，无法拉取 Pearpal notebook")
     else:
-        LOGGER.warning("[nikki] notebook 返回类型异常：%s", type(notebook).__name__)
+        try:
+            notebook = fetch_pearpal_notebook_payload(momo_token, momo_id, domain=domain)
+        except Exception as exc:
+            LOGGER.warning("[nikki] 获取 notebook 数据失败：%s", exc)
+            errors.append(f"获取 notebook 数据失败：{exc}")
+            notebook = None
+        if isinstance(notebook, dict):
+            gm = notebook.get("info_from_gm") or {}
+            info_self = notebook.get("info_from_self") or {}
+            if not isinstance(gm, dict):
+                gm = {}
+            if not isinstance(info_self, dict):
+                info_self = {}
+            resolved_uid = str(gm.get("role_id") or uid or "")
+            nickname = str(gm.get("name") or info_self.get("name") or "")
+            extra["has_data"] = True
+        elif notebook is not None:
+            LOGGER.warning("[nikki] notebook 返回类型异常：%s", type(notebook).__name__)
+            errors.append(f"notebook 返回类型异常：{type(notebook).__name__}")
 
-    resolved_uid = str(gm.get("role_id") or uid or "")
-    nickname = str(gm.get("name") or info_self.get("name") or "")
+    # 始终按 NIKKI_EXPECTED_TASKS 生成 task 列表，让 DailyView 总能看到监控框架
+    tasks = _build_nikki_tasks_from_gm(gm, info_self)
 
-    if isinstance(notebook, dict):
-        extra["has_data"] = True
+    # 填充 extra
+    if "daily_task" in gm:
+        try:
+            extra["daily_task"] = {"current": int(gm["daily_task"] or 0), "total": 500}
+        except (TypeError, ValueError):
+            pass
+    if "weekly_reward_status" in gm:
+        try:
+            extra["weekly_reward_completed"] = int(gm["weekly_reward_status"] or 0) >= 1
+        except (TypeError, ValueError):
+            pass
+    if "energy" in gm:
+        try:
+            extra["energy"] = int(gm["energy"] or 0)
+        except (TypeError, ValueError):
+            pass
+    if "level" in gm:
+        try:
+            extra["level"] = int(gm["level"] or 0)
+        except (TypeError, ValueError):
+            pass
+    if "login_days" in info_self:
+        try:
+            extra["login_days"] = int(info_self["login_days"] or 0)
+        except (TypeError, ValueError):
+            pass
+    if isinstance(gm.get("dispatch"), list):
+        active = 0
+        total_d = 0
+        import time as _t
+        now_ts = _t.time()
+        for d in gm["dispatch"]:
+            if not isinstance(d, dict):
+                continue
+            total_d += 1
+            try:
+                start = int(d.get("start_time") or 0)
+                duration_h = int(d.get("spend_time") or 0)
+                if now_ts < start + duration_h * 3600:
+                    active += 1
+            except (TypeError, ValueError):
+                continue
+        extra["dispatch"] = {"total": total_d, "active": active}
 
-        daily_task_count = int(gm.get("daily_task") or 0)
-        DAILY_TASK_MAX = 500
-        tasks.append(DailyTaskItem(
-            name="每日心愿", current=daily_task_count, total=DAILY_TASK_MAX,
-            is_completed=daily_task_count >= DAILY_TASK_MAX,
-        ))
-        extra["daily_task"] = {"current": daily_task_count, "total": DAILY_TASK_MAX}
-        daily_completed = daily_task_count >= DAILY_TASK_MAX
+    # 完成判断：每日心愿 + 周常奖励（is_required=True 的任务）
+    daily_completed = all(
+        t.is_completed for t in tasks
+        if NIKKI_EXPECTED_TASKS.get(t.name, {}).get("is_required")
+    ) and any(
+        NIKKI_EXPECTED_TASKS.get(t.name, {}).get("is_required")
+        for t in tasks
+    )
 
-        weekly_status = int(gm.get("weekly_reward_status") or 0)
-        tasks.append(DailyTaskItem(
-            name="周常奖励", current=weekly_status, total=1,
-            is_completed=weekly_status >= 1,
-        ))
-        extra["weekly_reward_completed"] = weekly_status >= 1
-
-        energy_val = int(gm.get("energy") or 0)
-        extra["energy"] = energy_val
-
-        dispatch_list = gm.get("dispatch")
-        if isinstance(dispatch_list, list) and dispatch_list:
-            import time as _time
-            now_ts = _time.time()
-            active_dispatches = 0
-            for d in dispatch_list:
-                if isinstance(d, dict):
-                    start = int(d.get("start_time") or 0)
-                    duration_h = int(d.get("spend_time") or 0)
-                    end_ts = start + duration_h * 3600
-                    if now_ts < end_ts:
-                        active_dispatches += 1
-            extra["dispatch"] = {"total": len(dispatch_list), "active": active_dispatches}
-
-        extra["level"] = int(gm.get("level") or 0)
-        extra["login_days"] = int(info_self.get("login_days") or 0)
-
-    LOGGER.info("[nikki] 每日检查成功：%s", nickname or resolved_uid)
+    if errors:
+        LOGGER.info("[nikki] 每日检查部分失败：errors=%s, tasks=%d", errors, len(tasks))
+    else:
+        LOGGER.info("[nikki] 每日检查成功：%s, tasks=%d", nickname or resolved_uid, len(tasks))
 
     return GameDailyStatus(
         game_key="nikki",
@@ -493,7 +606,8 @@ def check_nikki_daily(
         is_daily_completed=daily_completed,
         tasks=tasks,
         extra=extra,
-        raw=notebook,
+        raw=gm or None,
+        errors=errors,
     )
 
 
@@ -551,17 +665,10 @@ def _safe_int(v, default=0):
 
 def _build_missing_config_status(game_key: str, reason: str) -> GameDailyStatus:
     """构建配置缺失时的状态。"""
-    game_names = {
-        "genshin": "原神",
-        "honkai_sr": "崩坏：星穹铁道",
-        "zzz": "绝区零",
-        "wuwa": "鸣潮",
-        "nikki": "无限暖暖",
-        "endfield": "终末地",
-    }
+    from ..settings.defaults import GAME_KEYS
     return GameDailyStatus(
         game_key=game_key,
-        game_name=game_names.get(game_key, game_key),
+        game_name=GAME_KEYS.get(game_key, game_key),
         uid="",
         nickname="",
         is_daily_completed=False,
@@ -573,27 +680,16 @@ def _normalize_requested_game_keys(
     game_keys: Optional[List[str]],
 ) -> tuple[Optional[List[str]], List[str]]:
     """规范化请求的游戏 key 列表，支持别名。"""
+    from ..settings import resolve_game_key
     if game_keys is None:
         return None, []
-    aliases = {
-        "genshin": "genshin",
-        "honkai_sr": "honkai_sr",
-        "hsr": "honkai_sr",
-        "star_rail": "honkai_sr",
-        "zzz": "zzz",
-        "zenless": "zzz",
-        "wuwa": "wuwa",
-        "wuthering": "wuwa",
-        "nikki": "nikki",
-        "infinity_nikki": "nikki",
-        "endfield": "endfield",
-    }
     normalized: List[str] = []
     unknown: List[str] = []
     for key in game_keys:
-        lower_key = key.lower().strip()
-        if lower_key in aliases:
-            normalized.append(aliases[lower_key])
+        gk = resolve_game_key(key)
+        from ..settings.defaults import GAME_KEYS
+        if gk in GAME_KEYS:
+            normalized.append(gk)
         else:
             unknown.append(key)
     return normalized, unknown
@@ -719,7 +815,7 @@ def check_games_progress(
     momo_id = str(nikki_cfg.get("momo_id", "") if isinstance(nikki_cfg, dict) else "").strip()
     nikki_uid = str(nikki_cfg.get("uid", "") if isinstance(nikki_cfg, dict) else "").strip()
 
-    if momo_token and momo_id and _wants("nikki"):
+    if _wants("nikki"):
         try:
             nikki_status = check_nikki_daily(momo_token, momo_id, uid=nikki_uid)
             result.games.append(nikki_status)
@@ -730,8 +826,6 @@ def check_games_progress(
             errors.append(f"nikki: {exc}")
             if tracker is not None:
                 tracker.record_error("nikki", str(exc))
-    elif requested_games is not None and _wants("nikki"):
-        result.games.append(_build_missing_config_status("nikki", "未配置 momo_token/momo_id，无法查询 Pearpal notebook API"))
 
     # --- 终末地 ---
     endfield_cfg = config.get("endfield_protocol", {}) if isinstance(config, dict) else {}
@@ -972,8 +1066,8 @@ def _qr_login_and_update_config() -> bool:
     mihoyo_cfg["cookie"] = cookie_str
     mihoyo_cfg["stoken_cookie"] = cookie_str
 
-    with open(config_path, "w", encoding="utf-8") as f:
-        _json.dump(config, f, ensure_ascii=False, indent=2)
+    from ..settings.manager import atomic_write_json
+    atomic_write_json(config_path, config)
 
     print(f"\nCookie 已保存到 {config_path}")
     print(f"Cookie 字段: {list(cookies.keys())}")

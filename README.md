@@ -20,12 +20,13 @@
 
 ## 功能特性
 
-- **GUI & CLI 双入口**：提供 Flet 现代化图形界面和命令行两种运行方式
-- **每日签到**：启动前自动执行米游社（原神/星铁/绝区零）和库街区（鸣潮）签到
+- **GUI & CLI 双入口**：默认 GUI 基于 PySide6 + QML + HuskarUI，老的 Flet 版保留作回退
+- **每日签到**：启动前自动跑米游社（原神/星铁/绝区零）、库街区（鸣潮）、塔吉多（异环 BBS+游戏）、森空岛（终末地）+ 终末地协议终端。米游社 cookie_token 过期会用 stoken 自动刷新；塔吉多 token 失效可用配置的手机号+密码自动重登
 - **自动编排**：按配置顺序依次启动游戏及对应脚本，自动聚焦游戏窗口
 - **日志监控**：实时监控脚本日志，检测报错或卡死，支持自动重试
 - **抽卡分析**：支持米哈游系 UIGF 格式、终末地 JSON、鸣潮 Excel、无限暖暖 API 多种数据源
-- **前置流程**：支持异环等需要先启动启动器再点击"开始游戏"的前置自动化流程
+- **前置流程**：支持异环等需要先启动启动器再点"开始游戏"的前置流程
+- **邮件通知**：运行结束可发每日报告邮件，邮箱密码经 Windows DPAPI 加密落盘
 
 ## 环境要求
 
@@ -101,10 +102,10 @@ game_auto/
 `app/`、`ui/`、`settings/`、`services/`、`clients/`、`gacha/`、`storage/` 分工如下：
 
 - `app/`：CLI / GUI 入口模块，供 `python -m game_auto.app.cli` 与 `python -m game_auto.app.gui` 调用
-- `ui/`：Flet 界面总装、自动化页和共享 UI 常量
-- `settings/`：运行时配置视图、默认配置、配置文件读写与项目路径常量
-- `services/`：依赖检查、启动前签到调度、任务目录与共享工具函数
-- `clients/`：米游社与库街区这类外部接口客户端
+- `ui/`：QML 视图（`ui/qml/`）、PySide6↔QML 桥接（`ui/bridge.py`）、主题令牌（`ui/theme.py`），以及保留的 Flet 界面（`ui/flet_app.py`，暂停维护）
+- `settings/`：运行时配置视图、默认配置、配置文件读写（含原子写入 `atomic_write_json`）与项目路径常量
+- `services/`：依赖检查、启动前签到调度（`startup_sign_runner.py`）、每日进度追踪（`daily_progress_tracker.py`）、邮件报告（`email_reporter.py`）、各游戏日志解析器与共享工具函数
+- `clients/`：米游社、库街区、塔吉多、森空岛、终末地协议终端等外部接口客户端
 - `gacha/`：米哈游 / 终末地 / 鸣潮 / 无限暖暖的抽卡导入与分析逻辑
 - `storage/`：SQLite 工作流与偏好数据库访问层
 
@@ -158,9 +159,11 @@ GUI 里这几类操作会写回 `workflow.sqlite3`：
 - `psutil` — 进程管理
 - `pyautogui` — 屏幕自动化
 - `pytesseract` — OCR 文字识别
-- `pywin32` — Windows API
+- `pywin32` — Windows API，也用于 DPAPI 密码加密
 - `opencv-python` — 图像模板匹配
-- `flet` — 现代化 GUI 框架
+- `PySide6` — Qt 6 + QML，默认 GUI 框架（需锁定 >=6.8,<6.10 兼容 PyHuskarUI）
+- `PyHuskarUI` — QML 控件库
+- `flet` — 旧 GUI 框架，保留作回退
 - `openpyxl` — Excel 解析（鸣潮抽卡记录）
 - `rapidocr-onnxruntime` — 备选 OCR 引擎
 

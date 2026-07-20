@@ -195,6 +195,7 @@ def _run_single_task(
     try:
         from ..services.daily_progress_tracker import get_tracker
         from ..settings.paths import WORKFLOW_DB_PATH
+        from ..settings import resolve_game_key
         _tracker = get_tracker(str(WORKFLOW_DB_PATH))
         # 映射 state → record_script_run status
         _progress_status_map = {
@@ -205,7 +206,7 @@ def _run_single_task(
         }
         _progress_status = _progress_status_map.get(state, "failed")
         _tracker.record_script_run(
-            game_key=app_key,
+            game_key=resolve_game_key(app_key),
             game_name=display_name,
             script_name=script_name,
             status=_progress_status,

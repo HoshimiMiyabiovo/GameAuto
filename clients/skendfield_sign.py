@@ -99,7 +99,9 @@ def _request(method: str, url: str, body: Optional[bytes] = None, headers: Optio
     base_headers = {
         "User-Agent": UA,
         "Accept": "*/*",
-        "Accept-Encoding": "gzip",
+        # 注：不要发送 Accept-Encoding: gzip，urlopen 不会自动解压，
+        # 会拿到 gzip 压缩的二进制（以 0x1f 0x8b 开头）导致 json.loads 报
+        # "'utf-8' codec can't decode byte 0x8b"。让服务端发原始字节即可。
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Connection": "keep-alive",
     }
@@ -197,7 +199,27 @@ class SkEndfieldClient:
         return binding
 
     def do_sign(self) -> Dict[str, Any]:
-        """执行签到。"""
+        """执行签到。
+
+        如果服务端因"请勿修改设备本地时间"拒绝，先 sleep 1-2 秒再重试一次。
+        这种错误通常是客户端/服务端时间漂移了几秒，再发一次用新 timestamp 就过。
+        """
+        last_error: Optional[SkEndfieldSignError] = None
+        for attempt in range(2):
+            try:
+                return self._do_sign_once()
+            except SkEndfieldSignError as exc:
+                last_error = exc
+                msg = str(exc)
+                if "本地时间" in msg and attempt == 0:
+                    LOGGER.warning("[森空岛] 时间戳漂移，1.5 秒后重试: %s", msg)
+                    time.sleep(1.5)
+                    continue
+                raise
+        # 理论上不会到这里
+        raise last_error or SkEndfieldSignError("未知错误")
+
+    def _do_sign_once(self) -> Dict[str, Any]:
         if not self._cred or not self._sign_token:
             raise SkEndfieldSignError("请先调用 login() 完成登录")
 

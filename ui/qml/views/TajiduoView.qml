@@ -11,6 +11,11 @@ Item {
 
     Component.onCompleted: bridge.loadCredentials()
 
+    // 视图从隐藏→显示时重新灌一次凭据
+    onVisibleChanged: {
+        if (visible) bridge.loadCredentials()
+    }
+
     Connections {
         target: bridge
         function onCredentialsChanged(jsonStr) {
@@ -18,6 +23,8 @@ Item {
                 var creds = JSON.parse(jsonStr || "{}")
                 var tj = creds.tajiduo_sign || {}
                 if (tj.token) tajiduoTokenInput.text = tj.token
+                if (tj.phone) tajiduoPhoneInput.text = tj.phone
+                if (tj.password) tajiduoPasswordInput.text = tj.password
                 bbsSignCheck.checked = !!tj.do_bbs_signin
                 gameSignCheck.checked = !!tj.do_game_signin
                 browseCheck.checked = !!tj.do_browse
@@ -51,17 +58,37 @@ Item {
                         onEditingFinished: bridge.saveCredential("tajiduo_sign", "token", text)
                     }
 
+                    HusInput {
+                        id: tajiduoPhoneInput
+                        Layout.fillWidth: true
+                        placeholderText: "手机号 (Token 失效时用于自动重登)..."
+                        onEditingFinished: bridge.saveCredential("tajiduo_sign", "phone", text)
+                    }
+
+                    CredentialInput {
+                        id: tajiduoPasswordInput
+                        Layout.fillWidth: true
+                        placeholderText: "密码 (Token 失效时用于自动重登)..."
+                        onEditingFinished: bridge.saveCredential("tajiduo_sign", "password", text)
+                    }
+
                     RowLayout {
                         spacing: 10
-                        HusButton { text: "登录 (密码)"; type: HusButton.Type_Outlined }
-                        HusButton { text: "登录 (短信)"; type: HusButton.Type_Outlined }
                         HusButton {
                             text: "执行签到"
                             type: HusButton.Type_Primary
+                            enabled: !bridge.isRunning
                             onClicked: {
                                 if (tajiduoTokenInput.text.length > 0) {
                                     bridge.saveCredential("tajiduo_sign", "token", tajiduoTokenInput.text)
                                 }
+                                if (tajiduoPhoneInput.text.length > 0) {
+                                    bridge.saveCredential("tajiduo_sign", "phone", tajiduoPhoneInput.text)
+                                }
+                                if (tajiduoPasswordInput.text.length > 0) {
+                                    bridge.saveCredential("tajiduo_sign", "password", tajiduoPasswordInput.text)
+                                }
+                                bridge.runTajiduoSign()
                             }
                         }
                     }

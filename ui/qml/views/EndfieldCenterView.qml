@@ -31,6 +31,11 @@ Item {
         bridge.loadCredentials()
     }
 
+    // 视图从隐藏→显示时重新灌一次凭据（应对外部修改 app_config.json 的场景）
+    onVisibleChanged: {
+        if (visible) bridge.loadCredentials()
+    }
+
     function updateGachaDisplay() {
         var ov = root.overview
         kpiTotal.value = ov.total_records || "0"
@@ -663,10 +668,12 @@ Item {
                         HusButton {
                             text: "执行签到"
                             type: HusButton.Type_Primary
+                            enabled: !bridge.isRunning
                             onClicked: {
                                 if (skendfieldTokenInput.text.length > 0) {
                                     bridge.saveCredential("skendfield_sign", "token", skendfieldTokenInput.text)
                                 }
+                                bridge.runSkendfieldSign()
                             }
                         }
                     }

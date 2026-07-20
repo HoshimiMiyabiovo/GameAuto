@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QObject, Signal, Property, Slot
@@ -33,6 +34,18 @@ TONE_MAP: Dict[str, tuple] = {
     TONE_WARNING: ("请留意", "#faebd7", "#b66f1f"),
     TONE_DANGER:  ("已中断", "#f7dfdd", "#b04b44"),
 }
+
+
+def _mask_address(addr: str) -> str:
+    """日志中脱敏邮箱地址：a*c@example.com。"""
+    if not addr or "@" not in addr:
+        return "***"
+    name, domain = addr.split("@", 1)
+    if len(name) <= 2:
+        masked = "*" * len(name)
+    else:
+        masked = name[0] + "*" * (len(name) - 2) + name[-1]
+    return f"{masked}@{domain}"
 
 
 class UiBridge(QObject):
@@ -89,6 +102,10 @@ class UiBridge(QObject):
         self._progress_visible = False
         self._selection_summary = "还没有选择任务"
         self._log_lines: List[str] = []
+        self._shutdown_on_finish = False
+        self._shutdown_scheduled = False
+        self._email_on_finish = False
+        self._email_scheduled = False
 
         # ── Tone-derived badge state ──
         self._refresh_tone_badge()
@@ -142,6 +159,138 @@ class UiBridge(QObject):
         if value != self._is_running:
             self._is_running = value
             self.isRunningChanged.emit(value)
+
+    # ── Shutdown scheduling ──
+    shutdownScheduledChanged = Signal()
+
+    @Property(bool, notify=shutdownScheduledChanged)
+    def shutdownScheduled(self) -> bool:
+        return self._shutdown_scheduled
+
+    # ── Email configuration indicator ──
+    emailConfiguredChanged = Signal()
+
+    def _check_email_configured(self) -> bool:
+        try:
+            from ..services.email_reporter import is_email_configured
+            return bool(is_email_configured())
+        except Exception:
+            return False
+
+    @Property(bool, notify=emailConfiguredChanged)
+    def emailConfigured(self) -> bool:
+        return self._check_email_configured()
+
+    dpapiAvailableChanged = Signal()
+
+    @Property(bool, constant=True)
+    def dpapiAvailable(self) -> bool:
+        """DPAPI 是否可用（Windows + pywin32）。constant 因为进程内不变。"""
+        try:
+            from ..services.email_reporter import is_dpapi_available
+            return bool(is_dpapi_available())
+        except Exception:
+            return False
+
+    @Slot(result=str)
+    def getEmailConfig(self) -> str:
+        """返回脱敏后的 email 配置 JSON，供 UI 弹窗回填。password 永远为空。"""
+        from ..services import email_reporter
+        from ..services.email_reporter import load_email_config, mask_email_config
+        try:
+            cfg = load_email_config()
+        except Exception as exc:
+            logger.warning("[Bridge] 读取 email 配置失败: %s", exc)
+            cfg = None
+        masked = mask_email_config(cfg)
+        return json.dumps(masked, ensure_ascii=False)
+
+    @Slot(str)
+    def saveEmailConfig(self, cfg_json: str):
+        """保存 UI 表单提交的 email 配置。password 经 DPAPI 加密后落盘。
+
+        UI 端如果 password 字段为空，则视为"不改密码"，沿用已存在的密文。
+        """
+        from ..services import email_reporter
+        from ..services.email_reporter import (
+            is_dpapi_available,
+            load_raw_email_section,
+            protect_password,
+            save_email_section,
+        )
+        try:
+            incoming = json.loads(cfg_json)
+        except json.JSONDecodeError as exc:
+            self._request_toast(f"配置 JSON 解析失败: {exc}", "#b04b44")
+            return
+
+        if not is_dpapi_available():
+            self._request_toast(
+                "当前环境无 win32crypt，无法加密密码；请安装 pywin32 后再试",
+                "#b04b44",
+            )
+            return
+
+        # 收集新值
+        new_password_plain = str(incoming.get("password") or "")
+        # 沿用旧 password（如果 UI 没填）
+        old_section = load_raw_email_section()
+        if new_password_plain:
+            try:
+                stored_password = protect_password(new_password_plain)
+            except Exception as exc:
+                logger.exception("[Bridge] 加密密码失败")
+                self._request_toast(f"加密密码失败: {exc}", "#b04b44")
+                return
+            password_protect = "dpapi"
+        else:
+            stored_password = str(old_section.get("password") or "")
+            password_protect = str(old_section.get("password_protect") or "")
+
+        recipients = incoming.get("recipients") or []
+        if isinstance(recipients, str):
+            recipients = [r.strip() for r in recipients.replace("，", ",").split(",") if r.strip()]
+        else:
+            recipients = [str(r).strip() for r in recipients if str(r).strip()]
+
+        try:
+            smtp_port = int(incoming.get("smtp_port") or 465)
+        except (TypeError, ValueError):
+            smtp_port = 465
+
+        new_section = {
+            "enabled": bool(incoming.get("enabled", True)),
+            "smtp_host": str(incoming.get("smtp_host") or "").strip(),
+            "smtp_port": smtp_port,
+            "use_ssl": bool(incoming.get("use_ssl", True)),
+            "sender": str(incoming.get("sender") or "").strip(),
+            "password": stored_password,
+            "password_protect": password_protect,
+            "recipients": recipients,
+            "subject_prefix": str(incoming.get("subject_prefix") or "[GameAuto]").strip() or "[GameAuto]",
+        }
+
+        ok, err = save_email_section(new_section)
+        if not ok:
+            self._request_toast(f"保存配置失败: {err}", "#b04b44")
+            return
+        self.emailConfiguredChanged.emit()
+        masked_sender = _mask_address(new_section["sender"])
+        logger.info(
+            "[Bridge] 邮件配置已保存: smtp=%s:%s ssl=%s sender=%s recipients=%d has_password=%s",
+            new_section["smtp_host"], new_section["smtp_port"], new_section["use_ssl"],
+            masked_sender, len(new_section["recipients"]), bool(new_section["password"]),
+        )
+        self._request_toast("邮件配置已保存（密码已加密）", "#2f7d4a")
+
+    @Slot(result=bool)
+    def isDpapiAvailable(self) -> bool:
+        """UI 检查 DPAPI 是否可用（Windows 才有）。"""
+        try:
+            from ..services.email_reporter import is_dpapi_available
+            return bool(is_dpapi_available())
+        except Exception:
+            return False
 
     @Property(str, notify=statusTitleChanged)
     def statusTitle(self) -> str:
@@ -420,9 +569,12 @@ class UiBridge(QObject):
         """加载应用列表，更新 appListJson 属性。"""
         threading.Thread(target=self._load_app_list_backend, daemon=True).start()
 
-    @Slot(str)
-    def startAutomation(self, apps_json: str):
-        """启动自动化任务。apps_json: [{"app_key":"genshin","script_choice":"ok"}, ...]"""
+    @Slot(str, bool, bool)
+    def startAutomation(self, apps_json: str, shutdown_on_finish: bool = False, email_on_finish: bool = False):
+        """启动自动化任务。apps_json: [{"app_key":"genshin","script_choice":"ok"}, ...]
+        shutdown_on_finish: True 时，任务结束后 60 秒后自动关机（可取消）
+        email_on_finish: True 时，任务结束后先发每日进度邮件，发成功后才进入关机流程
+        """
         try:
             targets = json.loads(apps_json)
         except json.JSONDecodeError:
@@ -436,6 +588,10 @@ class UiBridge(QObject):
             return
         # 新任务开始时清空旧日志，避免多任务日志混杂导致时间错乱
         self.clearLog()
+        self._shutdown_on_finish = bool(shutdown_on_finish)
+        self._shutdown_scheduled = False
+        self._email_on_finish = bool(email_on_finish)
+        self._email_scheduled = False
         threading.Thread(
             target=self._run_automation_backend,
             args=(targets,),
@@ -450,6 +606,21 @@ class UiBridge(QObject):
             logger.info("[Bridge] 用户请求停止任务")
         else:
             self._request_toast("没有运行中的任务", "#6d6257")
+
+    @Slot()
+    def cancelShutdown(self):
+        """取消已计划的自动关机（shutdown /a）。"""
+        if not self._shutdown_scheduled:
+            return
+        try:
+            rc = os.system("shutdown /a")
+        except Exception as exc:
+            logger.warning("[Bridge] 调用 shutdown /a 失败: %s", exc)
+            self._request_toast(f"取消关机失败: {exc}", "#b04b44")
+            return
+        self._shutdown_scheduled = False
+        logger.info("[Bridge] 用户已取消自动关机 (rc=%s)", rc)
+        self._request_toast("已取消自动关机", "#2f7d4a")
 
     @Slot(str)
     def saveLaunchPreferences(self, prefs_json: str):
@@ -469,6 +640,34 @@ class UiBridge(QObject):
     def reloadConfig(self):
         """重新读取配置文件并刷新应用列表。"""
         threading.Thread(target=self._load_app_list_backend, daemon=True).start()
+
+    @Slot(result=str)
+    def loadPostRunPrefs(self) -> str:
+        """加载"完成后操作"的持久化偏好。返回 JSON: {"email":bool,"shutdown":bool}"""
+        try:
+            from ..settings import manager as cfg_manager
+            cfg = cfg_manager.load()
+            prefs = cfg.get("post_run") or {}
+            return json.dumps({
+                "email": bool(prefs.get("email_on_finish", False)),
+                "shutdown": bool(prefs.get("shutdown_on_finish", False)),
+            }, ensure_ascii=False)
+        except Exception:
+            return '{"email":false,"shutdown":false}'
+
+    @Slot(bool, bool)
+    def savePostRunPrefs(self, email_on_finish: bool, shutdown_on_finish: bool):
+        """保存"完成后操作"偏好到 app_config.json。"""
+        try:
+            from ..settings import manager as cfg_manager
+            cfg = cfg_manager.load(force=True)
+            cfg["post_run"] = {
+                "email_on_finish": bool(email_on_finish),
+                "shutdown_on_finish": bool(shutdown_on_finish),
+            }
+            cfg_manager.save(cfg)
+        except Exception as exc:
+            logger.warning("[Bridge] 保存完成后操作偏好失败: %s", exc)
 
     # ── Daily progress slots ──────────────────────────────────────
 
@@ -617,6 +816,23 @@ class UiBridge(QObject):
             daemon=True,
         ).start()
 
+    # ── Sign action slots (QML 按钮调用) ────────────────────────
+
+    @Slot()
+    def runSkendfieldSign(self):
+        """手动触发森空岛签到（QML "执行签到" 按钮）。"""
+        threading.Thread(target=self._run_skendfield_sign_backend, daemon=True).start()
+
+    @Slot()
+    def runWuwaKujiequSign(self):
+        """手动触发库街区签到（QML "执行签到" 按钮）。"""
+        threading.Thread(target=self._run_wuwa_kujiequ_sign_backend, daemon=True).start()
+
+    @Slot()
+    def runTajiduoSign(self):
+        """手动触发塔吉多（异环）签到（QML "执行签到" 按钮）。"""
+        threading.Thread(target=self._run_tajiduo_sign_backend, daemon=True).start()
+
     # ═══════════════════════════════════════════════════════════════
     #  Event emit (for background threads — thread-safe)
     # ═══════════════════════════════════════════════════════════════
@@ -744,12 +960,108 @@ class UiBridge(QObject):
             for warning in result.warnings:
                 self.emit_event("log", message=f"[警告] {warning}")
 
-            self.emit_event("finished", toast=True)
+            # 一条龙：邮件和关机是两个独立动作；邮件异步发送不阻塞 UI
+            scheduled_shutdown = False
+            if self._email_on_finish:
+                def _send_email_async(report=result.report, warnings=result.warnings):
+                    try:
+                        email_ok, email_error = self._send_daily_email_report(
+                            automation_report=report,
+                            automation_warnings=warnings,
+                        )
+                        if not email_ok:
+                            self._request_toast(
+                                f"邮件发送失败：{email_error}",
+                                "#b66f1f",
+                            )
+                            logger.warning("[Bridge] 邮件发送失败: %s", email_error)
+                    except Exception as exc:
+                        logger.exception("[Bridge] 邮件发送异常")
+                threading.Thread(target=_send_email_async, daemon=True).start()
+
+            if self._shutdown_on_finish:
+                if self._schedule_shutdown():
+                    scheduled_shutdown = True
+                else:
+                    logger.warning("[Bridge] 自动关机调度失败，请检查权限或系统设置")
+
+            self.emit_event("finished", toast=True, shutdown_scheduled=scheduled_shutdown)
         except Exception as exc:
             logger.exception("[Bridge] 自动化执行失败")
             self.emit_event("status", title="运行失败", body=str(exc), tone=TONE_DANGER)
             self.emit_event("toast", message=f"执行失败: {exc}", color="#b04b44")
             self.emit_event("running", value=False)
+
+    def _schedule_shutdown(self, delay_sec: int = 60) -> bool:
+        """调用 Windows shutdown 计划 60 秒后关机；成功返回 True。"""
+        try:
+            rc = os.system(f"shutdown /s /t {int(delay_sec)}")
+        except Exception as exc:
+            logger.warning("[Bridge] 调用 shutdown /s 失败: %s", exc)
+            return False
+        # shutdown 返回 0 表示成功提交，1116/1190 表示已存在计划
+        if rc not in (0, 1116, 1190):
+            logger.warning("[Bridge] shutdown /s 返回非预期 rc=%s", rc)
+            return False
+        self._shutdown_scheduled = True
+        self.shutdownScheduledChanged.emit()
+        logger.info("[Bridge] 已计划 %s 秒后自动关机 (rc=%s)", delay_sec, rc)
+        return True
+
+    def _send_daily_email_report(
+        self,
+        automation_report: List[str],
+        automation_warnings: List[str],
+    ) -> tuple:
+        """读取 SMTP 配置 + tracker 数据，发送一条龙报告邮件。返回 (成功, 错误信息)。"""
+        from ..services.email_reporter import (
+            build_daily_report,
+            is_email_configured,
+            load_email_config,
+            send_email,
+        )
+        from ..services.daily_progress_tracker import get_tracker
+        from ..settings.paths import WORKFLOW_DB_PATH
+
+        if not is_email_configured():
+            return False, "app_config.json 的 email 段未配置或 enabled=false"
+
+        config = load_email_config()
+        if config is None:
+            return False, "SMTP 配置不完整（缺少 host/sender/password/recipients）"
+
+        # 拉取今日 tracker 缓存；如果没有也不阻塞，只发 automation 报告
+        daily_snapshot = None
+        try:
+            tracker = get_tracker(str(WORKFLOW_DB_PATH))
+            daily_snapshot = tracker.load_today()
+        except Exception as exc:
+            logger.warning("[Bridge] 读取今日进度缓存失败，邮件将只含本轮报告: %s", exc)
+
+        # 简单统计：本轮 success / failed 计数
+        automation_total = len(automation_report)
+        automation_success = sum(1 for line in automation_report if "✅" in line or "已完成" in line)
+        automation_failed = sum(1 for line in automation_report if "❌" in line or "失败" in line)
+
+        subject, body = build_daily_report(
+            automation_report=automation_report,
+            automation_warnings=automation_warnings,
+            automation_total=automation_total,
+            automation_success=automation_success,
+            automation_failed=automation_failed,
+            daily_snapshot=daily_snapshot,
+        )
+
+        try:
+            ok, err = send_email(config, subject, body)
+        except Exception as exc:
+            logger.exception("[Bridge] 邮件发送异常")
+            return False, str(exc)
+        if not ok:
+            return False, err or "未知 SMTP 错误"
+        self._email_scheduled = True
+        self._request_toast("每日进度邮件已发送", "#2f7d4a")
+        return True, ""
 
     def _save_preferences_backend(self, prefs: List[Dict]):
         """后台保存启动偏好。"""
@@ -772,31 +1084,57 @@ class UiBridge(QObject):
             self.emit_event("status", title="正在查询", body="正在获取每日进度...", tone=TONE_RUNNING)
 
             from ..clients.daily_checker import check_games_progress
-            result = check_games_progress(game_keys=game_keys if game_keys else None)
+            from ..services.daily_progress_tracker import get_tracker
+            from ..settings.paths import WORKFLOW_DB_PATH
+
+            # 同步写入 tracker，让 loadDailyProgress 下次能拿到今日记录
+            tracker = None
+            try:
+                tracker = get_tracker(str(WORKFLOW_DB_PATH))
+            except Exception as exc:
+                logger.warning("[Bridge] 初始化 tracker 失败，跳过持久化: %s", exc)
+
+            result = check_games_progress(
+                game_keys=game_keys if game_keys else None,
+                tracker=tracker,
+            )
 
             games_data = []
             for game in result.games:
                 tasks_data = []
                 for task in game.tasks:
+                    # DailyTaskItem 字段：name/current/total/is_completed
+                    t_status = "success" if task.is_completed else "pending"
+                    if task.total and task.total > 0:
+                        t_message = f"{task.current}/{task.total}"
+                    elif task.is_completed:
+                        t_message = "已完成"
+                    else:
+                        t_message = "未完成"
                     tasks_data.append({
-                        "task_key": task.task_key,
-                        "task_name": task.task_name,
-                        "status": task.status,
-                        "message": task.message,
+                        "task_key": task.name,
+                        "task_name": task.name,
+                        "status": t_status,
+                        "message": t_message,
+                        "current": task.current,
+                        "total": task.total,
                     })
                 games_data.append({
                     "game_key": game.game_key,
                     "game_name": game.game_name,
                     "uid": game.uid,
                     "nickname": game.nickname,
-                    "is_all_success": game.is_all_success,
-                    "has_failed": game.has_failed,
+                    # GameDailyStatus 用 is_daily_completed，没有 is_all_success/has_failed
+                    # has_failed 仅当 API 报错时为真；任务未完成属于 pending 不算 failed
+                    "is_all_success": game.is_daily_completed,
+                    "has_failed": bool(game.errors),
                     "progress_percent": game.progress_percent,
                     "tasks": tasks_data,
                     "errors": game.errors,
                 })
 
             self._inject_external_log_progress(games_data)
+            self._inject_sign_task_into_games(games_data)
             self.emit_event("daily_progress", games=games_data, date_key="")
             self.emit_event("status", title="查询完成",
                             body=f"已查询 {len(games_data)} 款游戏",
@@ -812,32 +1150,55 @@ class UiBridge(QObject):
         try:
             from ..services.daily_progress_tracker import get_tracker
             from ..settings.paths import WORKFLOW_DB_PATH
+            from ..settings import resolve_game_key
+            from ..settings.defaults import GAME_KEYS
             tracker = get_tracker(str(WORKFLOW_DB_PATH))
             snapshot = tracker.load_today()
 
-            games_data = []
+            # 合并同游戏的卡片：tracker 里可能同时存在大驼峰式（旧 task_batch_runner）
+            # 和小写式（daily_checker / parser）两种 game_key，需要统一合并。
+            merged_games: Dict[str, Dict[str, Any]] = {}
             for game in snapshot.games:
+                gk = resolve_game_key(game.game_key)
                 tasks_data = []
                 for task in game.tasks:
+                    t_extra = task.extra if isinstance(task.extra, dict) else {}
+                    t_current = t_extra.get("current")
+                    t_total = t_extra.get("total")
                     tasks_data.append({
                         "task_key": task.task_key,
                         "task_name": task.task_name,
                         "status": task.status,
                         "message": task.message,
+                        "current": t_current,
+                        "total": t_total,
                     })
-                games_data.append({
-                    "game_key": game.game_key,
-                    "game_name": game.game_name,
-                    "uid": game.uid,
-                    "nickname": game.nickname,
-                    "is_all_success": game.is_all_success,
-                    "has_failed": game.has_failed,
-                    "progress_percent": game.progress_percent,
-                    "tasks": tasks_data,
-                    "errors": game.errors,
-                })
+                if gk in merged_games:
+                    # 合并到已有卡片
+                    existing = merged_games[gk]
+                    existing["tasks"].extend(tasks_data)
+                    existing["errors"].extend(game.errors or [])
+                    # 取更优状态
+                    if game.is_all_success:
+                        existing["is_all_success"] = True
+                    if game.has_failed:
+                        existing["has_failed"] = True
+                else:
+                    merged_games[gk] = {
+                        "game_key": gk,
+                        "game_name": game.game_name or GAME_KEYS.get(gk, gk),
+                        "uid": game.uid,
+                        "nickname": game.nickname,
+                        "is_all_success": game.is_all_success,
+                        "has_failed": game.has_failed,
+                        "progress_percent": game.progress_percent,
+                        "tasks": tasks_data,
+                        "errors": list(game.errors or []),
+                    }
+            games_data = list(merged_games.values())
 
             self._inject_external_log_progress(games_data)
+            self._inject_sign_task_into_games(games_data)
             self.emit_event("daily_progress", games=games_data, date_key=snapshot.date_key)
             logger.info("[Bridge] 加载持久化进度: date_key=%s games=%d",
                         snapshot.date_key, len(games_data))
@@ -852,10 +1213,12 @@ class UiBridge(QObject):
           - ok-ef（终末地）→ game_key="endfield"，只要关键任务（⭐活动奖励、⭐日常奖励）成功就算成功
           - ok-nte（异环）→ game_key="nte"，只要关键任务（领取活跃度奖励）成功就算成功
           - ok-ww（鸣潮）→ game_key="wuwa"，只要出现 Successfully Executed Task 就算成功
-          - whimbox（无限暖暖）→ game_key="nikki"，没有 ❌ 未完成任务就算成功
+          - whimbox（无限暖暖）→ game_key="nikki"，白名单任务 + 末尾"一条龙结束"算成功
           - BetterGI（原神）→ game_key="genshin"，每日委托奖励 + 探索派遣 都完成才算成功
 
-        如果今天的日志存在，替换原有的对应 game 项；否则保持原数据不变。
+        行为：
+          - whimbox：保留原有 tasks，**前置插入**白名单任务（同名不重复），用于细化任务细节
+          - 其他：如果今天的日志存在，整体替换原有的对应 game 项；否则保持原数据不变
         """
         from ..services.ok_ef_daily_parser import parse_latest_ok_ef_report
         from ..services.ok_nte_daily_parser import parse_latest_ok_nte_log
@@ -864,7 +1227,7 @@ class UiBridge(QObject):
         from ..services.bettergi_daily_parser import parse_latest_bettergi_log
         from ..services.zzz_daily_parser import parse_latest_zzz_log
         from ..services.starrail_daily_parser import parse_latest_starrail_log
-        from ..settings import resolve_app_key
+        from ..settings import resolve_game_key
 
         parsers = (
             ("endfield", "ok-ef", parse_latest_ok_ef_report),
@@ -880,14 +1243,53 @@ class UiBridge(QObject):
                 data = parser_func()
                 if data is None:
                     continue
-                resolved_key = resolve_app_key(game_key)
+                resolved_key = resolve_game_key(game_key)
                 replaced = False
-                for i, game in enumerate(games_data):
-                    if resolve_app_key(game.get("game_key", "")) == resolved_key:
-                        games_data[i] = data
+                for g_idx, game in enumerate(games_data):
+                    if resolve_game_key(game.get("game_key", "")) == resolved_key:
+                        if game_key == "nikki":
+                            # 无限暖暖特殊处理：whimbox 的子任务前置插入，保留 Pearpal 基线
+                            existing_tasks = list(game.get("tasks") or [])
+                            whimbox_tasks = data.get("tasks") or []
+                            # 用 task_key 去重：whimbox 的 task_key 与 Pearpal 同名则取最新
+                            existing_keys = {t.get("task_key") or t.get("task_name"): idx
+                                             for idx, t in enumerate(existing_tasks)}
+                            merged = []
+                            for wt in whimbox_tasks:
+                                wkey = wt.get("task_key") or wt.get("task_name")
+                                if wkey in existing_keys:
+                                    e_idx = existing_keys[wkey]
+                                    # 用 whimbox 数据覆盖同名（更精细的进度）
+                                    merged.append({**existing_tasks[e_idx], **wt})
+                                else:
+                                    merged.append(wt)
+                            for j, t in enumerate(existing_tasks):
+                                tkey = t.get("task_key") or t.get("task_name")
+                                if tkey not in {(wt.get("task_key") or wt.get("task_name")) for wt in whimbox_tasks}:
+                                    merged.append(t)
+                            games_data[g_idx]["tasks"] = merged
+                            # 整体成功/失败由 whimbox 决定（更精确）
+                            games_data[g_idx]["is_all_success"] = data.get("is_all_success", games_data[g_idx].get("is_all_success"))
+                            games_data[g_idx]["has_failed"] = data.get("has_failed", games_data[g_idx].get("has_failed"))
+                            if data.get("errors"):
+                                games_data[g_idx]["errors"] = data["errors"]
+                            games_data[g_idx]["nickname"] = data.get("nickname", games_data[g_idx].get("nickname", ""))
+                            logger.info("[Bridge] 已用 %s 日志合并 %s 任务细节: tasks=%d",
+                                        tool_name, game_key, len(merged))
+                        else:
+                            # 保留 tracker 里已有的签到任务（sign_ 前缀），
+                            # 避免被外部日志整体替换后丢失签到状态。
+                            existing_sign_tasks = [
+                                t for t in (game.get("tasks") or [])
+                                if (t.get("task_key") or "").startswith("sign_")
+                            ]
+                            if existing_sign_tasks:
+                                data_tasks = list(data.get("tasks") or [])
+                                data["tasks"] = existing_sign_tasks + data_tasks
+                            games_data[g_idx] = data
+                            logger.info("[Bridge] 已用 %s 日志替换 %s 进度: success=%s sign_tasks=%d",
+                                        tool_name, game_key, data.get("is_all_success"), len(existing_sign_tasks))
                         replaced = True
-                        logger.info("[Bridge] 已用 %s 日志替换 %s 进度: success=%s",
-                                    tool_name, game_key, data.get("is_all_success"))
                         break
                 if not replaced:
                     games_data.append(data)
@@ -1496,6 +1898,328 @@ class UiBridge(QObject):
         self._gacha_analysis_json = json.dumps(data, ensure_ascii=False, default=str)
         self.gachaAnalysisChanged.emit(self._gacha_analysis_json)
 
+    # ── Sign action backends (run in background thread) ─────────────
+
+    def _run_skendfield_sign_backend(self):
+        """森空岛签到：从 app_config.json 读 token + server，调 perform_sign。"""
+        try:
+            from ..settings import manager as cfg_manager
+            from ..clients import skendfield_sign
+
+            cfg = cfg_manager.load(force=True)
+            sk = cfg.get("skendfield_sign") or {}
+            token = str(sk.get("token") or "").strip()
+            server = str(sk.get("server") or "cn").strip()
+            if not token:
+                self.emit_event("toast", message="森空岛 Token 为空，请先填写", color="#b04b44")
+                return
+
+            logger.info("[Bridge] 森空岛签到开始: server=%s token_len=%d", server, len(token))
+            result = skendfield_sign.perform_sign(token=token, server=server)
+            for line in skendfield_sign.format_sign_report(result):
+                logger.info("[Bridge] 森空岛签到: %s", line)
+            # 摘要用 toast 推回 QML
+            status = str(result.get("status") or "")
+            success = status in ("success", "already")
+            head = "森空岛签到成功" if success else "森空岛签到失败"
+            color = "#2f7d4a" if success else "#b04b44"
+            award = result.get("award_name") or result.get("message") or ""
+            msg = f"{head}：{award}" if award else head
+            self.emit_event("toast", message=msg, color=color)
+            # 写入签到状态供 DailyView 终末地卡片读取
+            record_status = status if status in ("success", "already") else "failed"
+            self._update_sign_status(
+                "skendfield_sign", record_status, award,
+            )
+        except Exception as exc:
+            logger.exception("[Bridge] 森空岛签到失败")
+            self.emit_event("toast", message=f"森空岛签到失败: {exc}", color="#b04b44")
+            self._update_sign_status("skendfield_sign", "failed", str(exc))
+
+    def _run_wuwa_kujiequ_sign_backend(self):
+        """库街区签到：从 app_config.json 读 profile，调 perform_sign。"""
+        try:
+            from ..settings import manager as cfg_manager
+            from ..clients import wuwa_kujiequ
+
+            cfg = cfg_manager.load(force=True)
+            wuwa_cfg = cfg.get("wuwa_kujiequ") or {}
+            profile = wuwa_kujiequ.profile_from_dict(wuwa_cfg.get("profile") or {})
+            if profile is None:
+                self.emit_event(
+                    "toast",
+                    message="库街区 Token 或 DID 为空，请先填写",
+                    color="#b04b44",
+                )
+                return
+            # 若 profile 缺 role_id，尝试从 roles[0] 补上
+            if not profile.role_id and wuwa_cfg.get("roles"):
+                profile = profile.with_role(wuwa_cfg["roles"][0])
+
+            logger.info(
+                "[Bridge] 库街区签到开始: role=%s user_id=%s",
+                profile.role_name, profile.user_id,
+            )
+            result = wuwa_kujiequ.perform_sign(profile)
+            code = result.get("code")
+            msg_text = str(result.get("message") or result.get("msg") or "").strip()
+            already = "请勿重复签到" in msg_text
+            success = code == 200 and (not msg_text or "请求成功" in msg_text or already)
+            head = "库街区签到成功" if success else "库街区签到失败"
+            color = "#2f7d4a" if success else "#b04b44"
+            self.emit_event("toast", message=f"{head}：{msg_text}" if msg_text else head, color=color)
+            self._update_sign_status(
+                "wuwa_kujiequ",
+                "success" if success else "failed",
+                msg_text or ("请求成功" if success else ""),
+            )
+        except Exception as exc:
+            logger.exception("[Bridge] 库街区签到失败")
+            self.emit_event("toast", message=f"库街区签到失败: {exc}", color="#b04b44")
+            self._update_sign_status("wuwa_kujiequ", "failed", str(exc))
+
+    def _run_tajiduo_sign_backend(self):
+        """塔吉多签到：从 app_config.json 读 token/deviceid/uid/options，调 perform_sign。"""
+        try:
+            from ..settings import manager as cfg_manager
+            from ..clients import tajiduo_sign
+
+            cfg = cfg_manager.load(force=True)
+            tj = cfg.get("tajiduo_sign") or {}
+            token = str(tj.get("token") or "").strip()
+            deviceid = str(tj.get("deviceid") or "").strip()
+            uid = str(tj.get("uid") or "0").strip()
+            if not token or not deviceid:
+                self.emit_event(
+                    "toast",
+                    message="塔吉多 Token 或 deviceid 为空，请先填写",
+                    color="#b04b44",
+                )
+                return
+
+            logger.info("[Bridge] 塔吉多签到开始: uid=%s token_len=%d", uid, len(token))
+            result = tajiduo_sign.perform_sign(
+                token=token,
+                deviceid=deviceid,
+                uid=uid,
+                do_bbs_signin=bool(tj.get("do_bbs_signin", True)),
+                do_game_signin=bool(tj.get("do_game_signin", True)),
+                do_browse=bool(tj.get("do_browse", False)),
+                do_like=bool(tj.get("do_like", False)),
+                do_share=bool(tj.get("do_share", False)),
+                phone=str(tj.get("phone") or ""),
+                password=str(tj.get("password") or ""),
+            )
+            for line in tajiduo_sign.format_sign_report(result):
+                logger.info("[Bridge] 塔吉多签到: %s", line)
+            # 塔吉多返回 {"bbs": {...}, "game": [...], ...}，逐项判断
+            bbs = result.get("bbs") or {}
+            game = result.get("game") or []
+            bbs_ok = bbs.get("status") in ("success", "already")
+            game_ok = bool(game) and all(
+                g.get("status") in ("success", "already") for g in game
+            )
+            success = bbs_ok and game_ok
+            head = "塔吉多签到成功" if success else "塔吉多签到失败"
+            color = "#2f7d4a" if success else "#b04b44"
+            detail = bbs.get("message") or ""
+            self.emit_event(
+                "toast",
+                message=f"{head}：{detail}" if detail else head,
+                color=color,
+            )
+            self._update_sign_status(
+                "tajiduo_sign", "success" if success else "failed",
+                detail or (game[0].get("message", "") if game else ""),
+            )
+        except Exception as exc:
+            logger.exception("[Bridge] 塔吉多签到失败")
+            self.emit_event("toast", message=f"塔吉多签到失败: {exc}", color="#b04b44")
+            self._update_sign_status("tajiduo_sign", "failed", str(exc))
+
+    # ── Sign status recording & DailyView integration ─────────────
+    # 把签到结果（成功/失败/消息）写到 app_config.json 对应 sign 段的
+    # last_sign_date / last_sign_status / last_sign_message 字段，供
+    # DailyView 在每个游戏卡片里展示"签到"行；该行不参与 is_all_success 计算。
+
+    def _update_sign_status(self, section_name: str, status: str, message: str = ""):
+        """在 app_config.json 顶层 {section_name}.last_sign_* 写入本次签到结果。"""
+        try:
+            from ..settings.paths import APP_CONFIG_PATH
+            try:
+                cfg = json.loads(APP_CONFIG_PATH.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                cfg = {}
+            section = cfg.get(section_name) or {}
+            if not isinstance(section, dict):
+                section = {}
+            section["last_sign_date"] = time.strftime("%Y-%m-%d")
+            section["last_sign_status"] = status
+            section["last_sign_message"] = message or ""
+            cfg[section_name] = section
+            from ..settings.manager import atomic_write_json
+            from ..settings.paths import APP_CONFIG_PATH
+            atomic_write_json(APP_CONFIG_PATH, cfg)
+            logger.info(
+                "[Bridge] sign 状态已写入: section=%s status=%s",
+                section_name, status,
+            )
+        except Exception as exc:
+            logger.warning("[Bridge] 写 sign 状态失败: %s", exc)
+
+    def _build_sign_task_for_game(self, game_key: str) -> Optional[Dict[str, Any]]:
+        """根据 game_key 生成一条"签到"附属任务。
+
+        返回 None 表示该游戏没有可用的签到源（不在显示范围内）。
+        返回的 task 带 is_sign_task=True 标记，前端识别后展示为附属项，
+        不参与 is_all_success / has_failed / progress_percent 计算。
+
+        来源说明：
+          - endfield / wuwa / nte：签到结果写到 app_config.json 的
+            skendfield_sign / wuwa_kujiequ / tajiduo_sign.last_sign_*
+          - genshin / honkai_sr / zzz：mihoyo_sign 一键三签，结果写到
+            tracker（task_key='sign_米游社'），所以这里要从 tracker 反查
+        """
+        from ..settings.defaults import GAME_KEY_TO_SIGN_SECTION
+        section_name = GAME_KEY_TO_SIGN_SECTION.get(game_key)
+        if not section_name:
+            return None
+
+        today = time.strftime("%Y-%m-%d")
+
+        # 米游社三件套：状态在 tracker 里
+        if section_name == "mihoyo_sign":
+            try:
+                from ..services.daily_progress_tracker import get_tracker
+                from ..settings.paths import WORKFLOW_DB_PATH
+                from ..settings import resolve_game_key
+                tracker = get_tracker(str(WORKFLOW_DB_PATH))
+                snap = tracker.load_today()
+                target_key = resolve_game_key(game_key)
+                for rec in (snap.games or []):
+                    if resolve_game_key(rec.game_key) != target_key:
+                        continue
+                    for t in rec.tasks:
+                        if t.task_key.startswith("sign_"):
+                            return {
+                                "task_key": "__sign__",
+                                "task_name": "签到",
+                                "status": t.status,
+                                "message": t.message or "已签到",
+                                "is_sign_task": True,
+                                "sign_source": "mihoyo_sign",
+                            }
+            except Exception as exc:
+                logger.warning("[Bridge] 读取 mihoyo_sign tracker 状态失败: %s", exc)
+
+            # tracker 里没有 → 兜底显示"尚未签到"
+            try:
+                from ..settings.paths import APP_CONFIG_PATH
+                cfg = json.loads(APP_CONFIG_PATH.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError):
+                cfg = {}
+            ms = cfg.get("mihoyo_sign") or {}
+            cookie = str(ms.get("cookie") or ms.get("stoken_cookie") or "").strip()
+            if not cookie:
+                return {
+                    "task_key": "__sign__",
+                    "task_name": "签到",
+                    "status": "pending",
+                    "message": "未配置米游社 cookie",
+                    "is_sign_task": True,
+                    "sign_source": "mihoyo_sign",
+                }
+            return {
+                "task_key": "__sign__",
+                "task_name": "签到",
+                "status": "pending",
+                "message": "今日尚未签到",
+                "is_sign_task": True,
+                "sign_source": "mihoyo_sign",
+            }
+
+        # 其余来源：状态在 app_config.json 的 last_sign_*
+        try:
+            from ..settings.paths import APP_CONFIG_PATH
+            cfg = json.loads(APP_CONFIG_PATH.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+        section = cfg.get(section_name) or {}
+        if not isinstance(section, dict):
+            return None
+
+        token = ""
+        if section_name == "wuwa_kujiequ":
+            profile = section.get("profile") or {}
+            token = str(profile.get("token") or "").strip()
+        else:
+            token = str(section.get("token") or "").strip()
+            if section_name == "tajiduo_sign" and not token:
+                token = str(section.get("deviceid") or "").strip()
+
+        last_date = str(section.get("last_sign_date") or "")
+        last_status = str(section.get("last_sign_status") or "")
+        last_message = str(section.get("last_sign_message") or "")
+
+        if not token:
+            status = "pending"
+            message = "未配置 token，无法签到"
+        elif last_date == today and last_status in ("success", "already"):
+            status = "success"
+            message = last_message or "今日已签到"
+        elif last_date == today and last_status == "failed":
+            status = "failed"
+            message = last_message or "今日签到失败"
+        elif last_date == today and last_status:
+            status = last_status
+            message = last_message or "今日签到状态未知"
+        else:
+            status = "pending"
+            message = "今日尚未签到"
+
+        return {
+            "task_key": "__sign__",
+            "task_name": "签到",
+            "status": status,
+            "message": message,
+            "is_sign_task": True,
+            "sign_source": section_name,
+        }
+
+    def _inject_sign_task_into_games(self, games_data: List[Dict[str, Any]]):
+        """对每个 game，在其 tasks 列表前插入"签到"任务。
+
+        已经在 tracker 里以 sign_ 前缀存在的签到任务会被统一标记为
+        is_sign_task=True 并重命名为"签到"（避免和这里注入的重复）。
+        这里只对没有签到任务的游戏补一条（pending / 今日尚未签到）。
+        """
+        from ..settings import resolve_game_key
+        for game in games_data:
+            gk = resolve_game_key(game.get("game_key", ""))
+
+            # 1) 把 tracker 里残留的 sign_* 任务标记为附属项
+            tasks = list(game.get("tasks") or [])
+            upgraded = False
+            for t in tasks:
+                if (t.get("task_key") or "").startswith("sign_") and not t.get("is_sign_task"):
+                    t["is_sign_task"] = True
+                    t["task_key"] = "__sign__"
+                    t["task_name"] = "签到"
+                    upgraded = True
+            if upgraded:
+                game["tasks"] = tasks
+
+            # 2) 已经存在 is_sign_task 的，不再注入
+            if any(t.get("is_sign_task") for t in (game.get("tasks") or [])):
+                continue
+
+            sign_task = self._build_sign_task_for_game(gk)
+            if sign_task is None:
+                continue
+            tasks = list(game.get("tasks") or [])
+            tasks.insert(0, sign_task)
+            game["tasks"] = tasks
+
     # ═══════════════════════════════════════════════════════════════
     #  Event dispatcher (runs on main thread via queued connection)
     # ═══════════════════════════════════════════════════════════════
@@ -1542,7 +2266,9 @@ class UiBridge(QObject):
         if kind == "finished":
             self.isRunning = False
             self._set_status("运行结束", "本轮任务已全部执行完毕。", TONE_SUCCESS)
-            if payload.get("toast"):
+            if payload.get("shutdown_scheduled"):
+                self._request_toast("任务已完成，60 秒后将自动关机。", "#b66f1f")
+            elif payload.get("toast"):
                 self._request_toast("本轮任务已完成。", "#2f7d4a")
             return
         if kind == "toast":

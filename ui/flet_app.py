@@ -699,6 +699,33 @@ class FletGameAutoApp(FletAutomationMixin):
         if self.endfield_center_view is not None:
             self.endfield_center_view.visible = self.current_view == "endfield_center"
 
+    def _on_view_becomes_visible(self, view_key: str) -> None:
+        """把已保存的 token/配置重新灌进对应视图的输入框。
+
+        切到任意视图（首次显示 / 从别的视图切回 / 重新点同一项）时都会调一次，
+        避免输入框因为构建时机、主题切换、Flet 重建控件等原因变成空值。
+        """
+        try:
+            if view_key == "endfield_center":
+                self._apply_endfield_protocol_config_to_controls()
+                self._apply_skendfield_config_to_controls()
+                self._render_skendfield_sign_result(None)
+                self._render_endfield_center_gacha()
+            elif view_key == "wuwa":
+                self._apply_wuwa_kujiequ_config_to_controls()
+            elif view_key == "tajiduo":
+                self._apply_tajiduo_config_to_controls()
+            elif view_key == "nikki":
+                self._apply_nikki_config_to_controls()
+            elif view_key == "daily":
+                self._apply_mihoyo_sign_config_to_controls()
+        except Exception as exc:  # noqa: BLE001 - 刷新失败不应阻塞 UI 切换
+            try:
+                self.controller.logger.warning(
+                    "[UI] 视图 %s 刷新配置失败：%s", view_key, exc)
+            except Exception:
+                pass
+
     def _on_view_nav_click(self, e):
         self._switch_view(str(e.control.data))
 
@@ -719,11 +746,9 @@ class FletGameAutoApp(FletAutomationMixin):
                 self._reload_wuwa_data(show_toast=False)
             elif view_key == "tajiduo":
                 self._render_tajiduo_sign_result(None)
-            elif view_key == "endfield_center":
-                self._apply_endfield_protocol_config_to_controls()
-                self._apply_skendfield_config_to_controls()
-                self._render_skendfield_sign_result(None)
-                self._render_endfield_center_gacha()
+            self._on_view_becomes_visible(view_key)
+            self._refresh_view_nav()
+            self.page.update()
             return
         self.controller.logger.info("[UI] 切换视图: %s -> %s", self.current_view, view_key)
         self.current_view = view_key
@@ -739,11 +764,7 @@ class FletGameAutoApp(FletAutomationMixin):
             self._reload_wuwa_data(show_toast=False)
         elif view_key == "tajiduo":
             self._render_tajiduo_sign_result(None)
-        elif view_key == "endfield_center":
-            self._apply_endfield_protocol_config_to_controls()
-            self._apply_skendfield_config_to_controls()
-            self._render_skendfield_sign_result(None)
-            self._render_endfield_center_gacha()
+        self._on_view_becomes_visible(view_key)
         self._refresh_view_nav()
         self.page.update()
 
@@ -3838,6 +3859,8 @@ class FletGameAutoApp(FletAutomationMixin):
             label="DID",
             value=saved_profile.did if saved_profile is not None else "",
             hint_text="使用现有 token 时可手动填写 DID；留空则沿用已保存值或自动生成。",
+            password=True,
+            can_reveal_password=True,
             border_color=self.PALETTE["line"],
             filled=True,
             fill_color=self.PALETTE["panel_alt"],
@@ -5308,6 +5331,8 @@ class FletGameAutoApp(FletAutomationMixin):
             label="API Key",
             value=str(cfg.get("api_key") or ""),
             hint_text="从 https://end.shallow.ink/ 获取",
+            password=True,
+            can_reveal_password=True,
             border_color=self.PALETTE["line"],
             filled=True, fill_color=self.PALETTE["panel_alt"], dense=True,
         )
@@ -5315,6 +5340,8 @@ class FletGameAutoApp(FletAutomationMixin):
             label="Framework Token",
             value=str(cfg.get("framework_token") or ""),
             hint_text="登录绑定后自动获取并保存",
+            password=True,
+            can_reveal_password=True,
             border_color=self.PALETTE["line"],
             filled=True, fill_color=self.PALETTE["panel_alt"], dense=True,
         )
@@ -5365,6 +5392,8 @@ class FletGameAutoApp(FletAutomationMixin):
             label="森空岛 Token（直接签到）",
             value=str(skg_cfg.get("token") or ""),
             hint_text="粘贴森空岛网页获取的 token（支持 {'data':{'content':'...'}} 格式）",
+            password=True,
+            can_reveal_password=True,
             border_color=self.PALETTE["line"],
             filled=True, fill_color=self.PALETTE["panel_alt"], dense=True,
         )

@@ -25,14 +25,15 @@ This file mirrors important repository-level development notes inside the projec
 
 - browser_cookie3 access to Edge cookies may require administrator privileges on this Windows environment.
 - Do not swallow RequiresAdminError and then report it as "cookie not found". Surface the real permission problem.
-- Flet GUI should elevate before attempting Edge cookie extraction.
+- QML GUI (Flet 已暂停维护) should elevate before attempting Edge cookie extraction.
 
 ## UI Framework Notes
 
-- 项目有两套 UI：Flet（`ui/flet_app.py`，当前默认入口）和 PySide6+QML（`ui/qml/`，基于 HuskarUI 控件库）。
+- 项目有两套 UI：**PySide6+QML + HuskarUI**（`ui/qml/`，**当前默认入口**，`app/gui.py` → `_launch_qml_ui`）和 **Flet**（`ui/flet_app.py`，暂停维护，不再被 `start_gui_admin.bat` 调用，run_flet_gui 无任何 caller，保留仅作回退方案）。
 - HuskarUI 来源：`https://github.com/mengps/HuskarUI`，QML 控件前缀 `Hus`（HusCard / HusButton / HusText / HusSelect / HusCheckBox / HusTag / HusSpin / HusEmpty / HusMenu / HusNotification / HusInput / HusIcon 等）。
 - QML 视图文件在 `ui/qml/views/`，可复用组件在 `ui/qml/components/`，主窗口在 `ui/qml/Main.qml`。
 - Python ↔ QML 桥接在 `ui/bridge.py`（UiBridge），主题令牌在 `ui/theme.py`。
+- **凭据输入必须用 `components/CredentialInput.qml`**（默认 `echoMode: TextInput.Password`，自带"显示/隐藏"按钮）。**禁止**直接用 `HusInput` 接收 token / cookie / api_key，会明码显示。
 
 ### PyHuskarUI 兼容性避坑 (重要)
 
@@ -46,9 +47,29 @@ This file mirrors important repository-level development notes inside the projec
 
 5. **禁止硬编码文件路径**: 所有数据路径必须通过 `settings/paths.py` 或 `app_config.json` 配置，**禁止**在代码中写死绝对路径（如 `D:\Program Files\...`）。抽卡数据必须写入 SQLite 数据库（`gacha_records` 表），从数据库读取，不能依赖本地文件系统中的固定文件。`ui/shared.py` 中的 `DEFAULT_ENDFIELD_PATH` 是反面教材，新代码不得效仿。
 
+### QML 签到按钮 + 桥接 (重要)
+
+- **"执行签到"按钮必须**调 `bridge.run*Sign()` 才能真正签到，只调 `bridge.saveCredential(...)` 只会把 token 存进 config，**不会触发签到**。各 view 对应关系：
+  - `EndfieldCenterView.qml` → `bridge.runSkendfieldSign()`（森空岛）
+  - `WuwaView.qml` → `bridge.runWuwaKujiequSign()`（库街区）
+  - `TajiduoView.qml` → `bridge.runTajiduoSign()`（塔吉多/异环）
+- 对应 backend 都在 `ui/bridge.py`：`_run_skendfield_sign_backend` / `_run_wuwa_kujiequ_sign_backend` / `_run_tajiduo_sign_backend`。每个起 daemon 线程从 `app_config.json` 读凭据、调 `clients/*.perform_sign(...)`、用 `format_sign_report` 写日志、最后 `emit_event("toast", ...)` 推回 QML 弹通知。
+- 按钮加 `enabled: !bridge.isRunning` 防双击重入。
+- 视图加 `onVisibleChanged: { if (visible) bridge.loadCredentials() }` 确保切回来时凭据一定从 config 重灌。
+
+### 签到返回状态码 (已验证)
+
+| 客户端 | `status` 字段值 | 含义 |
+|--------|----------------|------|
+| `clients/skendfield_sign.py` | `"success"` / `"already"` / `"failed"` / `"login_failed"` | 签到 OK / 已签到 / 失败 / 登录失败 |
+| `clients/tajiduo_sign.py` (每项) | `"success"` / `"already"` / `"failed"` / `"skipped"` | 同上，但分 `bbs` 和 `game[]` 两块 |
+| `clients/wuwa_kujiequ.py` | 顶层 `code` + `message` 字段 | `code=200` 且 msg 含"请求成功"/"请勿重复签到"才算成功 |
+
+判定是否成功的 helper 在 bridge backend 里，**不要**写 `result.get("already_signed")`（错，实际是 `"already"`），也不要写 `result.get("success")` 期望 True（skendfield 用 `status="success"`，tajiduo 用 `bbs.get("status")=="success"`）。
+
 ## Scope Notes
 
-- Startup sign behavior should be shared through startup_sign_runner.py rather than duplicated separately in Flet and CLI flows.
+- Startup sign behavior should be shared through startup_sign_runner.py rather than duplicated separately in QML and CLI flows.
 - Keep project-visible notes like this file concise and focused on repeated engineering pitfalls.
 
 --------------------------------------------------------------------------------

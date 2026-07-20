@@ -2,7 +2,10 @@
 
 import copy
 import json
+import os
 import shutil
+import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -90,13 +93,52 @@ def load(force: bool = False) -> Dict:
     return _cache
 
 
+def atomic_write_json(path: Path, data: Dict) -> None:
+    """原子写入 JSON 文件：写临时文件 → os.replace → 短重试。
+
+    供所有需要直接写 app_config.json 的代码点统一调用，
+    避免 `open(path, 'w')` 被另一个进程瞬时锁住抛 PermissionError。
+    """
+    path = Path(path)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(path.parent),
+        prefix=".tmp_",
+        suffix=path.suffix or ".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        last_exc: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                os.replace(tmp_path, str(path))
+                last_exc = None
+                break
+            except PermissionError as exc:
+                last_exc = exc
+                time.sleep(0.1 * (attempt + 1))
+        if last_exc is not None:
+            raise last_exc
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def save(config: Dict) -> None:
     global _cache
     persisted = _normalize_for_save(config)
+
+    # 备份旧文件（失败不阻塞保存）
     if _CONFIG_FILE.exists():
-        shutil.copy2(_CONFIG_FILE, str(_CONFIG_FILE) + _BACKUP_SUFFIX)
-    with open(_CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(persisted, f, ensure_ascii=False, indent=2)
+        try:
+            shutil.copy2(_CONFIG_FILE, str(_CONFIG_FILE) + _BACKUP_SUFFIX)
+        except OSError:
+            pass
+
+    atomic_write_json(_CONFIG_FILE, persisted)
     _cache = _merge_defaults(_default_config(), persisted)
 
 

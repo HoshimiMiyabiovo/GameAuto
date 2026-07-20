@@ -43,7 +43,7 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
 
     mihoyo_cfg = config.get(MIHOYO_SIGN_CONFIG_KEY, {})
     if isinstance(mihoyo_cfg, dict) and mihoyo_cfg.get("startup_sign"):
-        cookie = tidy_cookie(str(mihoyo_cfg.get("cookie") or ""))
+        cookie = tidy_cookie(str(mihoyo_cfg.get("cookie") or mihoyo_cfg.get("stoken_cookie") or ""))
         enabled_games = _resolve_mihoyo_enabled_games(mihoyo_cfg, app_keys)
         if cookie and enabled_games:
             try:
@@ -104,8 +104,8 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
             except Exception as exc:
                 LOGGER.error("[启动前签到] 塔吉多签到失败：%s", str(exc), exc_info=True)
                 lines.append(f"塔吉多启动前签到: {str(exc)}")
-                tracker.record_sign_result("tajiduo", "塔吉多", "BBS", "failed", str(exc))
-                tracker.record_sign_result("tajiduo", "塔吉多", "游戏", "failed", str(exc))
+                tracker.record_sign_result("nte", "异环", "BBS", "failed", str(exc))
+                tracker.record_sign_result("nte", "异环", "游戏", "failed", str(exc))
         else:
             LOGGER.warning("[启动前签到] 塔吉多已开启启动前签到，但缺少 token 或 deviceid")
 
@@ -124,7 +124,7 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
             except Exception as exc:
                 LOGGER.error("[启动前签到] 森空岛终末地签到失败：%s", str(exc), exc_info=True)
                 lines.append(f"森空岛启动前签到: {str(exc)}")
-                tracker.record_sign_result("skendfield", "森空岛终末地", "签到", "failed", str(exc))
+                tracker.record_sign_result("endfield", "终末地", "签到", "failed", str(exc))
         else:
             LOGGER.warning("[启动前签到] 森空岛终末地已开启启动前签到，但缺少 token")
 
@@ -146,15 +146,15 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
                     data = result.get("data", result)
                     msg = f"签到成功: {data.get('message', str(data)[:200])}"
                     lines.append(f"终末地协议终端启动前签到: {msg}")
-                    tracker.record_sign_result("skendfield", "森空岛终末地", "签到(协议终端)", "success", msg)
+                    tracker.record_sign_result("endfield", "终末地", "签到(协议终端)", "success", msg)
                 else:
                     msg = str(result.get("message", str(result)[:200])) if result else "无响应"
                     lines.append(f"终末地协议终端启动前签到: {msg}")
-                    tracker.record_sign_result("skendfield", "森空岛终末地", "签到(协议终端)", "failed", msg)
+                    tracker.record_sign_result("endfield", "终末地", "签到(协议终端)", "failed", msg)
             except Exception as exc:
                 LOGGER.error("[启动前签到] 终末地协议终端签到失败：%s", str(exc), exc_info=True)
                 lines.append(f"终末地协议终端启动前签到: {str(exc)}")
-                tracker.record_sign_result("skendfield", "森空岛终末地", "签到(协议终端)", "failed", str(exc))
+                tracker.record_sign_result("endfield", "终末地", "签到(协议终端)", "failed", str(exc))
         else:
             LOGGER.warning("[启动前签到] 终末地协议终端已开启启动前签到，但缺少 api_key/framework_token/role_id")
 
@@ -194,21 +194,24 @@ def _record_mihoyo_sign_to_tracker(tracker: DailyProgressTracker, result: dict):
 
 
 def _record_tajiduo_sign_to_tracker(tracker: DailyProgressTracker, result: dict):
-    """将塔吉多签到结果写入每日进度。"""
+    """将塔吉多签到结果写入每日进度。
+
+    game_key 统一用 "nte"（与 DailyView 卡片的 game_key 一致）。
+    """
     bbs = result.get("bbs") or {}
     if bbs.get("status") == "success":
-        tracker.record_sign_result("tajiduo", "塔吉多", "BBS", "success", bbs.get("message", ""))
+        tracker.record_sign_result("nte", "异环", "BBS", "success", bbs.get("message", ""))
     elif bbs.get("status") == "already":
-        tracker.record_sign_result("tajiduo", "塔吉多", "BBS", "already", bbs.get("message", ""))
+        tracker.record_sign_result("nte", "异环", "BBS", "already", bbs.get("message", ""))
     elif bbs.get("status") == "failed":
-        tracker.record_sign_result("tajiduo", "塔吉多", "BBS", "failed", bbs.get("message", ""))
+        tracker.record_sign_result("nte", "异环", "BBS", "failed", bbs.get("message", ""))
     for game in result.get("game") or []:
         if game.get("status") == "success":
-            tracker.record_sign_result("tajiduo", "塔吉多", game.get("name", "游戏"), "success", game.get("message", ""))
+            tracker.record_sign_result("nte", "异环", game.get("name", "游戏"), "success", game.get("message", ""))
         elif game.get("status") == "already":
-            tracker.record_sign_result("tajiduo", "塔吉多", game.get("name", "游戏"), "already", game.get("message", ""))
+            tracker.record_sign_result("nte", "异环", game.get("name", "游戏"), "already", game.get("message", ""))
         elif game.get("status") == "failed":
-            tracker.record_sign_result("tajiduo", "塔吉多", game.get("name", "游戏"), "failed", game.get("message", ""))
+            tracker.record_sign_result("nte", "异环", game.get("name", "游戏"), "failed", game.get("message", ""))
 
 
 def _resolve_mihoyo_enabled_games(mihoyo_cfg: dict, app_keys: set[str]) -> List[str]:
@@ -230,17 +233,21 @@ def _resolve_mihoyo_enabled_games(mihoyo_cfg: dict, app_keys: set[str]) -> List[
 
 
 def _record_skendfield_sign_to_tracker(tracker: DailyProgressTracker, result: dict):
-    """将森空岛终末地签到结果写入每日进度。"""
+    """将森空岛终末地签到结果写入每日进度。
+
+    game_key 统一用 "endfield"（与 DailyView 卡片的 game_key 一致），
+    避免出现 skendfield / endfield 两张终末地卡片。
+    """
     status = result.get("status", "")
     role = result.get("role", "")
     channel = result.get("channel", "")
     msg = result.get("message", "")
     detail = f"{role}({channel}): {msg}" if role else msg
     if status == "success":
-        tracker.record_sign_result("skendfield", "森空岛终末地", "签到", "success", detail)
+        tracker.record_sign_result("endfield", "终末地", "签到", "success", detail)
     elif status == "already":
-        tracker.record_sign_result("skendfield", "森空岛终末地", "签到", "already", detail)
+        tracker.record_sign_result("endfield", "终末地", "签到", "already", detail)
     elif status == "login_failed":
-        tracker.record_sign_result("skendfield", "森空岛终末地", "签到", "failed", f"登录失败: {msg}")
+        tracker.record_sign_result("endfield", "终末地", "签到", "failed", f"登录失败: {msg}")
     else:
-        tracker.record_sign_result("skendfield", "森空岛终末地", "签到", "failed", detail)
+        tracker.record_sign_result("endfield", "终末地", "签到", "failed", detail)

@@ -275,11 +275,13 @@ class TajiduoClient:
             return {"status": "already", "message": "今日已签到"}
         _, j = self._native_request("POST", "/apihub/api/signin", body={"communityId": COMMUNITY_ID})
         if _is_ok(j):
-            d = j.get("data", {})
+            d = j.get("data", {}) if isinstance(j, dict) else {}
             return {"status": "success", "message": f"签到成功 +{d.get('goldCoin', 0)}金币", "data": d}
         if isinstance(j, dict) and "已签" in (j.get("msg") or ""):
             return {"status": "already", "message": "今日已签到"}
-        return {"status": "failed", "message": str(j.get("msg", j))}
+        if isinstance(j, dict):
+            return {"status": "failed", "message": str(j.get("msg") or j)}
+        return {"status": "failed", "message": str(j)[:200]}
 
     def fetch_posts(self, count: int = 20) -> List[Dict[str, Any]]:
         _, j = self._native_request(
@@ -350,7 +352,9 @@ class TajiduoClient:
         )
         if _is_ok(j):
             return {"status": "success", "message": "分享成功"}
-        return {"status": "failed", "message": str(j.get("msg", j))}
+        if isinstance(j, dict):
+            return {"status": "failed", "message": str(j.get("msg") or j)}
+        return {"status": "failed", "message": str(j)[:200]}
 
     def do_game_signin(self) -> List[Dict[str, Any]]:
         cards = self.fetch_game_cards()
@@ -379,8 +383,10 @@ class TajiduoClient:
                 results.append({"game": gname, "status": "success", "message": "签到成功"})
             elif isinstance(r, dict) and r.get("code") == 5052:
                 results.append({"game": gname, "status": "already", "message": "已签到"})
+            elif isinstance(r, dict):
+                results.append({"game": gname, "status": "failed", "message": str(r.get("msg") or r)})
             else:
-                results.append({"game": gname, "status": "failed", "message": str(r.get("msg", r))})
+                results.append({"game": gname, "status": "failed", "message": str(r)[:200]})
         return results
 
     def get_coin_state(self) -> Dict[str, Any]:

@@ -206,32 +206,88 @@ Item {
                                 Repeater {
                                     model: modelData.tasks || []
 
-                                    RowLayout {
+                                    ColumnLayout {
                                         Layout.fillWidth: true
-                                        spacing: 6
-
-                                        HusText {
-                                            text: {
-                                                var s = modelData.status
-                                                if (s === "success") return "✅"
-                                                if (s === "failed") return "❌"
-                                                if (s === "already") return "✔"
-                                                if (s === "skipped") return "⏭"
-                                                return "⏳"
-                                            }
-                                            font.pixelSize: Math.round(14 * root.fs)
-                                        }
-                                        HusText {
-                                            text: modelData.task_name || modelData.task_key
-                                            font.pixelSize: Math.round(13 * root.fs)
+                                        spacing: 3
+                                        // 签到任务走附属样式：左侧加边条 + 任务名前加 📬
+                                        Rectangle {
+                                            visible: modelData.is_sign_task === true
                                             Layout.fillWidth: true
+                                            Layout.leftMargin: 4
+                                            Layout.preferredHeight: 1
+                                            color: "#dbcdbd"
                                         }
-                                        HusText {
-                                            text: modelData.message || ""
-                                            font.pixelSize: Math.round(12 * root.fs)
-                                            color: "#6d6257"
-                                            elide: Text.ElideRight
-                                            Layout.preferredWidth: 200
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 6
+
+                                            HusText {
+                                                text: {
+                                                    if (modelData.is_sign_task === true) {
+                                                        if (modelData.status === "success") return "📬"
+                                                        if (modelData.status === "failed") return "📭"
+                                                        return "📨"
+                                                    }
+                                                    var s = modelData.status
+                                                    if (s === "success") return "✅"
+                                                    if (s === "failed") return "❌"
+                                                    if (s === "already") return "✔"
+                                                    if (s === "skipped") return "⏭"
+                                                    return "⏳"
+                                                }
+                                                font.pixelSize: Math.round(14 * root.fs)
+                                            }
+                                            HusText {
+                                                text: (modelData.is_sign_task === true ? "签到" : (modelData.task_name || modelData.task_key)) + (modelData.is_sign_task === true ? "（附属项，不计入完成度）" : "")
+                                                font.pixelSize: Math.round(13 * root.fs)
+                                                color: modelData.is_sign_task === true ? "#8a7a68" : "#2c241d"
+                                                font.italic: modelData.is_sign_task === true
+                                                Layout.fillWidth: true
+                                            }
+                                            HusText {
+                                                text: {
+                                                    var msg = modelData.message || ""
+                                                    var cur = modelData.current
+                                                    var tot = modelData.total
+                                                    if (cur !== undefined && cur !== null &&
+                                                        tot !== undefined && tot !== null && tot > 0) {
+                                                        var pct = Math.round(cur / tot * 100)
+                                                        return msg + "  (" + pct + "%)"
+                                                    }
+                                                    return msg
+                                                }
+                                                font.pixelSize: Math.round(12 * root.fs)
+                                                color: modelData.status === "failed" ? "#b04b44" : "#6d6257"
+                                            }
+                                        }
+
+                                        // 进度条：仅有 current/total 的任务显示（签到不显示进度条）
+                                        Rectangle {
+                                            visible: {
+                                                if (modelData.is_sign_task === true) return false
+                                                var cur = modelData.current
+                                                var tot = modelData.total
+                                                return cur !== undefined && cur !== null &&
+                                                       tot !== undefined && tot !== null && tot > 0
+                                            }
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 4
+                                            color: "#e8ddd0"
+                                            radius: 2
+
+                                            Rectangle {
+                                                property real ratio: {
+                                                    var cur = modelData.current || 0
+                                                    var tot = modelData.total || 1
+                                                    return tot > 0 ? Math.min(1.0, cur / tot) : 0
+                                                }
+                                                width: parent.width * ratio
+                                                height: parent.height
+                                                color: modelData.status === "success" ? "#2f7d4a" :
+                                                       (modelData.status === "failed" ? "#b04b44" : "#b66f1f")
+                                                radius: 2
+                                            }
                                         }
                                     }
                                 }

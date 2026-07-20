@@ -37,6 +37,42 @@ APP_KEY_ALIASES = {
 }
 
 
+# ── 标准 game_key 体系 ──────────────────────────────────────────────
+# 内部统一使用小写式 game_key（如 "genshin", "nikki", "endfield"），
+# 与 APPS 字典的大驼峰式 app_key（如 "GenshinImpact"）通过下方映射表互转。
+# 所有 tracker / parser / daily_checker / bridge 模块统一使用 game_key。
+GAME_KEYS: Dict[str, str] = {
+    "genshin":   "原神",
+    "honkai_sr": "崩坏：星穹铁道",
+    "zzz":       "绝区零",
+    "wuwa":      "鸣潮",
+    "endfield":  "终末地",
+    "nte":       "异环",
+    "nikki":     "无限暖暖",
+}
+
+# app_key（大驼峰）→ game_key（小写）反向映射
+APP_KEY_TO_GAME_KEY: Dict[str, str] = {
+    "GenshinImpact":         "genshin",
+    "HonkaiStarRail":        "honkai_sr",
+    "ZenlessZoneZero":       "zzz",
+    "WutheringWaves":        "wuwa",
+    "ArknightsEndfield":     "endfield",
+    "NevernessToEverness":   "nte",
+    "InfinityNikki":         "nikki",
+}
+
+# game_key → 签到配置节名（app_config.json 中的顶层键）
+GAME_KEY_TO_SIGN_SECTION: Dict[str, str] = {
+    "endfield":  "skendfield_sign",
+    "wuwa":      "wuwa_kujiequ",
+    "nte":       "tajiduo_sign",
+    "genshin":   "mihoyo_sign",
+    "honkai_sr": "mihoyo_sign",
+    "zzz":       "mihoyo_sign",
+}
+
+
 DEFAULT_QBITTORRENT: Dict[str, str] = {
     "path": "",
     "process_name": "qbittorrent.exe",

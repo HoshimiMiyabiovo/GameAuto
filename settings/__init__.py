@@ -3,7 +3,15 @@ from typing import Dict, Optional
 
 from . import manager as cm
 from .discovery import apply_runtime_discovery
-from .defaults import APP_KEY_ALIASES, DEFAULT_APPS, DEFAULT_APP_ORDER, DEFAULT_QBITTORRENT
+from .defaults import (
+    APP_KEY_ALIASES,
+    DEFAULT_APPS,
+    DEFAULT_APP_ORDER,
+    DEFAULT_QBITTORRENT,
+    GAME_KEYS,
+    APP_KEY_TO_GAME_KEY,
+    GAME_KEY_TO_SIGN_SECTION,
+)
 from .paths import LOG_DIR as PROJECT_LOG_DIR, LOG_FILE as PROJECT_LOG_FILE, WORKFLOW_DB_PATH as PROJECT_WORKFLOW_DB_PATH
 from ..services.launch_task_catalog import merge_launch_apps
 
@@ -79,3 +87,24 @@ def resolve_app_key(app_key: str) -> str:
     if lowered in APP_KEY_ALIASES:
         return APP_KEY_ALIASES[lowered]
     return app_key
+
+
+def resolve_game_key(any_key: str) -> str:
+    """
+    将任意 key（大驼峰 app_key、小写 game_key、别名）统一解析为小写式 game_key。
+
+    例：
+      resolve_game_key("GenshinImpact") → "genshin"
+      resolve_game_key("genshin")       → "genshin"
+      resolve_game_key("InfinityNikki") → "nikki"
+      resolve_game_key("nikki")         → "nikki"
+    """
+    if any_key in GAME_KEYS:
+        return any_key
+    if any_key in APP_KEY_TO_GAME_KEY:
+        return APP_KEY_TO_GAME_KEY[any_key]
+    # 通过 app_key 别名间接转换
+    resolved_app_key = resolve_app_key(any_key)
+    if resolved_app_key in APP_KEY_TO_GAME_KEY:
+        return APP_KEY_TO_GAME_KEY[resolved_app_key]
+    return any_key

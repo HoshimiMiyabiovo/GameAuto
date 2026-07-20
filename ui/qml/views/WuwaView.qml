@@ -22,6 +22,11 @@ Item {
         bridge.loadCredentials()
     }
 
+    // 视图从隐藏→显示时重新灌一次凭据
+    onVisibleChanged: {
+        if (visible) bridge.loadCredentials()
+    }
+
     Connections {
         target: bridge
         function onWuwaGachaChanged(jsonStr) {
@@ -88,10 +93,12 @@ Item {
                         HusButton {
                             text: "执行签到"
                             type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning
                             onClicked: {
                                 if (wuwaTokenInput.text.length > 0) {
                                     bridge.saveCredential("wuwa_kujiequ", "profile.token", wuwaTokenInput.text)
                                 }
+                                bridge.runWuwaKujiequSign()
                             }
                         }
                     }
