@@ -51,6 +51,7 @@ TIME_RE = re.compile(r"^\[(\d{2}:\d{2}:\d{2})\.\d+\]")
 
 
 def _today_key() -> str:
+    """今天的日期键（按 RESET_HOUR=4 分界，凌晨 4 点前算前一天）。"""
     from datetime import datetime, timedelta
     now = datetime.now()
     if now.hour < RESET_HOUR:
@@ -59,6 +60,7 @@ def _today_key() -> str:
 
 
 def _zzz_log_dir() -> Optional[Path]:
+    """从 app_config.json 的 zzz_daily_log_monitor 读日志目录。"""
     try:
         if not _APP_CONFIG_PATH.is_file():
             return None
@@ -111,12 +113,24 @@ def parse_zzz_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
 
     lines = content.splitlines()
 
-    # 扫描整个日志文件，每个关键任务取最后一次执行结果
-    # （一天可能跑多次一条龙，取最后一次即可）
-    run_lines = lines
+    # 只看最后一次一条龙分段：一天可能跑多次（早上自动跑挂了晚上手跑），
+    # 必须按"本次启动行"切分，否则早场的失败会污染晚场的成功。
+    # 启动行特征：`指令[ 一条龙 ] 节点 进入游戏序章 返回状态 ...`（首节点，无 ->）；
+    # 年中的 `进入游戏序章 -> X` 是流转行，不能当切分点。
+    # 找不到启动行时退化为整文件（兼容旧日志格式）。
+    seg_start = 0
+    for idx, line in enumerate(lines):
+        if re.search(r"指令\[\s*一条龙\s*\]\s+节点\s+进入游戏序章\s+返回状态", line):
+            seg_start = idx
+    run_lines = lines[seg_start:]
 
-    # 整体完成标志：最后一次"一条龙"是否以"全部结束"收尾
-    overall_success = any(ONE_DRAGON_END in line for line in run_lines)
+    # 整体完成标志：以最后一次"一条龙 执行成功/失败"的结果为准，
+    # 而不是整文件任意一处"全部结束"（一天多跑时早场的成功不能给晚场的失败背书）
+    dragon_results = [
+        line for line in run_lines
+        if re.search(r"指令\[\s*一条龙\s*\]\s+执行(成功|失败)", line)
+    ]
+    overall_success = bool(dragon_results) and ONE_DRAGON_END in dragon_results[-1]
 
     # 提取子任务状态
     # 策略：对每个关键任务，记录最后一次"执行成功/失败"的结果
@@ -202,6 +216,24 @@ def parse_zzz_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
                 "status": r["status"],
                 "message": r["message"],
             })
+
+    # 通用失败收录：KEY_TASKS 之外的执行失败（如 进入游戏/打开并登录游戏）
+    # 也要上卡，否则登录挂了卡片还是一片空白
+    seen_names = {t["task_name"] for t in subtasks}
+    for line in run_lines:
+        fail_m = TASK_RESULT_RE.search(line)
+        if not fail_m or fail_m.group(2) != "失败":
+            continue
+        fail_name = fail_m.group(1).strip()
+        if not fail_name or fail_name in seen_names or fail_name == "一条龙":
+            continue
+        seen_names.add(fail_name)
+        subtasks.append({
+            "task_key": fail_name,
+            "task_name": fail_name,
+            "status": "failed",
+            "message": fail_m.group(3).strip(),
+        })
 
     has_failed = any(t["status"] == "failed" for t in subtasks)
     progress_percent = int(

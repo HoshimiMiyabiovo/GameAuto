@@ -39,6 +39,7 @@ TASK_MARKERS: List[Dict[str, Any]] = [
 
 
 def _today_key() -> str:
+    """今天的日期键（按 RESET_HOUR=4 分界，凌晨 4 点前算前一天）。"""
     from datetime import datetime, timedelta
     now = datetime.now()
     if now.hour < RESET_HOUR:
@@ -47,6 +48,7 @@ def _today_key() -> str:
 
 
 def _starrail_log_dir() -> Optional[Path]:
+    """从 app_config.json 的 starrail_daily_log_monitor 读日志目录。"""
     try:
         if not _APP_CONFIG_PATH.is_file():
             return None
@@ -85,8 +87,15 @@ def parse_starrail_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
 
     lines = content.splitlines()
 
-    subtasks: List[Dict[str, str]] = []
+    subtasks: List[Dict[str, Any]] = []
     report_time = ""
+
+    # 实训分数（活跃度）：March7th 在实训检查时打 INFO 行
+    #   当前累计分数：600/500
+    # 一天只会涨不会跌，取最后一次；「每日实训已完成」隐含分数已达标（500/500）
+    score_re = re.compile(r"当前累计分数：(\d+)\s*/\s*(\d+)")
+    activity: Optional[Dict[str, int]] = None
+    daily_training_done = False
 
     for task_def in TASK_MARKERS:
         task_key = task_def["key"]
@@ -105,6 +114,15 @@ def parse_starrail_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
             time_str = m.group(2)
             body = m.group(4)
 
+            sm = score_re.search(body)
+            if sm:
+                activity = {
+                    "current": int(sm.group(1)),
+                    "total": int(sm.group(2)),
+                }
+            if "每日实训已完成" in body:
+                daily_training_done = True
+
             for marker in success_markers:
                 if marker in body:
                     status = "success"
@@ -122,6 +140,18 @@ def parse_starrail_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
                 "status": "success",
                 "message": message,
             })
+
+    if activity is None and daily_training_done:
+        activity = {"current": 500, "total": 500}
+    if activity is not None and activity.get("total", 0) > 0:
+        cur, total = activity["current"], activity["total"]
+        subtasks.append({
+            "task_key": "daily_activity",
+            "task_name": "活跃度",
+            "status": "success" if cur >= total else "pending",
+            "message": f"{cur}/{total}",
+            "extra": {"current": cur, "total": total},
+        })
 
     has_failed = any(t["status"] == "failed" for t in subtasks)
     success_count = sum(1 for t in subtasks if t["status"] in ("success", "already"))

@@ -17,6 +17,15 @@ class BetterGIDailyRewardSummary:
     expedition_incomplete_seen: bool
     last_commission_line: str = ""
     last_expedition_line: str = ""
+    # BetterGI 自身报错（[ERR] 行）计数 + 样本：2026-10-26 用户指出"今天是 BetterGI
+    # 自己出问题"，日志里确实有 40+ 条 ERR（未识别到地脉花/未能返回主界面/打开大地图
+    # 失败/传送失败）。不带进判定文案，失败原因就只能被读成"委托没做"。
+    error_count: int = 0
+    error_samples: List[str] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.error_samples is None:
+            self.error_samples = []
 
     @property
     def all_completed(self) -> bool:
@@ -31,12 +40,36 @@ class BetterGIDailyRewardSummary:
         return missing
 
     def failure_message(self) -> str:
+        """失败原因要能直接看出"是谁没做"，不能只说"未确认"。
+
+        2026-10-26 实例：用户当天没做每日委托，BetterGI 打出
+        `▶ "领取『每日委托』奖励" 未完成或者已领取` 直接跳过领取，我们的旧文案
+        只写"未确认今日委托奖励完成"，看起来像监控误报，实际是委托根本没做完
+        （这套一条龙配置里只有"领取委托奖励"，没有"做每日委托"的任务）。
+        """
         if not self.log_found:
             return "BetterGI 日志缺失，无法确认今日委托奖励与探索派遣状态"
         missing = self.missing_items()
         if not missing:
             return "成功"
-        return f"BetterGI 日志未确认今日{'、'.join(missing)}完成"
+        reasons: List[str] = []
+        for item in missing:
+            if item == "委托奖励" and self.commission_incomplete_seen:
+                reasons.append(
+                    "委托奖励：BetterGI 判定「未完成」并跳过领取"
+                    "（一条龙 6 个任务里只有「领取每日奖励」，没有做每日委托的任务）"
+                )
+            elif item == "探索派遣" and self.expedition_incomplete_seen:
+                reasons.append("探索派遣：BetterGI 判定「未探索完成或已领取」并跳过")
+            else:
+                reasons.append(f"{item}：日志里没有完成记录")
+        msg = "BetterGI 日志未确认今日" + "、".join(missing) + "完成 —— " + "；".join(reasons)
+        if self.error_count:
+            samples = "；".join(self.error_samples[:3]) if self.error_samples else ""
+            msg += f"。本次 BetterGI 自身报错 {self.error_count} 条"
+            if samples:
+                msg += f"（示例：{samples}）"
+        return msg
 
 
 class BetterGILogMonitor:
@@ -69,6 +102,9 @@ class BetterGILogMonitor:
         self.expedition_incomplete_seen = False
         self.last_commission_line = ""
         self.last_expedition_line = ""
+        self.error_count = 0
+        self.error_samples: List[str] = []
+        self._pending_error = False
 
     def start(self) -> "BetterGILogMonitor":
         if self._thread and self._thread.is_alive():
@@ -96,6 +132,8 @@ class BetterGILogMonitor:
             expedition_incomplete_seen=self.expedition_incomplete_seen,
             last_commission_line=self.last_commission_line,
             last_expedition_line=self.last_expedition_line,
+            error_count=self.error_count,
+            error_samples=list(self.error_samples),
         )
 
     def _today_token(self) -> str:
@@ -124,6 +162,20 @@ class BetterGILogMonitor:
 
     def _process_line(self, line: str):
         if not line:
+            return
+
+        # BetterGI 自身报错：日志格式是「[HH:mm:ss.f] [ERR] [...] 类名」+ 下一行正文，
+        # 计数 + 留 3 条样本，失败文案里带上，避免把"BetterGI 跑坏了"说成"委托没做"。
+        if "[ERR]" in line:
+            self.error_count += 1
+            self._pending_error = True
+            return
+        if self._pending_error:
+            self._pending_error = False
+            if line.startswith("["):
+                return  # 又是一行日志头，说明这条错误没有独立正文行
+            if len(self.error_samples) < 3:
+                self.error_samples.append(line[:80])
             return
 
         if "▶" in line and "每日委托" in line and ("未完成" in line or "已领取" in line):
@@ -230,4 +282,11 @@ def format_bettergi_daily_reward_summary(summary: Optional[BetterGIDailyRewardSu
         f"  委托奖励：{'已完成' if summary.commission_completed else '未确认完成'}；探索派遣：{'已完成' if summary.expedition_completed else '未确认完成'}",
         f"  重点提示：今日仍缺少 {'、'.join(summary.missing_items())} 完成记录",
     ]
+    if summary.commission_incomplete_seen and not summary.commission_completed:
+        lines.append("  原因：BetterGI 判定「每日委托未完成」，直接跳过了领取（需要先做完 4 个委托）")
+    if summary.expedition_incomplete_seen and not summary.expedition_completed:
+        lines.append("  原因：BetterGI 判定「探索派遣未探索完成或已领取」，跳过了再次派遣")
+    if summary.error_count:
+        sample = "；".join(summary.error_samples[:3]) if summary.error_samples else "（无正文样本）"
+        lines.append(f"  BetterGI 自身报错 {summary.error_count} 条，示例：{sample}")
     return lines

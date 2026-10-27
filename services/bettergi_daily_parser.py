@@ -31,6 +31,7 @@ _APP_CONFIG_PATH = _PROJECT_ROOT / "app_config.json"
 
 
 def _today_key() -> str:
+    """今天的日期键（按 RESET_HOUR=4 分界，凌晨 4 点前算前一天）。"""
     tm = time.localtime()
     if tm.tm_hour < RESET_HOUR:
         tm_yesterday = time.localtime(time.time() - 86400)
@@ -65,6 +66,7 @@ def _bettergi_log_dir() -> Optional[Path]:
 
 
 def find_today_bettergi_log() -> Optional[Path]:
+    """今天的 BetterGI 日志文件，没有则 None。"""
     log_dir = _bettergi_log_dir()
     if log_dir is None or not log_dir.exists():
         return None

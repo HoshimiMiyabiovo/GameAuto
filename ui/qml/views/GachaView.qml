@@ -54,6 +54,18 @@ Item {
                 honkaiSrSignCheck.checked = !!(mihoyo.enabled_games && mihoyo.enabled_games.honkai_sr)
                 zzzSignCheck.checked = !!(mihoyo.enabled_games && mihoyo.enabled_games.zzz)
                 mihoyoStartupCheck.checked = !!mihoyo.startup_sign
+                var dev = mihoyo.device || null
+                if (dev && (dev.fp || dev.deviceFingerprint)) {
+                    var parts = ["已绑定"]
+                    parts.push(dev.fp ? ("fp " + dev.fp.substring(0, 8) + "…") : "fp 待生成")
+                    if (dev.deviceModel) parts.push(dev.deviceModel)
+                    if (dev.registered) parts.push("已注册设备")
+                    mihoyoDeviceStatus.text = parts.join(" · ")
+                    mihoyoDeviceStatus.color = "#2f7d4a"
+                } else {
+                    mihoyoDeviceStatus.text = "未绑定"
+                    mihoyoDeviceStatus.color = "#6d6257"
+                }
             } catch(e) { /* ignore */ }
         }
     }
@@ -69,6 +81,22 @@ Item {
         fiveStarCard.note = ov.latest_time ? ("至 " + ov.latest_time.substring(0, 10)) : "等待导入"
         avgPityCard.note = pity.avg_pity != null ? ("平均保底 " + pity.avg_pity) : "等待导入"
         rateCard.note = pity.current_pity != null ? ("当前 " + pity.current_pity + " 抽") : "等待导入"
+        // UP 歪率 / 大保底 / 保底预测（gacha.luck_analysis headline）
+        var luck = root.analysis.luck || {}
+        var head = luck.headline || {}
+        if (head.win_rate_text && head.win_rate_text !== "-") {
+            luckCard.value = head.win_rate_text
+            var noteParts = [head.state_text || ""]
+            if (head.expected_pulls != null) {
+                noteParts.push("距下个金期望 " + head.expected_pulls + " 抽 / 最坏 " + head.worst_case + " 抽")
+            }
+            luckCard.note = noteParts.filter(function (s) { return s !== "" }).join(" · ")
+        } else {
+            luckCard.value = "-"
+            luckCard.note = head.expected_pulls != null
+                ? ("限定池暂无五星 · 距下个金期望 " + head.expected_pulls + " 抽")
+                : "等待导入"
+        }
     }
 
     FileDialog {
@@ -79,6 +107,17 @@ Item {
             var path = fileDialog.selectedFile.toString().replace("file:///", "")
             gachaPathInput.text = path
             bridge.importGachaFile(path)
+        }
+    }
+
+    FileDialog {
+        id: hgDbDialog
+        title: "选择 HoYo.Gacha 数据库文件（exe 运行目录下的 HoYo.Gacha.v1.db）"
+        nameFilters: ["SQLite 数据库 (*.db)", "所有文件 (*)"]
+        onAccepted: {
+            var raw = hgDbDialog.selectedFile.toString().replace(/^file:\/\/\//, "")
+            var path = decodeURIComponent(raw)
+            bridge.importHoyogachaDb(path, root.selectedGameLabel)
         }
     }
 
@@ -121,6 +160,23 @@ Item {
                                     bridge.importGachaFile(gachaPathInput.text)
                                 }
                             }
+                        }
+                    }
+
+                    // HoYo.Gacha 本地库直读（免导出 JSON）
+                    RowLayout {
+                        spacing: 10
+                        HusText {
+                            text: "已有 HoYo.Gacha？直接读它的数据库，三端（原神/星铁/绝区零）一次全进："
+                            font.pixelSize: Math.round(12 * root.fs)
+                            color: "#6d6257"
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                        }
+                        HusButton {
+                            text: "选择 HoYo.Gacha 数据库"
+                            type: HusButton.Type_Outlined
+                            onClicked: hgDbDialog.open()
                         }
                     }
 
@@ -183,6 +239,7 @@ Item {
                         GachaMetricCard { id: fiveStarCard; title: "5★ 数"; value: "-"; note: "等待导入"; Layout.fillWidth: true }
                         GachaMetricCard { id: avgPityCard; title: "出货率"; value: "-"; note: "等待导入"; Layout.fillWidth: true }
                         GachaMetricCard { id: rateCard; title: "最近导入"; value: "-"; note: "等待导入"; Layout.fillWidth: true }
+                        GachaMetricCard { id: luckCard; title: "UP 歪率"; value: "-"; note: "等待导入"; Layout.fillWidth: true }
                     }
 
                     HusEmpty {
@@ -208,10 +265,19 @@ Item {
                                 Layout.fillHeight: true
                                 spacing: 8
 
+                                // 背景板：池子少时列表内容不满，浅底让空白区有边界感
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    color: "#faf6f0"
+                                    radius: 8
+                                    border.color: "#e0d6c8"
+                                    border.width: 1
+
                                 ListView {
                                     id: hoyoPoolListView
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 320
+                                    anchors.fill: parent
+                                    anchors.margins: 4
                                     clip: true
                                     spacing: 4
                                     model: root.analysis.pools || []
@@ -275,6 +341,18 @@ Item {
                                             }
                                         }
                                     }
+                                }   // ListView
+                                }   // 背景 Rectangle
+
+                                HusText {
+                                    text: {
+                                        var n = (root.analysis.pools || []).length
+                                        return n > 0 ? ("共 " + n + " 个卡池，点击查看详情") : "暂无卡池数据"
+                                    }
+                                    font.pixelSize: Math.round(11 * root.fs)
+                                    color: "#8a7a68"
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
                                 }
                             }
 
@@ -541,6 +619,59 @@ Item {
                             text: "启动时签到"
                             checked: true
                             onClicked: bridge.saveCredentialBool("mihoyo_sign", "startup_sign", checked)
+                        }
+                    }
+
+                    // ── 设备指纹绑定（可选，降低便笺查询 1034 风控）──
+                    HusText {
+                        text: "📱 设备指纹绑定（可选）"
+                        font.pixelSize: Math.round(14 * root.fs)
+                        font.bold: true
+                    }
+                    HusText {
+                        text: "粘贴 copy-device-info APK 复制的字段集合（或抓包得到的 {\"fp\":…,\"device_id\":…}），程序自动识别字段并绑定，降低米游社便笺查询触发风控 (1034) 的概率。"
+                        font.pixelSize: Math.round(12 * root.fs)
+                        color: "#6d6257"
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+                    ScrollView {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: Math.round(76 * root.fs)
+                        clip: true
+
+                        TextArea {
+                            id: mihoyoDeviceInput
+                            wrapMode: TextArea.Wrap
+                            font.family: "Consolas"
+                            font.pixelSize: Math.round(12 * root.fs)
+                            color: "#2c241d"
+                            placeholderText: "{\"deviceModel\":\"…\",\"androidVersion\":\"…\",\"deviceFingerprint\":\"…\",\"oaid\":\"…\"}"
+                            background: Rectangle { color: "#fffdf9"; border.color: "#dbcdbd"; radius: 6 }
+                        }
+                    }
+                    RowLayout {
+                        spacing: 10
+                        Layout.fillWidth: true
+
+                        HusButton {
+                            text: "识别并保存"
+                            type: HusButton.Type_Primary
+                            enabled: !bridge.isRunning && mihoyoDeviceInput.text.length > 0
+                            onClicked: bridge.saveMihoyoDevice(mihoyoDeviceInput.text)
+                        }
+                        HusButton {
+                            text: "清除绑定"
+                            type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning
+                            onClicked: bridge.clearMihoyoDevice()
+                        }
+                        HusText {
+                            id: mihoyoDeviceStatus
+                            text: "未绑定"
+                            font.pixelSize: Math.round(12 * root.fs)
+                            color: "#6d6257"
+                            Layout.fillWidth: true
                         }
                     }
 

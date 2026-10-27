@@ -32,6 +32,7 @@ REQUIRED_PYTHON_PACKAGES: Dict[str, str] = {
     "rsa": "rsa",
     "genshin": "genshin",
     "Crypto": "pycryptodome",
+    "pynput": "pynput",
 }
 
 
@@ -97,6 +98,10 @@ def _collect_app_paths() -> List[Tuple[str, str, str]]:
     return paths
 
 
+# --list-langs 子进程约 0.3s，按 exe 路径+mtime 缓存，进程内只跑一次
+_TESS_LANGS_CACHE: Dict[str, tuple] = {}
+
+
 def _check_tesseract_capability(report: DependencyCheckReport):
     # 延迟导入: 同 _collect_app_paths 的原因
     from ..settings.paths import TESSERACT_EXE
@@ -108,12 +113,23 @@ def _check_tesseract_capability(report: DependencyCheckReport):
         return
     report.add_info(f"Tesseract: {tesseract_bin}")
     try:
-        result = subprocess.run([tesseract_bin, "--list-langs"], capture_output=True, text=True, check=False)
-        langs = (result.stdout or "").lower()
-        if "chi_sim" not in langs:
-            report.add_warning("Tesseract 未检测到 chi_sim 中文语言包，中文识别准确率会很低")
-    except Exception as e:
-        report.add_warning(f"无法检测 Tesseract 语言包: {str(e)}")
+        mtime = os.path.getmtime(tesseract_bin)
+    except OSError:
+        mtime = -1.0
+    cached = _TESS_LANGS_CACHE.get(tesseract_bin)
+    if cached is not None and cached[0] == mtime:
+        has_chi_sim = cached[1]
+    else:
+        try:
+            result = subprocess.run([tesseract_bin, "--list-langs"], capture_output=True, text=True, check=False)
+            langs = (result.stdout or "").lower()
+            has_chi_sim = "chi_sim" in langs
+        except Exception as e:
+            report.add_warning(f"无法检测 Tesseract 语言包: {str(e)}")
+            return
+        _TESS_LANGS_CACHE[tesseract_bin] = (mtime, has_chi_sim)
+    if not has_chi_sim:
+        report.add_warning("Tesseract 未检测到 chi_sim 中文语言包，中文识别准确率会很低")
 
 
 def _check_external_paths(report: DependencyCheckReport):

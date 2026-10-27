@@ -23,6 +23,7 @@ RESET_HOUR = 4
 
 
 def _today_key() -> str:
+    """今天的日期键（按 RESET_HOUR=4 分界，凌晨 4 点前算前一天）。"""
     tm = time.localtime()
     if tm.tm_hour < RESET_HOUR:
         tm_yesterday = time.localtime(time.time() - 86400)
@@ -45,9 +46,21 @@ def _ok_ef_report_date(file_path: Path) -> str:
     return m.group(1) if m else "0"
 
 
+def _ok_ef_report_stamp(file_path: Path) -> str:
+    """从文件名提取 YYYYMMDD_HHMMSS，用于在当天多份报告间取最新。"""
+    m = re.match(r"(?:日常执行情况|日常任务)_(\d{8}_\d{6})\.txt", file_path.name)
+    return m.group(1) if m else ""
+
+
 def find_today_ok_ef_report() -> Optional[Path]:
-    """只找今天的 ok-ef 报告文件。"""
+    """找今天的 ok-ef 报告文件，同一天有多份时取最新一份。
+
+    ok-ef 一天可能产出多份报告：异常结束重跑、执行中的周期性快照。
+    必须取时间戳最大的那份，否则复核会读到最早的过期快照
+    （2026-10-05 事故：读到 15:00 异常快照，把 16:36 的成功运行改判失败并触发重试）。
+    """
     today = _today_key().replace("-", "")
+    candidates: List[Path] = []
     for report_dir in _ok_ef_report_dirs():
         if not report_dir.exists():
             continue
@@ -55,11 +68,14 @@ def find_today_ok_ef_report() -> Optional[Path]:
             if not f.is_file():
                 continue
             if _ok_ef_report_date(f) == today:
-                return f
-    return None
+                candidates.append(f)
+    if not candidates:
+        return None
+    return max(candidates, key=_ok_ef_report_stamp)
 
 
 def _dedup(lst: List[str]) -> List[str]:
+    """保序去重（ok-ef 多轮执行会重复写同名任务）。"""
     seen: set[str] = set()
     result: List[str] = []
     for x in lst:
@@ -70,7 +86,10 @@ def _dedup(lst: List[str]) -> List[str]:
 
 
 def _parse_task_list(text: str) -> List[str]:
-    return [t.strip() for t in text.split(",") if t.strip()]
+    """逗号分隔的任务行拆成列表；占位符「无」（空列表）必须滤掉——曾产出"无: 未知原因"。"""
+    # 「无」是 ok-ef 对空列表的占位符，不是任务名；空轮次报告（异常结束）
+    # 三个区块都会写「无」，不滤掉会被当成任务并产出"无: 未知原因"
+    return [t.strip() for t in text.split(",") if t.strip() and t.strip() != "无"]
 
 
 def parse_ok_ef_report(file_path: str | Path) -> Optional[Dict[str, Any]]:

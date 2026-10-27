@@ -23,6 +23,10 @@ SHEET_POOL_MAP = {
     "新手自选唤取（感恩定向唤取）": "感恩定向唤取",
     "角色新旅唤取": "角色新旅池",
     "武器新旅唤取": "武器新旅池",
+    "角色联动唤取": "角色联动池",
+    "武器联动唤取": "武器联动池",
+    "角色忆旅唤取": "角色忆旅池",
+    "武器忆旅唤取": "武器忆旅池",
 }
 
 RARITY_LABEL = {5: "五星", 4: "四星", 3: "三星"}
@@ -166,6 +170,156 @@ def load_all_wuwa_records(file_path: str) -> List[WuwaGachaRecord]:
         all_records.extend(sheet_records)
     all_records.sort(key=lambda r: r.gacha_time_str)
     return all_records
+
+
+def _parse_pool_json_time_to_iso(raw_time: str) -> Tuple[str, str]:
+    """解析 WutheringWavesTool pool.json 的时间字段（"2026-07-30 20:17:42"）。
+
+    Returns:
+        (display_str, iso_str): 例如 ("2026-07-30 20:17:42", "2026-07-30T20:17:42+08:00")
+    """
+    if not raw_time:
+        dt = datetime(2000, 1, 1, tzinfo=CST)
+    else:
+        dt = None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M:%S"):
+            try:
+                dt = datetime.strptime(str(raw_time).strip(), fmt).replace(tzinfo=CST)
+                break
+            except ValueError:
+                continue
+        if dt is None:
+            dt = datetime(2000, 1, 1, tzinfo=CST)
+    return dt.strftime("%Y-%m-%d %H:%M:%S"), dt.isoformat()
+
+
+def load_wuwa_pool_json(file_paths) -> List[WuwaGachaRecord]:
+    """从 WutheringWavesTool 的 pool.json 加载、合并、去重抽卡记录。
+
+    支持单个路径（str）或多个路径（List[str]）。多文件会合并后按业务键
+    (gacha_time_str, resource_id, cardPoolType) 去重，按时间升序排列。
+
+    Args:
+        file_paths: pool.json 路径字符串或路径列表
+
+    Returns:
+        合并去重后的 WuwaGachaRecord 列表
+    """
+    if isinstance(file_paths, str):
+        file_paths = [file_paths]
+    elif not isinstance(file_paths, (list, tuple)):
+        raise TypeError(f"file_paths 必须是 str 或 List[str]: {type(file_paths)}")
+
+    seen: Dict[Tuple[str, str, str], WuwaGachaRecord] = {}
+
+    for file_path in file_paths:
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            _logger.warning(f"读取 pool.json 失败 {file_path}: {exc}")
+            continue
+
+        if not isinstance(data, dict):
+            _logger.warning(f"pool.json 顶层不是 dict: {file_path}")
+            continue
+
+        per_file_count = 0
+        for sheet_name, items in data.items():
+            pool_display = SHEET_POOL_MAP.get(sheet_name)
+            if pool_display is None:
+                _logger.info(f"跳过未知卡池 sheet: {sheet_name} (file={file_path})")
+                continue
+            if not isinstance(items, list):
+                continue
+
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    resource_id = str(item.get("resourceId", ""))
+                    time_str, gacha_time_str = _parse_pool_json_time_to_iso(
+                        str(item.get("time", ""))
+                    )
+                    pool_name = str(item.get("cardPoolType", sheet_name))
+                    name = str(item.get("name", ""))
+                    item_type = str(item.get("resourceType", "角色"))
+                    try:
+                        rarity = int(item.get("qualityLevel", 3))
+                    except (ValueError, TypeError):
+                        rarity = 3
+                    try:
+                        quantity = int(item.get("count", 1))
+                    except (ValueError, TypeError):
+                        quantity = 1
+
+                    # 业务键去重：(gacha_time_str, resource_id, pool_name)
+                    key = (gacha_time_str, resource_id, pool_name)
+                    if key in seen:
+                        continue
+
+                    seen[key] = WuwaGachaRecord(
+                        name=name,
+                        item_type=item_type,
+                        rarity=rarity,
+                        time_str=time_str,
+                        quantity=quantity,
+                        resource_id=resource_id,
+                        pool_name=pool_name,
+                        pool_display=pool_display,
+                        sheet_name=sheet_name,
+                        gacha_time_str=gacha_time_str,
+                    )
+                    per_file_count += 1
+                except Exception as exc:
+                    _logger.warning(f"解析记录失败 item={item} err={exc}")
+                    continue
+
+        _logger.info(
+            f"加载 pool.json: {file_path}, 本文件新增 {per_file_count} 条, "
+            f"累计去重后 {len(seen)} 条"
+        )
+
+    records = list(seen.values())
+    records.sort(key=lambda r: r.gacha_time_str)
+    return records
+
+
+def wuwa_pool_json_to_db_records(
+    records: List[WuwaGachaRecord], uid: str
+) -> List[Dict[str, Any]]:
+    """把 WuwaGachaRecord 列表转为 db 记录。
+
+    与 wuwa_to_db_records 兼容，但 record_id 用业务键
+    `wuwa_{uid}_{time_compact}_{resource_id}`，保证同一抽卡在多次导入里
+    record_id 一致，被 upsert 自动去重。
+    """
+    results: List[Dict[str, Any]] = []
+    for r in records:
+        time_compact = (
+            r.gacha_time_str
+            .replace("-", "")
+            .replace(":", "")
+            .replace("+", "")
+            .replace("T", "T")
+        )
+        record_id = f"wuwa_{uid}_{time_compact}_{r.resource_id}"
+        raw = json.dumps(r.to_dict(), ensure_ascii=False)
+        results.append({
+            "record_id": record_id,
+            "gacha_type": r.pool_name,
+            "uigf_gacha_type": "",
+            "item_id": r.resource_id,
+            "name": r.name,
+            "item_type": r.item_type,
+            "rank_type": str(r.rarity),
+            "count": r.quantity,
+            "time": r.gacha_time_str,
+            "lang": "zh-cn",
+            "timezone": "UTC+8",
+            "raw_json": raw,
+        })
+    return results
 
 
 def build_wuwa_overview(records: List[WuwaGachaRecord]) -> Dict[str, Any]:

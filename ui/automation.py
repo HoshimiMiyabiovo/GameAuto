@@ -1128,6 +1128,7 @@ class FletAutomationMixin:
                 target_apps,
                 xm_enabled=self.runtime_options["xm"],
                 cj_enabled=self.runtime_options["cj"],
+                force_rerun=self.runtime_options.get("force_rerun", False),
                 hooks=TaskBatchHooks(
                     on_startup_lines=_on_startup_lines,
                     on_before_app=_on_before_app,

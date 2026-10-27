@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import time
+import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .mihoyo_sign import (
     get_bound_accounts,
@@ -30,8 +32,8 @@ from .wuwa_kujiequ import (
     WuwaKujiequProfile,
     fetch_daily_data,
     fetch_base_data,
-    profile_from_dict,
 )
+from ..services.credential_store import load_wuwa_kujiequ_profile
 
 LOGGER = logging.getLogger("GameAutomation")
 
@@ -58,8 +60,390 @@ def _hoyo_record_ds(query: str = "", body: str = "") -> str:
     return f"{t},{r},{_md5(raw.encode()).hexdigest()}"
 
 
-def _query_hoyo_daily_note(cookie: str, uid: int, server: str, game: str) -> Dict[str, Any]:
-    """直接调用米游社实时便笺 API（TeyvatGuide 方式：account_id + cookie_token）。"""
+# ---------------------------------------------------------------------------
+# 米游社设备指纹绑定（应对 1034/10041 风控）
+#
+# 方案来源：gsuid_core BindDevice（早柚核心官方文档，实测长期有效）：
+# 请求头携带与登录该 cookie 的真实手机一致的 x-rpc-device_id / x-rpc-device_fp，
+# UA 型号与设备一致。用户从 copy-device-info APK 复制设备参数 dict 放进
+# app_config.json 的 mihoyo_sign.device，本模块用这些参数调官方 getFp 换取
+# device_fp 并缓存复用。gsuid_core 对应实现：
+# deal_fp / generate_fp / device_login_and_save（base_request.py）。
+# ---------------------------------------------------------------------------
+
+_MHY_GET_FP_URL = "https://public-data-api.mihoyo.com/device-fp/api/getFp"
+_MHY_DEVICE_LOGIN_URL = "https://bbs-api.miyoushe.com/apihub/api/deviceLogin"
+_MHY_SAVE_DEVICE_URL = "https://bbs-api.miyoushe.com/apihub/api/saveDevice"
+_APP_VERSION = "2.106.2"
+
+
+def recognize_device_input(raw: Any) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """识别用户粘贴的原始设备字段集合（自动兼容两种来源）。
+
+    支持两种格式：
+    1. copy-device-info APK 复制的参数 dict：deviceModel / androidVersion /
+       deviceFingerprint / deviceName / deviceBoard / deviceProduct / oaid
+       （deviceFingerprint 是安卓 build 指纹，米游社 fp 由程序调 getFp 换取）
+    2. 抓包得到的 {"fp": ..., "device_id": ...}（fp 即米游社 device_fp，
+       可带 device_info/deviceInfo）
+
+    返回 (device, info)：device 为归一化后的字段 dict（None 表示无法识别），
+    info 含 format（"apk_params" / "captured_fp" / None）、fields（识别到的
+    原始字段名）、error（失败原因）。
+    """
+    info: Dict[str, Any] = {"format": None, "fields": [], "error": ""}
+    if isinstance(raw, str):
+        cleaned = raw.strip().strip(";；,，")
+        if not cleaned:
+            info["error"] = "内容为空"
+            return None, info
+        try:
+            raw = json.loads(cleaned)
+        except (ValueError, TypeError):
+            info["error"] = "不是合法 JSON（请粘贴 APK 复制的原始字段集合）"
+            return None, info
+    if not isinstance(raw, dict):
+        info["error"] = "内容不是 JSON 对象"
+        return None, info
+
+    # 键名归一（大小写/下划线别名），按 gsuid_core deal_fp 的两套键位兼容
+    lowered = {str(k).strip().lower(): (str(v).strip() if v is not None else "") for k, v in raw.items()}
+
+    def pick(*names: str) -> str:
+        for n in names:
+            val = lowered.get(n.lower(), "")
+            if val:
+                return val
+        return ""
+
+    recognized: Dict[str, str] = {
+        "fp": pick("fp", "deviceFp", "device_fp"),
+        "device_id": pick("device_id", "deviceId"),
+        "deviceModel": pick("deviceModel", "device_model", "model"),
+        "androidVersion": pick("androidVersion", "android_version"),
+        "deviceFingerprint": pick("deviceFingerprint", "device_info", "deviceInfo"),
+        "deviceName": pick("deviceName", "device_name"),
+        "deviceBoard": pick("deviceBoard", "device_board", "board"),
+        "deviceProduct": pick("deviceProduct", "device_product", "productName", "product"),
+        "oaid": pick("oaid"),
+    }
+    device: Dict[str, Any] = {k: v for k, v in recognized.items() if v}
+    info["fields"] = [k for k, v in raw.items() if str(k).strip() and v not in (None, "")]
+
+    # 缓存键透传（写回配置里的 fp/device_id/seed/registered，重复粘贴不丢）
+    for cache_key in ("seed_id", "seed_time"):
+        if raw.get(cache_key):
+            device[cache_key] = raw[cache_key]
+    if "registered" in raw:
+        device["registered"] = bool(raw.get("registered"))
+
+    if device.get("fp"):
+        info["format"] = "captured_fp"
+        return device, info
+    if device.get("deviceFingerprint"):
+        info["format"] = "apk_params"
+        return device, info
+    info["error"] = "未识别到有效字段：需要 deviceFingerprint（APK 参数）或 fp（抓包设备指纹）"
+    return None, info
+
+
+def _normalize_device_config(raw: Any) -> Optional[Dict[str, Any]]:
+    """把 mihoyo_sign.device 配置规整成 dict；无法识别返回 None。"""
+    device, _info = recognize_device_input(raw)
+    return device
+
+
+def _device_model(device: Dict[str, Any]) -> str:
+    return str(device.get("deviceModel") or "").strip() or "M2012K11AC"
+
+
+def _device_android(device: Dict[str, Any]) -> str:
+    return str(device.get("androidVersion") or "").strip() or "13"
+
+
+def _android_sdk_level(android_version: str) -> str:
+    try:
+        return str(20 + int(android_version.split(".")[0]))
+    except (ValueError, TypeError):
+        return "34"
+
+
+def _build_device_ua(device: Dict[str, Any]) -> str:
+    """仿米游社安卓 App 的 UA，型号取自真机参数。"""
+    return (
+        "Mozilla/5.0 (Linux; Android {android}; {model} Build/UKQ1.230917.001; wv)"
+        "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.6478.133"
+        "Mobile Safari/537.36 miHoYoBBS/{version}"
+    ).format(
+        android=_device_android(device),
+        model=_device_model(device),
+        version=_APP_VERSION,
+    )
+
+
+def _random_device_fp() -> str:
+    return "".join(random.choices("0123456789abcdef", k=13))
+
+
+def _build_fp_ext_fields(device: Dict[str, Any]) -> str:
+    """构造 getFp 的 ext_fields 设备画像，模板沿用 gsuid_core 实测版本。"""
+    fingerprint = str(device.get("deviceFingerprint")).strip()
+    brand = fingerprint.split("/")[0] or _device_model(device)
+    android = _device_android(device)
+    now_ms = int(time.time() * 1000)
+    random_kb = random.randint(400000, 600000)
+    ext = {
+        "proxyStatus": 0, "isRoot": 1, "romCapacity": "512",
+        "deviceName": str(device.get("deviceName") or "私人手机"),
+        "productName": str(device.get("deviceProduct") or _device_model(device)),
+        "romRemain": "491", "hostname": "dg02-pool06-kvm82",
+        "screenSize": "1264x2640", "isTablet": 0,
+        "aaid": uuid.uuid4().hex, "model": _device_model(device),
+        "brand": brand, "hardware": "qcom",
+        "deviceType": str(device.get("deviceName") or brand),
+        "devId": "REL", "serialNumber": "unknown",
+        "sdCapacity": random_kb, "buildTime": "1717740969000", "buildUser": "root",
+        "simState": 5, "ramRemain": random.randint(150000, 300000),
+        "appUpdateTimeDiff": now_ms, "deviceInfo": fingerprint,
+        "vaid": uuid.uuid4().hex, "buildType": "user",
+        "sdkVersion": _android_sdk_level(android),
+        "ui_mode": "UI_MODE_TYPE_NORMAL", "isMockLocation": 0,
+        "cpuType": "arm64-v8a", "isAirMode": 0, "ringMode": 1, "chargeStatus": 1,
+        "manufacturer": brand, "emulatorStatus": 0, "appMemory": "512",
+        "osVersion": android, "vendor": "中国联通",
+        "accelerometer": "-1.3004991x6.38764x7.19103",
+        "sdRemain": random.randint(150000, 300000), "buildTags": "release-keys",
+        "packageName": "com.mihoyo.hyperion", "networkType": "WiFi",
+        "oaid": str(device.get("oaid") or "").strip() or uuid.uuid4().hex,
+        "debugStatus": 1, "ramCapacity": str(random_kb),
+        "magnetometer": "27.1084x-48.5804x-24.8758",
+        "display": f"{_device_model(device)}_{android}.0.0.810(CN01)",
+        "appInstallTimeDiff": now_ms, "packageVersion": "2.20.2",
+        "gyroscope": "-0.02543317x0.005725792x0.003195791",
+        "batteryStatus": 50, "hasKeyboard": 0,
+        "board": str(device.get("deviceBoard") or brand),
+    }
+    return json.dumps(ext, separators=(",", ":"), ensure_ascii=False)
+
+
+def _fetch_device_fp(device: Dict[str, Any], device_id: str, seed_id: str, seed_time: str) -> Optional[str]:
+    """用真机设备参数调官方 getFp 换取 device_fp，失败返回 None。"""
+    from urllib.request import Request, urlopen
+
+    body = {
+        "device_id": device_id,
+        "seed_id": seed_id,
+        "platform": "2",
+        "seed_time": str(seed_time),
+        "ext_fields": _build_fp_ext_fields(device),
+        "app_name": "bbs_cn",
+        "bbs_device_id": device_id,
+        "device_fp": _random_device_fp(),
+    }
+    headers = {
+        "user-agent": _build_device_ua(device),
+        "x-rpc-app_version": _APP_VERSION,
+        "x-rpc-client_type": "5",
+        "x-requested-with": "com.mihoyo.hyperion",
+        "referer": "https://webstatic.mihoyo.com",
+        "origin": "https://webstatic.mihoyo.com",
+    }
+    req = Request(_MHY_GET_FP_URL, data=json.dumps(body).encode("utf-8"),
+                  headers=headers, method="POST")
+    with urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    payload = data.get("data") or {}
+    if isinstance(payload, dict) and payload.get("code") == 200:
+        fp = str(payload.get("device_fp") or "").strip()
+        if fp:
+            return fp
+    LOGGER.warning("[设备绑定] getFp 未返回有效 device_fp：%s", str(data.get("message", data))[:120])
+    return None
+
+
+def _register_device_to_account(cookie: str, device: Dict[str, Any],
+                                device_id: str, device_fp: str) -> bool:
+    """best-effort：把设备注册到账号（apihub deviceLogin + saveDevice）。
+
+    对应 gsuid_core 的 device_login_and_save。失败不影响主流程。
+    """
+    from urllib.request import Request, urlopen
+    from hashlib import md5
+
+    fields = _extract_cookie_fields(cookie)
+    stoken = fields.get("stoken") or fields.get("stoken_v2") or ""
+    stuid = fields.get("stuid") or fields.get("stuid_v2") or ""
+    mid = fields.get("mid") or fields.get("mid_v2") or ""
+    if not stoken or not stuid:
+        LOGGER.info("[设备绑定] Cookie 缺少 stoken/stuid，跳过设备注册")
+        return False
+    try:
+        from genshin.constants import DS_SALT
+        passport_salt = DS_SALT.get("cn_passport", "JwYDpKvLj6MrMqqYU6jTKF17KNO2PXoS")
+    except Exception:
+        passport_salt = "JwYDpKvLj6MrMqqYU6jTKF17KNO2PXoS"
+
+    fingerprint = str(device.get("deviceFingerprint")).strip()
+    brand = fingerprint.split("/")[0] or _device_model(device)
+    body = {
+        "app_version": _APP_VERSION,
+        "device_id": device_id,
+        "device_name": f"{brand} {_device_model(device)}",
+        "os_version": _android_sdk_level(_device_android(device)),
+        "platform": "Android",
+        "registration_id": uuid.uuid4().hex[:19],
+    }
+    body_str = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+    t = str(int(time.time()))
+    r = str(random.randint(100000, 200000))
+    raw = f"salt={passport_salt}&t={t}&r={r}&b={body_str}&q="
+    ds = f"{t},{r},{md5(raw.encode()).hexdigest()}"
+
+    cookie_str = f"stoken={stoken};stuid={stuid};"
+    if mid:
+        cookie_str += f"mid={mid};"
+    base_headers = {
+        "user-agent": _build_device_ua(device),
+        "x-rpc-app_version": _APP_VERSION,
+        "x-rpc-client_type": "5",
+        "x-requested-with": "com.mihoyo.hyperion",
+        "referer": "https://app.mihoyo.com",
+        "x-rpc-device_id": device_id,
+        "x-rpc-device_fp": device_fp,
+        "x-rpc-device_name": f"{brand} {_device_model(device)}",
+        "x-rpc-device_model": _device_model(device),
+        "x-rpc-csm_source": "myself",
+        "ds": ds,
+        "cookie": cookie_str,
+    }
+    ok = True
+    for url in (_MHY_DEVICE_LOGIN_URL, _MHY_SAVE_DEVICE_URL):
+        try:
+            req = Request(url, data=body_str.encode("utf-8"),
+                          headers={**base_headers, "content-type": "application/json"},
+                          method="POST")
+            with urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            if data.get("retcode") != 0:
+                LOGGER.warning("[设备绑定] 设备注册失败 %s：%s", url.rsplit("/", 1)[-1],
+                               str(data.get("message", ""))[:120])
+                ok = False
+        except Exception as exc:
+            LOGGER.warning("[设备绑定] 设备注册请求异常：%s", str(exc)[:160])
+            ok = False
+    return ok
+
+
+def _persist_device_cache(device: Dict[str, Any]) -> None:
+    """把生成的 device_id/fp 等缓存写回 app_config.json，保证跨次运行稳定。"""
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "app_config.json")
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            config = json.load(f)
+        # 解密后修改再加密回写，避免把已解密的敏感字段以明文落盘
+        try:
+            from ..settings.manager import decrypt_config, encrypt_config_for_persist
+            config = decrypt_config(config)
+        except Exception:
+            try:
+                from game_auto.settings.manager import decrypt_config as _dec, encrypt_config_for_persist as _enc
+                config = _dec(config)
+            except Exception:
+                _enc = None  # type: ignore
+        section = config.get("mihoyo_sign")
+        if not isinstance(section, dict):
+            section = {}
+            config["mihoyo_sign"] = section
+        section["device"] = device
+        # 加密后再落盘
+        try:
+            from ..settings.manager import encrypt_config_for_persist as _enc2
+            to_write = _enc2(config)
+        except Exception:
+            try:
+                from game_auto.settings.manager import encrypt_config_for_persist as _enc2
+                to_write = _enc2(config)
+            except Exception:
+                to_write = config
+        tmp_path = config_path + ".tmp_device"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(to_write, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, config_path)
+    except Exception as exc:
+        LOGGER.warning("[设备绑定] 缓存写入 app_config.json 失败（不影响本次查询）：%s", str(exc)[:160])
+
+
+def ensure_device_headers(mihoyo_cfg: Dict[str, Any],
+                          cookie_for_registration: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """从 mihoyo_sign 配置得到设备绑定请求头；未配置返回 None（行为与旧版一致）。
+
+    返回 dict 含 x-rpc-device_id / x-rpc-device_fp / user-agent（小写键，
+    可直接 update 进请求头）。device_fp 只在首次生成，随后缓存进配置复用；
+    提供 cookie_for_registration（含 stoken）时会顺带把设备注册到账号
+    （best-effort，成功一次后不再重复）。
+    """
+    device = _normalize_device_config(mihoyo_cfg.get("device"))
+    if device is None:
+        return None
+
+    cached_fp = str(device.get("fp") or "").strip()
+    device_id = str(device.get("device_id") or "").strip()
+    needs_persist = False
+    if cached_fp and device_id:
+        LOGGER.info("[设备绑定] 使用缓存的设备指纹（fp=%s…）", cached_fp[:8])
+        fp = cached_fp
+    elif cached_fp:
+        # 抓包格式只给了 fp：补一个稳定 device_id，不再调 getFp
+        device_id = str(uuid.uuid4()).lower()
+        device["device_id"] = device_id
+        fp = cached_fp
+        needs_persist = True
+        LOGGER.info("[设备绑定] 使用自带设备指纹（fp=%s…），已补充 device_id", fp[:8])
+    else:
+        device_id = device_id or str(uuid.uuid4()).lower()
+        seed_id = str(uuid.uuid4()).lower()
+        seed_time = str(int(time.time() * 1000))
+        fp = None
+        try:
+            fp = _fetch_device_fp(device, device_id, seed_id, seed_time)
+        except Exception as exc:
+            LOGGER.warning("[设备绑定] getFp 请求异常，退回随机指纹：%s", str(exc)[:160])
+        if fp:
+            device.update({"fp": fp, "device_id": device_id,
+                           "seed_id": seed_id, "seed_time": seed_time})
+            LOGGER.info("[设备绑定] getFp 成功，设备指纹已缓存（fp=%s…）", fp[:8])
+        else:
+            fp = _random_device_fp()
+            device.update({"fp": fp, "device_id": device_id})
+            LOGGER.info("[设备绑定] 使用随机设备指纹（fp=%s…）", fp[:8])
+        needs_persist = True
+
+    if cookie_for_registration and not device.get("registered"):
+        try:
+            if _register_device_to_account(cookie_for_registration, device, device_id, fp):
+                device["registered"] = True
+                needs_persist = True
+        except Exception as exc:
+            LOGGER.warning("[设备绑定] 设备注册流程异常（不影响查询）：%s", str(exc)[:160])
+
+    if needs_persist:
+        _persist_device_cache(device)
+
+    return {
+        "x-rpc-device_id": device_id,
+        "x-rpc-device_fp": fp,
+        "user-agent": _build_device_ua(device),
+    }
+
+
+def _query_hoyo_daily_note(cookie: str, uid: int, server: str, game: str,
+                           device_headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """直接调用米游社实时便笺 API（TeyvatGuide 方式：account_id + cookie_token）。
+
+    device_headers 为设备绑定请求头（见 ensure_device_headers），配置了
+    mihoyo_sign.device 时携带，可显著降低 1034/10041 风控触发概率。
+    """
     from urllib.request import Request, urlopen
 
     fields = _extract_cookie_fields(cookie)
@@ -91,6 +475,8 @@ def _query_hoyo_daily_note(cookie: str, uid: int, server: str, game: str) -> Dic
         "ds": ds,
         "cookie": ck,
     }
+    if device_headers:
+        headers.update(device_headers)
 
     req = Request(url, headers=headers, method="GET")
     with urlopen(req, timeout=20) as resp:
@@ -103,25 +489,33 @@ def _query_hoyo_daily_note(cookie: str, uid: int, server: str, game: str) -> Dic
         raise RuntimeError("Cookie 已过期，请重新登录")
     if retcode == 10102:
         raise RuntimeError("数据不存在，请先在游戏内登录一次")
+    if retcode in (1034, 10035, 10041):
+        raise RuntimeError(
+            f"触发米游社风控验证 (retcode={retcode})。"
+            "可在 app_config.json 的 mihoyo_sign.device 配置真机设备指纹后重试"
+        )
     if retcode != 0:
         raise RuntimeError(f"API 错误 (retcode={retcode}): {data.get('message', '')}")
 
     return data.get("data") or {}
 
 
-def _query_genshin_notes(cookie: str, uid: int) -> Dict[str, Any]:
+def _query_genshin_notes(cookie: str, uid: int,
+                         device_headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """查询原神实时便笺。"""
-    return _query_hoyo_daily_note(cookie, uid, "cn_gf01", "genshin")
+    return _query_hoyo_daily_note(cookie, uid, "cn_gf01", "genshin", device_headers)
 
 
-def _query_starrail_notes(cookie: str, uid: int) -> Dict[str, Any]:
+def _query_starrail_notes(cookie: str, uid: int,
+                          device_headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """查询星铁实时便笺。"""
-    return _query_hoyo_daily_note(cookie, uid, "prod_gf_cn", "honkai_sr")
+    return _query_hoyo_daily_note(cookie, uid, "prod_gf_cn", "honkai_sr", device_headers)
 
 
-def _query_zzz_notes(cookie: str, uid: int) -> Dict[str, Any]:
+def _query_zzz_notes(cookie: str, uid: int,
+                     device_headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """查询绝区零实时便笺。"""
-    return _query_hoyo_daily_note(cookie, uid, "prod_gf_cn", "zzz")
+    return _query_hoyo_daily_note(cookie, uid, "prod_gf_cn", "zzz", device_headers)
 
 
 def _check_hoyo_accounts(cookie: str, game_key: str) -> List[Dict[str, Any]]:
@@ -180,7 +574,7 @@ class GameDailyStatus:
 # 原神
 # ---------------------------------------------------------------------------
 
-def check_genshin_daily(cookie: str) -> List[GameDailyStatus]:
+def check_genshin_daily(cookie: str, device_headers: Optional[Dict[str, str]] = None) -> List[GameDailyStatus]:
     """检查原神每日任务完成情况。"""
     accounts = _check_hoyo_accounts(cookie, "genshin")
     results: List[GameDailyStatus] = []
@@ -188,7 +582,7 @@ def check_genshin_daily(cookie: str) -> List[GameDailyStatus]:
         uid = account.get("uid", "")
         nickname = account.get("nickname", "")
         try:
-            result = _query_genshin_notes(cookie, int(uid))
+            result = _query_genshin_notes(cookie, int(uid), device_headers)
             finished = int(result.get("finished_task_num") or 0)
             total = int(result.get("total_task_num") or 4)
             claimed = bool(result.get("is_extra_task_reward_received"))
@@ -220,7 +614,7 @@ def check_genshin_daily(cookie: str) -> List[GameDailyStatus]:
 # 崩坏：星穹铁道
 # ---------------------------------------------------------------------------
 
-def check_hsr_daily(cookie: str) -> List[GameDailyStatus]:
+def check_hsr_daily(cookie: str, device_headers: Optional[Dict[str, str]] = None) -> List[GameDailyStatus]:
     """检查崩坏：星穹铁道每日任务完成情况。"""
     accounts = _check_hoyo_accounts(cookie, "honkai_sr")
     results: List[GameDailyStatus] = []
@@ -228,7 +622,7 @@ def check_hsr_daily(cookie: str) -> List[GameDailyStatus]:
         uid = account.get("uid", "")
         nickname = account.get("nickname", "")
         try:
-            result = _query_starrail_notes(cookie, int(uid))
+            result = _query_starrail_notes(cookie, int(uid), device_headers)
             score = int(result.get("current_train_score") or 0)
             max_score = int(result.get("max_train_score") or 500)
             tasks: List[DailyTaskItem] = []
@@ -259,7 +653,7 @@ def check_hsr_daily(cookie: str) -> List[GameDailyStatus]:
 # 绝区零
 # ---------------------------------------------------------------------------
 
-def check_zzz_daily(cookie: str) -> List[GameDailyStatus]:
+def check_zzz_daily(cookie: str, device_headers: Optional[Dict[str, str]] = None) -> List[GameDailyStatus]:
     """检查绝区零每日任务完成情况。"""
     accounts = _check_hoyo_accounts(cookie, "zzz")
     results: List[GameDailyStatus] = []
@@ -267,7 +661,7 @@ def check_zzz_daily(cookie: str) -> List[GameDailyStatus]:
         uid = account.get("uid", "")
         nickname = account.get("nickname", "")
         try:
-            result = _query_zzz_notes(cookie, int(uid))
+            result = _query_zzz_notes(cookie, int(uid), device_headers)
             engagement = result.get("engagement") or {}
             battery = result.get("battery_charge") or {}
             eng_current = int(engagement.get("current") or 0) if isinstance(engagement, dict) else 0
@@ -326,6 +720,23 @@ def check_wuwa_daily(profile: WuwaKujiequProfile) -> GameDailyStatus:
         tasks.append(DailyTaskItem(
             name="今日活跃", current=completed, total=total, is_completed=completed >= total if total else False,
         ))
+
+        def _append_detail_task(name: str, detail: Any) -> None:
+            cur, tot = _detail_progress(detail)
+            if tot > 0:
+                tasks.append(DailyTaskItem(
+                    name=name, current=cur, total=tot, is_completed=cur >= tot,
+                ))
+
+        # 资源/周本详情上任务列表（与 WuwaView 每日数据卡片同一批字段），
+        # 仅在有 total 时添加，避免 0/0 占位噪音。
+        _append_detail_task("结晶波片", daily_data.get("energy"))
+        _append_detail_task("结晶单质", daily_data.get("store_energy"))
+        _append_detail_task("战歌重奏", daily_data.get("weekly"))
+        _append_detail_task("千道门扉的异想", daily_data.get("weekly_rouge"))
+        _append_detail_task("逆境深塔", daily_data.get("tower"))
+        _append_detail_task("冥歌海墟", daily_data.get("slash_tower"))
+
         energy = daily_data.get("energy") or {}
         current_energy, max_energy = _detail_progress(energy)
         if max_energy <= 0:
@@ -361,254 +772,205 @@ def check_wuwa_daily(profile: WuwaKujiequProfile) -> GameDailyStatus:
 
 
 # ---------------------------------------------------------------------------
-# 无限暖暖（Pearpal notebook API）
+# 塔吉多 / 异环（游戏侧 roleHome 数值 + 游戏签到）
 # ---------------------------------------------------------------------------
 
-import os as _os
-import sys as _sys
-
-# 先尝试相对导入（当 daily_checker 作为包的一部分被导入时）
-try:
-    from ..gacha.nikki_resonance_fetch import (
-        fetch_pearpal_notebook_payload,
-        fetch_pearpal_user_info,
-        _get_pearpal_api_config,
-    )
-except ImportError:
-    # 再尝试绝对导入（当项目根目录在 sys.path 上时）
-    try:
-        from gacha.nikki_resonance_fetch import (
-            fetch_pearpal_notebook_payload,
-            fetch_pearpal_user_info,
-            _get_pearpal_api_config,
-        )
-    except ImportError:
-        # 最后尝试动态添加项目根目录到 sys.path
-        _pkg_dir = _os.path.dirname(_os.path.abspath(__file__))
-        _project_root = _os.path.dirname(_pkg_dir)
-        if _project_root not in _sys.path:
-            _sys.path.insert(0, _project_root)
-        from gacha.nikki_resonance_fetch import (
-            fetch_pearpal_notebook_payload,
-            fetch_pearpal_user_info,
-            _get_pearpal_api_config,
-        )
+# 异环每日活跃度上限（塔吉多 roleHome 的 dayvalue；登录 20 点 + 日常累积，满 100 领全部奖励）
+NTE_DAILY_ACTIVITY_MAX = 100
 
 
-def _record_nikki_to_tracker(tracker, status: GameDailyStatus):
-    """把无限暖暖的 DailyTaskItem 同步到 tracker。"""
-    for task in status.tasks:
-        task_status = "success" if task.is_completed else (
-            "skipped" if task.name == "未配置凭据" else "pending"
-        )
-        tracker.record_task(
-            game_key=status.game_key, game_name=status.game_name,
-            task_key=task.name, task_name=task.name,
-            status=task_status, source="pearpal_notebook",
-            message=f"{task.current}/{task.total}" if task.total else "",
-            uid=status.uid, nickname=status.nickname,
-            extra={"current": task.current, "total": task.total},
-        )
-
-
-# 无限暖暖期望监控的 task 模板。即使 Pearpal API 不可用，也返回这组 task 让
-# DailyView 卡片始终能展示出"监控框架"（每条标 pending 或基于 notbeook gm 数据填值）。
-NIKKI_EXPECTED_TASKS: Dict[str, Dict[str, Any]] = {
-    "每日心愿": {
-        "gm_key": "daily_task",
-        "max": 500,
-        "is_required": True,   # 每日心愿全满 → 当日完成
-    },
-    "周常奖励": {
-        "gm_key": "weekly_reward_status",
-        "max": 1,
-        "is_required": True,
-    },
-    "能量/体力": {
-        "gm_key": "energy",
-        "max": 240,
-        "is_required": False,  # 不计入完成
-    },
-    "派遣进行中": {
-        "gm_key": "dispatch_active",
-        "max": 4,
-        "is_required": False,
-    },
-    "登录天数": {
-        "gm_key": "login_days",
-        "max": 0,  # 0 表示仅展示，不参与完成判断
-        "is_required": False,
-    },
-}
-
-
-def _build_nikki_tasks_from_gm(gm: Dict[str, Any], info_self: Dict[str, Any]) -> List[DailyTaskItem]:
-    """根据 Pearpal notebook 的 gm/info_self 字典，生成期望监控的 nikki task 列表。
-
-    只要 gm 字典里某个 gm_key 存在，就用真实数据填 current/total；不存在的 task
-    会以 0/0 + is_completed=False 占位（"尚未追踪"）。
-    """
-    tasks: List[DailyTaskItem] = []
-    # 计算当前活跃派遣数
-    active_dispatch = 0
-    if isinstance(gm.get("dispatch"), list):
-        try:
-            import time as _t
-            now_ts = _t.time()
-            for d in gm["dispatch"]:
-                if not isinstance(d, dict):
-                    continue
-                start = int(d.get("start_time") or 0)
-                duration_h = int(d.get("spend_time") or 0)
-                if now_ts < start + duration_h * 3600:
-                    active_dispatch += 1
-        except Exception:
-            active_dispatch = 0
-
-    for name, meta in NIKKI_EXPECTED_TASKS.items():
-        gm_key = meta["gm_key"]
-        if gm_key == "dispatch_active":
-            current = active_dispatch
-        elif gm_key == "login_days":
-            current = int(info_self.get("login_days") or 0)
-        else:
-            try:
-                current = int(gm.get(gm_key) or 0)
-            except (TypeError, ValueError):
-                current = 0
-        total = int(meta.get("max") or 0)
-        is_required = bool(meta.get("is_required"))
-        if total > 0 and is_required:
-            is_completed = current >= total
-        elif total > 0 and not is_required:
-            # 进度类指标（能量/派遣/登录天数）：只要 Pearpal 返回了非零数据就算"已追踪"
-            is_completed = current > 0
-        else:
-            is_completed = current > 0
-        tasks.append(DailyTaskItem(
-            name=name, current=current, total=total, is_completed=is_completed,
-        ))
-    return tasks
-
-
-def check_nikki_daily(
-    momo_token: str,
-    momo_id: str,
-    uid: str = "",
-    domain: str = "x6cn-clickhouse.nuanpaper.com",
+def check_tajiduo_daily(
+    token: str,
+    deviceid: str,
+    uid: str = "0",
+    phone: str = "",
+    password: str = "",
 ) -> GameDailyStatus:
-    """检查无限暖暖每日任务完成情况。
+    """检查塔吉多（异环）每日任务完成情况。
 
-    通过 Pearpal notebook API 获取每日心愿/能量/派遣/登录天数等指标，
-    按 `NIKKI_EXPECTED_TASKS` 模板生成 task 列表，使 DailyView 始终能看到
-    期望监控的所有任务（每条 current/total 反映真实数据，没有则 0 占位）。
+    复用**签到用的 token / deviceid**，不需要额外凭据。数据两路：
+    - 游戏侧：roleHome（H5 游戏名片接口）的 dayvalue（每日活跃度）与
+      体力/城市体力——2026-10-24 接入，判定口径 dayvalue >= 100 → 当日完成；
+    - 游戏签到状态：awapi 的 signin 接口。
 
-    判定标准：每日心愿 ≥ 500 + 周常奖励已领取。
+    2026-10-24 用户拍板：社区任务（点赞/浏览/分享）不再查询与落库
+    （恒 pending 无信息量）；getUserTasks 仍供签到流程内部使用。
     """
-    resolved_uid = uid
-    nickname = ""
-    errors: List[str] = []
-    extra: Dict[str, Any] = {}
-    gm: Dict[str, Any] = {}
-    info_self: Dict[str, Any] = {}
+    try:
+        from .tajiduo_sign import TajiduoClient
 
-    if fetch_pearpal_notebook_payload is None:
-        errors.append("nikki_resonance_fetch 模块不可用")
-    elif not (momo_token and momo_id):
-        errors.append("未配置 momo_token / momo_id，无法拉取 Pearpal notebook")
-    else:
-        try:
-            notebook = fetch_pearpal_notebook_payload(momo_token, momo_id, domain=domain)
-        except Exception as exc:
-            LOGGER.warning("[nikki] 获取 notebook 数据失败：%s", exc)
-            errors.append(f"获取 notebook 数据失败：{exc}")
-            notebook = None
-        if isinstance(notebook, dict):
-            gm = notebook.get("info_from_gm") or {}
-            info_self = notebook.get("info_from_self") or {}
-            if not isinstance(gm, dict):
-                gm = {}
-            if not isinstance(info_self, dict):
-                info_self = {}
-            resolved_uid = str(gm.get("role_id") or uid or "")
-            nickname = str(gm.get("name") or info_self.get("name") or "")
-            extra["has_data"] = True
-        elif notebook is not None:
-            LOGGER.warning("[nikki] notebook 返回类型异常：%s", type(notebook).__name__)
-            errors.append(f"notebook 返回类型异常：{type(notebook).__name__}")
+        client = TajiduoClient(token=token, deviceid=deviceid, uid=uid,
+                               phone=phone, password=password)
+        tasks: List[DailyTaskItem] = []
 
-    # 始终按 NIKKI_EXPECTED_TASKS 生成 task 列表，让 DailyView 总能看到监控框架
-    tasks = _build_nikki_tasks_from_gm(gm, info_self)
-
-    # 填充 extra
-    if "daily_task" in gm:
+        # 游戏侧数值（roleHome）：活跃度 dayvalue / 体力 / 城市体力
+        role_id = ""
         try:
-            extra["daily_task"] = {"current": int(gm["daily_task"] or 0), "total": 500}
-        except (TypeError, ValueError):
-            pass
-    if "weekly_reward_status" in gm:
-        try:
-            extra["weekly_reward_completed"] = int(gm["weekly_reward_status"] or 0) >= 1
-        except (TypeError, ValueError):
-            pass
-    if "energy" in gm:
-        try:
-            extra["energy"] = int(gm["energy"] or 0)
-        except (TypeError, ValueError):
-            pass
-    if "level" in gm:
-        try:
-            extra["level"] = int(gm["level"] or 0)
-        except (TypeError, ValueError):
-            pass
-    if "login_days" in info_self:
-        try:
-            extra["login_days"] = int(info_self["login_days"] or 0)
-        except (TypeError, ValueError):
-            pass
-    if isinstance(gm.get("dispatch"), list):
-        active = 0
-        total_d = 0
-        import time as _t
-        now_ts = _t.time()
-        for d in gm["dispatch"]:
-            if not isinstance(d, dict):
-                continue
-            total_d += 1
+            cards = client.fetch_game_cards() or []
+            if cards:
+                role_id = str((cards[0].get("bindRoleInfo") or {}).get("roleId") or "")
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.debug("[塔吉多] 游戏名片获取失败: %s", exc)
+        if role_id:
             try:
-                start = int(d.get("start_time") or 0)
-                duration_h = int(d.get("spend_time") or 0)
-                if now_ts < start + duration_h * 3600:
-                    active += 1
-            except (TypeError, ValueError):
-                continue
-        extra["dispatch"] = {"total": total_d, "active": active}
+                home = client.fetch_role_home(role_id) or {}
 
-    # 完成判断：每日心愿 + 周常奖励（is_required=True 的任务）
-    daily_completed = all(
-        t.is_completed for t in tasks
-        if NIKKI_EXPECTED_TASKS.get(t.name, {}).get("is_required")
-    ) and any(
-        NIKKI_EXPECTED_TASKS.get(t.name, {}).get("is_required")
-        for t in tasks
-    )
+                def _num(key: str) -> int:
+                    try:
+                        return int(home.get(key) or 0)
+                    except (TypeError, ValueError):
+                        return 0
 
-    if errors:
-        LOGGER.info("[nikki] 每日检查部分失败：errors=%s, tasks=%d", errors, len(tasks))
-    else:
-        LOGGER.info("[nikki] 每日检查成功：%s, tasks=%d", nickname or resolved_uid, len(tasks))
+                dayvalue = _num("dayvalue")
+                tasks.append(DailyTaskItem(
+                    name="活跃度", current=min(dayvalue, NTE_DAILY_ACTIVITY_MAX),
+                    total=NTE_DAILY_ACTIVITY_MAX,
+                    is_completed=dayvalue >= NTE_DAILY_ACTIVITY_MAX,
+                ))
+                tasks.append(DailyTaskItem(
+                    name="体力", current=_num("staminaValue"),
+                    total=_num("staminaMaxValue"), is_completed=False,
+                ))
+                tasks.append(DailyTaskItem(
+                    name="城市体力", current=_num("citystaminaValue"),
+                    total=_num("citystaminaMaxValue"), is_completed=False,
+                ))
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.debug("[塔吉多] roleHome 查询失败: %s", exc)
 
-    return GameDailyStatus(
-        game_key="nikki",
-        game_name="无限暖暖",
-        uid=resolved_uid,
-        nickname=nickname,
-        is_daily_completed=daily_completed,
-        tasks=tasks,
-        extra=extra,
-        raw=gm or None,
-        errors=errors,
-    )
+        # 游戏签到状态：纳入每日完成判定
+        game_states: List[Dict[str, Any]] = []
+        try:
+            game_states = client.game_signin_states() or []
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.debug("[塔吉多] 游戏签到状态查询失败: %s", exc)
+
+        for gs in game_states:
+            gname = str(gs.get("game") or "游戏")
+            tasks.append(DailyTaskItem(
+                name=f"{gname}签到",
+                current=1 if gs.get("signed") else 0,
+                total=1,
+                is_completed=bool(gs.get("signed")),
+            ))
+
+        # 体力/城市体力是资源计量不是任务，不参与"每日完成"判定
+        daily_completed = bool(tasks) and all(
+            t.is_completed for t in tasks if t.name not in ("体力", "城市体力"))
+
+        # 金币任务进度（塔吉多社区金币，非游戏内货币）
+        coin_state: Dict[str, Any] = {}
+        try:
+            coin_state = client.get_coin_state() or {}
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.debug("[塔吉多] 金币状态查询失败: %s", exc)
+
+        LOGGER.info("[塔吉多] 每日检查成功：%d 项任务，%s",
+                    len(tasks), "全部完成" if daily_completed else "仍有未完成")
+        # 角色信息取第一个绑定了角色的游戏卡片，用于界面展示
+        nickname = ""
+        for gs in game_states:
+            if gs.get("role_name"):
+                nickname = str(gs.get("role_name"))
+                break
+
+        return GameDailyStatus(
+            game_key="nte", game_name="异环", uid=str(uid or ""), nickname=nickname,
+            is_daily_completed=daily_completed, tasks=tasks,
+            extra={"game_states": game_states,
+                   "coin": {
+                       "today": coin_state.get("todayGet", 0),
+                       "today_total": coin_state.get("todayTotal", 0),
+                       "total": coin_state.get("total", 0),
+                   }},
+            raw=None,
+        )
+    except Exception as exc:
+        LOGGER.error("[塔吉多] 检查失败: %s", exc, exc_info=True)
+        return GameDailyStatus(
+            game_key="nte", game_name="异环", uid=str(uid or ""), nickname="",
+            is_daily_completed=False, errors=[str(exc)],
+        )
+
+
+# ---------------------------------------------------------------------------
+def _record_zzz_script_tasks(tracker) -> bool:
+    """把 OneDragon 日志解析出的绝区零关键任务写入 tracker。
+
+    「活跃度奖励」是纯状态型任务（日志只写"活跃度已满"/"未满"，无 X/Y 计数），
+    写入空 extra，由 `KEY_STATUS_TASKS["zzz"]` 按 status 判定完成与否。
+    """
+    try:
+        from ..services.zzz_daily_parser import parse_latest_zzz_log
+        data = parse_latest_zzz_log()
+    except Exception:
+        LOGGER.debug("[每日检查] zzz 日志解析跳过", exc_info=True)
+        return False
+    if not data:
+        return False
+    written = 0
+    for t in data.get("tasks") or []:
+        name = str(t.get("task_name") or t.get("task_key") or "").strip()
+        if not name:
+            continue
+        extra = t.get("extra") if isinstance(t.get("extra"), dict) else {}
+        try:
+            cur_i = int(extra.get("current", t.get("current", 0)) or 0)
+            total_i = int(extra.get("total", t.get("total", 0)) or 0)
+        except (TypeError, ValueError):
+            cur_i, total_i = 0, 0
+        tracker.record_task(
+            game_key="zzz", game_name="绝区零",
+            task_key=name, task_name=name,
+            status=str(t.get("status") or "pending"), source="script",
+            message=str(t.get("message") or ""),
+            extra={"current": cur_i, "total": total_i},
+        )
+        written += 1
+    if written:
+        LOGGER.info("[每日检查] 绝区零脚本任务已落库: %d 项", written)
+    return written > 0
+
+
+def _record_whimbox_script_tasks(tracker) -> bool:
+    """把 whimbox 日志解析出的关键任务（含朝夕心愿真实计数）写入 tracker。
+
+    背景（2026-10-07）：Pearpal notebook 的「每日心愿」常年返回 0/500（该接口不刷新），
+    而真实进度只存在于 whimbox 脚本日志里。此前该解析结果只在内存中被用于
+    「失败复核」和「页面显示」，从不落库 → daily_progress 表里 nikki 只有那条
+    恒 0 的 Pearpal 数据 → 完成率判定为 unknown → 统计显示"无有效数据"。
+    """
+    try:
+        from ..services.whimbox_daily_parser import parse_latest_whimbox_log
+        data = parse_latest_whimbox_log()
+    except Exception:
+        LOGGER.debug("[每日检查] whimbox 日志解析跳过", exc_info=True)
+        return False
+    if not data:
+        return False
+    written = 0
+    for t in data.get("tasks") or []:
+        name = str(t.get("task_name") or t.get("task_key") or "").strip()
+        if not name:
+            continue
+        extra = t.get("extra") if isinstance(t.get("extra"), dict) else {}
+        cur = extra.get("current", t.get("current", 0))
+        total = extra.get("total", t.get("total", 0))
+        try:
+            cur_i, total_i = int(cur or 0), int(total or 0)
+        except (TypeError, ValueError):
+            cur_i, total_i = 0, 0
+        tracker.record_task(
+            game_key="nikki", game_name="无限暖暖",
+            task_key=name, task_name=name,
+            status=str(t.get("status") or "pending"), source="script",
+            message=str(t.get("message") or ""),
+            extra={"current": cur_i, "total": total_i},
+        )
+        written += 1
+    if written:
+        LOGGER.info("[每日检查] whimbox 脚本任务已落库: %d 项（含朝夕心愿计数）", written)
+    return written > 0
 
 
 # ---------------------------------------------------------------------------
@@ -641,7 +1003,7 @@ class DailyCheckResult:
 
 
 def _load_app_config() -> Dict[str, Any]:
-    """加载应用配置（直接读 JSON，避免相对导入问题）。"""
+    """加载应用配置（直接读 JSON，避免相对导入问题）。自动解密敏感字段。"""
     import json as _json
     from pathlib import Path
     config_path = Path(__file__).resolve().parent.parent / "app_config.json"
@@ -649,7 +1011,17 @@ def _load_app_config() -> Dict[str, Any]:
         return {}
     try:
         with open(config_path, encoding="utf-8") as f:
-            return _json.load(f)
+            raw = _json.load(f)
+        # 解密敏感字段（token / cookie 等），兼容旧明文
+        try:
+            from ..settings.manager import decrypt_config
+            return decrypt_config(raw)
+        except Exception:
+            try:
+                from game_auto.settings.manager import decrypt_config as _dec
+                return _dec(raw)
+            except Exception:
+                return raw
     except Exception:
         return {}
 
@@ -695,6 +1067,90 @@ def _normalize_requested_game_keys(
     return normalized, unknown
 
 
+def _check_endfield_via_skland(
+    config: Dict[str, Any],
+    result: "DailyCheckResult",
+    tracker: Optional[Any],
+    errors: List[str],
+) -> bool:
+    """协议终端不可用时，改用森空岛官方 API 查终末地每日进度。
+
+    复用用户已填的森空岛**签到 token**，不需要 api_key / framework_token，
+    因此不必额外到 end.shallow.ink 注册。
+
+    返回 True 表示成功取到数据并已写入 result.games。
+    """
+    sk_cfg = config.get("skendfield_sign", {}) if isinstance(config, dict) else {}
+    token = str(sk_cfg.get("token", "") if isinstance(sk_cfg, dict) else "").strip()
+    server = str(sk_cfg.get("server", "cn") if isinstance(sk_cfg, dict) else "cn").strip() or "cn"
+
+    if not token:
+        return False
+
+    try:
+        from .skendfield_data import fetch_endfield_data
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[每日检查] 森空岛数据模块导入失败：%s", exc)
+        return False
+
+    try:
+        data = fetch_endfield_data(token, server=server)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[每日检查] 终末地（森空岛）查询失败：%s", exc)
+        errors.append(f"endfield_skland: {exc}")
+        return False
+
+    if not data.get("ok"):
+        message = str(data.get("message") or "未知原因")
+        LOGGER.info("[每日检查] 终末地（森空岛）未取到数据：%s", message)
+        errors.append(f"endfield_skland: {message}")
+        return False
+
+    tasks: List[DailyTaskItem] = []
+    daily_completed = False
+    daily = data.get("daily")
+    if daily and daily.get("total"):
+        cur = _safe_int(daily.get("current", 0))
+        total = _safe_int(daily.get("total", 0))
+        daily_completed = cur >= total
+        tasks.append(DailyTaskItem(name="日活跃", current=cur, total=total,
+                                   is_completed=daily_completed))
+
+    # 体力（detail.dungeon 的 curStamina/maxStamina，skendfield_data 已解析）
+    extras = data.get("extras") or {}
+    stamina_cur = _safe_int(extras.get("stamina", 0))
+    stamina_max = _safe_int(extras.get("max_stamina", 0))
+    if stamina_max > 0:
+        tasks.append(DailyTaskItem(name="体力", current=stamina_cur, total=stamina_max,
+                                   is_completed=stamina_cur >= stamina_max))
+
+    uid = data.get("uid", "")
+    status = GameDailyStatus(
+        game_key="endfield",
+        game_name="终末地",
+        uid=uid,
+        nickname=data.get("role_name", ""),
+        is_daily_completed=daily_completed,
+        tasks=tasks,
+        extra={"source": "skland", "raw_keys": data.get("raw_keys", []),
+               "stamina": stamina_cur, "max_stamina": stamina_max},
+    )
+    result.games.append(status)
+
+    if tracker is not None:
+        for task in status.tasks:
+            tracker.record_task(
+                game_key="endfield", game_name="终末地",
+                task_key=task.name, task_name=task.name,
+                status="success" if task.is_completed else "pending",
+                source="community",
+                message=f"{task.current}/{task.total}",
+                uid=uid,
+                extra={"current": task.current, "total": task.total},
+            )
+    return True
+
+
 def check_games_progress(
     config: Optional[Dict[str, Any]] = None,
     game_keys: Optional[List[str]] = None,
@@ -702,8 +1158,8 @@ def check_games_progress(
 ) -> DailyCheckResult:
     """按游戏列表查询每日 API 进度。
 
-    config 应包含 mihoyo_sign.cookie、wuwa_kujiequ.profile、
-    nikki 的 momo_token/momo_id 等字段。
+    config 应包含 mihoyo_sign.cookie、wuwa_kujiequ.profile、tajiduo_sign 的
+    token/deviceid 等字段（无限暖暖已不走 API，进度来自 whimbox 日志落库）。
     game_keys 为 None 时按默认配置检查全部可用游戏；
     传入列表时只查询指定游戏，并支持别名如 genshin/hsr/zzz/wuwa/nikki。
     tracker: DailyProgressTracker 实例，用于持久化记录结果。
@@ -732,16 +1188,37 @@ def check_games_progress(
     ]
 
     base_cookie = stoken_cookie or cookie
+    device_headers: Optional[Dict[str, str]] = None
     if base_cookie:
         enriched = enrich_cookie_for_record_api(base_cookie)
         record_cookie = enriched["cookie"]
         record_ready = enriched["record_ready"]
 
+        # 设备指纹绑定：配置了 mihoyo_sign.device 时注入，降低便笺风控触发
+        try:
+            device_headers = ensure_device_headers(
+                mihoyo_cfg, record_cookie if record_ready else None)
+        except Exception as exc:
+            LOGGER.warning("[设备绑定] 生成设备请求头失败，本次不携带：%s", str(exc)[:160])
+            device_headers = None
+
         enabled_games = mihoyo_cfg.get("enabled_games", {}) if isinstance(mihoyo_cfg, dict) else {}
         for game_key, game_name, check_fn in hoyo_games:
             if not _wants(game_key):
+                # 未勾选也要让脚本日志任务落库：zzz 的关键判定任务「活跃度奖励」
+                # 只存在于 OneDragon 日志里，不落库会被判成"数据未刷新"
+                if game_key == "zzz" and tracker is not None:
+                    try:
+                        _record_zzz_script_tasks(tracker)
+                    except Exception:
+                        LOGGER.debug("[每日检查] 绝区零脚本任务落库跳过", exc_info=True)
                 continue
             if requested_games is None and isinstance(enabled_games, dict) and not enabled_games.get(game_key):
+                if game_key == "zzz" and tracker is not None:
+                    try:
+                        _record_zzz_script_tasks(tracker)
+                    except Exception:
+                        LOGGER.debug("[每日检查] 绝区零脚本任务落库跳过", exc_info=True)
                 continue
             if not record_ready:
                 LOGGER.warning("[每日检查] %s 跳过：缺少 stoken，便笺 API 需密码/短信登录。", game_name)
@@ -758,7 +1235,7 @@ def check_games_progress(
                     )
                 continue
             try:
-                statuses = check_fn(record_cookie)
+                statuses = check_fn(record_cookie, device_headers)
                 result.games.extend(statuses)
                 if tracker is not None:
                     for st in statuses:
@@ -787,14 +1264,22 @@ def check_games_progress(
                 errors.append(f"{game_key}: {exc}")
                 if tracker is not None:
                     tracker.record_error(game_key, str(exc))
+            finally:
+                # 脚本日志任务与便笺 API 相互独立：便笺查失败时也要落库
+                # （绝区零的「活跃度奖励」只在 OneDragon 日志里）
+                if game_key == "zzz" and tracker is not None:
+                    try:
+                        _record_zzz_script_tasks(tracker)
+                    except Exception:
+                        LOGGER.debug("[每日检查] 绝区零脚本任务落库跳过", exc_info=True)
     elif requested_games is not None:
         for game_key, _, _ in hoyo_games:
             if _wants(game_key):
                 result.games.append(_build_missing_config_status(game_key, "未配置 mihoyo_sign.cookie，无法查询实时便笺 API"))
 
     # --- 鸣潮 ---
-    wuwa_cfg = config.get("wuwa_kujiequ", {}) if isinstance(config, dict) else {}
-    profile = profile_from_dict(wuwa_cfg.get("profile") if isinstance(wuwa_cfg, dict) else None)
+    # token/did 存数据库（DPAPI 加密），config 只留角色等非密钥信息
+    profile = load_wuwa_kujiequ_profile(config if isinstance(config, dict) else None)
     if profile is not None and _wants("wuwa"):
         try:
             wuwa_status = check_wuwa_daily(profile)
@@ -809,23 +1294,54 @@ def check_games_progress(
     elif requested_games is not None and _wants("wuwa"):
         result.games.append(_build_missing_config_status("wuwa", "未配置库街区 profile，无法查询鸣潮每日 API"))
 
-    # --- 无限暖暖 ---
-    nikki_cfg = config.get("nikki", {}) if isinstance(config, dict) else {}
-    momo_token = str(nikki_cfg.get("momo_token", "") if isinstance(nikki_cfg, dict) else "").strip()
-    momo_id = str(nikki_cfg.get("momo_id", "") if isinstance(nikki_cfg, dict) else "").strip()
-    nikki_uid = str(nikki_cfg.get("uid", "") if isinstance(nikki_cfg, dict) else "").strip()
+    # --- 塔吉多 / 异环 ---
+    # 复用签到用的 token + deviceid 查社区每日任务进度，无需额外凭据
+    tajiduo_cfg = config.get("tajiduo_sign", {}) if isinstance(config, dict) else {}
+    tajiduo_token = str(tajiduo_cfg.get("token", "") if isinstance(tajiduo_cfg, dict) else "").strip()
+    tajiduo_deviceid = str(tajiduo_cfg.get("deviceid", "") if isinstance(tajiduo_cfg, dict) else "").strip()
+    tajiduo_uid = str(tajiduo_cfg.get("uid", "0") if isinstance(tajiduo_cfg, dict) else "0").strip()
+    tajiduo_phone = str(tajiduo_cfg.get("phone", "") if isinstance(tajiduo_cfg, dict) else "").strip()
+    tajiduo_password = str(tajiduo_cfg.get("password", "") if isinstance(tajiduo_cfg, dict) else "").strip()
 
-    if _wants("nikki"):
+    if tajiduo_token and tajiduo_deviceid and _wants("nte"):
         try:
-            nikki_status = check_nikki_daily(momo_token, momo_id, uid=nikki_uid)
-            result.games.append(nikki_status)
+            nte_status = check_tajiduo_daily(
+                token=tajiduo_token,
+                deviceid=tajiduo_deviceid,
+                uid=tajiduo_uid,
+                phone=tajiduo_phone,
+                password=tajiduo_password,
+            )
+            result.games.append(nte_status)
             if tracker is not None:
-                _record_nikki_to_tracker(tracker, nikki_status)
+                for task in nte_status.tasks:
+                    tracker.record_task(
+                        game_key="nte", game_name="异环",
+                        task_key=task.name, task_name=task.name,
+                        status="success" if task.is_completed else "pending",
+                        source="community",
+                        message=f"{task.current}/{task.total}",
+                        uid=tajiduo_uid,
+                        extra={"current": task.current, "total": task.total},
+                    )
         except Exception as exc:
-            LOGGER.warning("[每日检查] 无限暖暖检查失败：%s", exc, exc_info=True)
-            errors.append(f"nikki: {exc}")
+            LOGGER.warning("[每日检查] 塔吉多检查失败：%s", exc)
+            errors.append(f"nte: {exc}")
             if tracker is not None:
-                tracker.record_error("nikki", str(exc))
+                tracker.record_error("nte", str(exc))
+    elif requested_games is not None and _wants("nte"):
+        result.games.append(_build_missing_config_status(
+            "nte", "未配置塔吉多 token / deviceid，无法查询异环每日任务"))
+
+    # --- 无限暖暖 ---
+    # 2026-10-24 用户拍板：Pearpal notebook 的 5 项任务（每日心愿/周常奖励/
+    # 能量体力/派遣/登录天数）常年 0 占位、没有有效进度，停止查询与落库；
+    # 暖暖的真实进度只来自 whimbox 日志（朝夕心愿等，含计数）。
+    if tracker is not None:
+        try:
+            _record_whimbox_script_tasks(tracker)
+        except Exception:
+            LOGGER.debug("[每日检查] whimbox 脚本任务落库跳过", exc_info=True)
 
     # --- 终末地 ---
     endfield_cfg = config.get("endfield_protocol", {}) if isinstance(config, dict) else {}
@@ -834,7 +1350,13 @@ def check_games_progress(
     endfield_role_id = str(endfield_cfg.get("role_id", "") if isinstance(endfield_cfg, dict) else "").strip()
     endfield_server_id = str(endfield_cfg.get("server_id", "1") if isinstance(endfield_cfg, dict) else "1").strip()
 
-    if endfield_api_key and endfield_framework_token and endfield_role_id and _wants("endfield"):
+    # 统一优先走森空岛官方 API（复用签到 token，无需 end.shallow.ink 注册）；
+    # 仅当森空岛没取到数据、且协议终端配置完整时，才用协议终端兜底。
+    endfield_added = False
+    if _wants("endfield") and _check_endfield_via_skland(config, result, tracker, errors):
+        LOGGER.debug("[每日检查] 终末地每日数据已由森空岛官方 API 提供")
+        endfield_added = True
+    elif endfield_api_key and endfield_framework_token and endfield_role_id and _wants("endfield"):
         try:
             from ..clients.endfield_protocol import perform_query as _perform_endfield_query
             note_result = _perform_endfield_query(
@@ -887,6 +1409,9 @@ def check_games_progress(
                     current = _safe_int(_ef_get_val(src, "current", "cur", "value", "stamina") or 0)
                     maximum = _safe_int(_ef_get_val(src, "max", "max_value", "limit", "max_stamina", "maxStamina") or 999, 999)
                     LOGGER.debug("[终末地] 理智状态：%s/%s（不参与每日活跃完成判定）", current, maximum)
+                    if rec is not None and maximum > 0:
+                        tasks.append(DailyTaskItem(name="体力", current=current, total=maximum,
+                                                   is_completed=current >= maximum))
 
             ef_status = GameDailyStatus(
                 game_key="endfield",
@@ -898,6 +1423,7 @@ def check_games_progress(
                 extra={"note": note_result, "stamina": stamina_result},
             )
             result.games.append(ef_status)
+            endfield_added = True
 
             if tracker is not None:
                 for task in ef_status.tasks:
@@ -915,19 +1441,22 @@ def check_games_progress(
             errors.append(f"endfield: {exc}")
             if tracker is not None:
                 tracker.record_error("endfield", str(exc))
-    elif requested_games is not None and _wants("endfield"):
-        missing = []
-        if not endfield_api_key:
-            missing.append("api_key")
-        if not endfield_framework_token:
-            missing.append("framework_token")
-        if not endfield_role_id:
-            missing.append("role_id")
-        if missing:
-            reason = f"未配置 {'/'.join(missing)}，请在终末地数据中心填写。"
-        else:
-            reason = "终末地配置不完整，无法查询。"
-        result.games.append(_build_missing_config_status("endfield", reason))
+
+    # 终末地没有任何一条路径取到数据时给出可见的失败/缺配置行：
+    # 已配置凭据 → 显示失败原因；完全未配置且显式点名 → 显示配置指引。
+    if _wants("endfield") and not endfield_added:
+        sk_cfg_check = config.get("skendfield_sign", {}) if isinstance(config, dict) else {}
+        skland_configured = bool(str(sk_cfg_check.get("token", "") if isinstance(sk_cfg_check, dict) else "").strip())
+        ef_configured = bool(endfield_api_key and endfield_framework_token and endfield_role_id)
+        if skland_configured or ef_configured:
+            skland_reasons = [e for e in errors if e.startswith("endfield_skland") or e.startswith("endfield:")]
+            reason = ("森空岛/协议终端均未取到数据。" +
+                      ("；".join(skland_reasons) if skland_reasons else "查询失败，原因未知。"))
+            result.games.append(_build_missing_config_status("endfield", reason))
+        elif requested_games is not None:
+            reason = ("森空岛查询未取到数据。请在「森空岛签到」卡片填写 token"
+                      "（web-api.skland.com/account/info/hg 的 data.content）。")
+            result.games.append(_build_missing_config_status("endfield", reason))
 
     if errors:
         LOGGER.warning("[每日检查] 部分游戏检查出错：%s", "；".join(errors))
@@ -936,30 +1465,26 @@ def check_games_progress(
 
 
 def _record_wuwa_to_tracker(tracker, status: GameDailyStatus):
-    """将鸣潮每日状态写入 tracker。"""
+    """将鸣潮每日状态写入 tracker。
+
+    注意：库街区 API 的活跃度需「进入游戏后」才会刷新，未进游戏时返回 cur=0。
+    此时不能把 0 当真实进度写入并标 pending（会被 UI 显示成"活跃度 0/100"，
+    实际玩家可能已 90/100），要额外带 stale 标记让上层能识别。
+    """
     for task in status.tasks:
         tstatus = "success" if task.is_completed else "pending"
+        extra = {"current": task.current, "total": task.total}
+        # 关键计数（活跃度）拿到 0 时视为"官方未刷新"，而非真实 0
+        if task.name == "今日活跃" and task.total > 0 and task.current <= 0:
+            extra["stale"] = True
+            extra["stale_reason"] = "库街区活跃度需进入游戏后才会刷新，当前为未刷新值"
         tracker.record_task(
             game_key=status.game_key, game_name=status.game_name,
             task_key=task.name, task_name=task.name,
             status=tstatus, source="community",
             message=f"{task.current}/{task.total}",
             uid=status.uid, nickname=status.nickname,
-            extra={"current": task.current, "total": task.total},
-        )
-
-
-def _record_nikki_to_tracker(tracker, status: GameDailyStatus):
-    """将无限暖暖每日状态写入 tracker。"""
-    for task in status.tasks:
-        tstatus = "success" if task.is_completed else "pending"
-        tracker.record_task(
-            game_key=status.game_key, game_name=status.game_name,
-            task_key=task.name, task_name=task.name,
-            status=tstatus, source="community",
-            message=f"{task.current}/{task.total}",
-            uid=status.uid, nickname=status.nickname,
-            extra={"current": task.current, "total": task.total},
+            extra=extra,
         )
 
 

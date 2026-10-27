@@ -382,7 +382,7 @@ class _GlobalSettingsPanel(ttk.Frame):
         ttk.Separator(self, orient="horizontal").pack(fill="x", padx=8)
         self._e_log_dir     = _labeled_entry(self, "日志目录", log.get("dir", ""), 42, browse_dir=True)
         self._e_log_file    = _labeled_entry(self, "日志文件名", log.get("file", ""), 28)
-        self._e_log_backup  = _labeled_entry(self, "备份数量",  str(log.get("backup_count", 5)), 8)
+        self._e_log_backup  = _labeled_entry(self, "备份数量(0=永久)",  str(log.get("backup_count", 0)), 8)
 
         ttk.Label(self, text="运行参数", font=FONT_TITLE).pack(anchor="w", padx=12, pady=(14, 2))
         ttk.Separator(self, orient="horizontal").pack(fill="x", padx=8)

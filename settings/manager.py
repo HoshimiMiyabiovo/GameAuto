@@ -9,8 +9,24 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .defaults import DEFAULT_APPS, DEFAULT_APP_ORDER, DEFAULT_QBITTORRENT
+from .defaults import (
+    DEFAULT_APPS,
+    DEFAULT_APP_ORDER,
+    DEFAULT_BAIJING_CAT_EXCHANGE,
+    DEFAULT_QBITTORRENT,
+)
 from .paths import APP_CONFIG_PATH
+
+try:
+    from ..services.secure_store import is_encrypted, resolve as _sec_resolve, try_protect
+    _HAS_SECURE = True
+except Exception:
+    _HAS_SECURE = False
+    is_encrypted = lambda v: False  # type: ignore
+    def _sec_resolve(v, flag=""):  # type: ignore
+        return v
+    def try_protect(v):  # type: ignore
+        return v, False
 
 
 _CONFIG_FILE = APP_CONFIG_PATH
@@ -18,6 +34,119 @@ _BACKUP_SUFFIX = ".bak"
 _MISSING = object()
 
 _cache: Optional[Dict] = None
+
+# ── 敏感字段加解密（DPAPI） ──────────────────────────────────────────
+
+# 任何键名含以下子串即视为敏感（大小写不敏感），值将被 DPAPI 加密。
+# phone 也算敏感：登录手机号是 PII（塔吉多/库街区都用它自动重登），
+# 一旦加入本清单，load() 的明文检测会自动把盘上旧明文重写为密文。
+_SENSITIVE_SUBSTRINGS = ("token", "cookie", "password", "secret", "api_key", "apikey", "phone")
+# 精确排除：这些键即使含敏感子串也不加密（标记位/非密文）
+_SENSITIVE_EXCLUDE = {"password_protect", "subject_prefix"}
+
+def _is_sensitive_key(key: str) -> bool:
+    lk = str(key).lower()
+    if lk in _SENSITIVE_EXCLUDE:
+        return False
+    return any(sub in lk for sub in _SENSITIVE_SUBSTRINGS)
+
+def _walk_decrypt(obj: Any, parent: Optional[Dict] = None):
+    """递归解密敏感字段（原地修改）。parent 用于取 password_protect 兼容旧 email。"""
+    if isinstance(obj, dict):
+        for k, v in list(obj.items()):
+            if isinstance(v, dict):
+                _walk_decrypt(v, v)
+            elif isinstance(v, list):
+                for item in v:
+                    if isinstance(item, dict):
+                        _walk_decrypt(item, item)
+                    elif isinstance(item, list):
+                        _walk_decrypt(item, None)
+            elif isinstance(v, str) and v and _is_sensitive_key(k):
+                # email 旧式：靠同级 password_protect 标记
+                legacy_flag = ""
+                if k == "password" and isinstance(obj, dict):
+                    legacy_flag = str(obj.get("password_protect") or "")
+                # 已是新式前缀则走 _sec_resolve，否则也经它兼容旧式
+                try:
+                    dec = _sec_resolve(v, legacy_flag)
+                    # 仅当解密结果与原值不同或已确认是密文时才覆盖，避免误改
+                    if dec != v or is_encrypted(v) or legacy_flag == "dpapi":
+                        obj[k] = dec
+                except Exception:
+                    pass
+    elif isinstance(obj, list):
+        for item in obj:
+            if isinstance(item, dict):
+                _walk_decrypt(item, item)
+            elif isinstance(item, list):
+                _walk_decrypt(item, None)
+
+def _walk_encrypt(obj: Any):
+    """递归加密敏感字段（原地修改，供落盘前调用）。已加密值跳过。"""
+    if isinstance(obj, dict):
+        for k, v in list(obj.items()):
+            if isinstance(v, dict):
+                _walk_encrypt(v)
+            elif isinstance(v, list):
+                for item in v:
+                    if isinstance(item, (dict, list)):
+                        _walk_encrypt(item)
+            elif isinstance(v, str) and v and _is_sensitive_key(k):
+                if is_encrypted(v):
+                    continue
+                # 空/已加密跳过
+                try:
+                    enc, ok = try_protect(v)
+                    if ok:
+                        obj[k] = enc
+                except Exception:
+                    pass
+    elif isinstance(obj, list):
+        for item in obj:
+            _walk_encrypt(item)
+
+def _decrypt_config(cfg: Dict) -> Dict:
+    """对整份合并后配置做原地解密，返回同一对象。"""
+    if not _HAS_SECURE:
+        return cfg
+    try:
+        _walk_decrypt(cfg, None)
+    except Exception:
+        pass
+    return cfg
+
+def _encrypt_for_persist(cfg: Dict) -> Dict:
+    """为落盘准备的深拷贝加密副本（不改内存缓存）。"""
+    if not _HAS_SECURE:
+        return cfg
+    clone = copy.deepcopy(cfg)
+    try:
+        _walk_encrypt(clone)
+        # email 段额外打标记，保持与旧式读取兼容（新式前缀已足够，但保留标记便于识别）
+        if isinstance(clone.get("email"), dict) and clone["email"].get("password"):
+            # 若 password 已加密，确保 password_protect 标记为 dpapi
+            pwd = str(clone["email"].get("password") or "")
+            if is_encrypted(pwd):
+                clone["email"]["password_protect"] = "dpapi"
+    except Exception:
+        pass
+    return clone
+
+
+def decrypt_config(raw: Dict) -> Dict:
+    """对外暴露：对任意已加载的原始 config（含密文）做解密，深拷贝不改原对象。"""
+    if not isinstance(raw, dict):
+        return raw
+    clone = copy.deepcopy(raw)
+    return _decrypt_config(clone)
+
+
+def encrypt_config_for_persist(raw: Dict) -> Dict:
+    """对外暴露：为直接写盘的 raw config 准备加密副本。"""
+    if not isinstance(raw, dict):
+        return raw
+    return _encrypt_for_persist(raw)
 
 
 def _default_config() -> Dict:
@@ -27,8 +156,9 @@ def _default_config() -> Dict:
         "setup_completed": False,
         "app_order": list(DEFAULT_APP_ORDER),
         "qbittorrent": copy.deepcopy(DEFAULT_QBITTORRENT),
-        "log": {"dir": "logs", "file": "auto_runner.log", "backup_count": 5},
+        "log": {"dir": "logs", "file": "auto_runner.log", "backup_count": 0},
         "global": {"min_run_time": 300, "check_interval": 10, "debug_mode": False},
+        "baijing": {"cat_exchange": copy.deepcopy(DEFAULT_BAIJING_CAT_EXCHANGE)},
         "apps": copy.deepcopy(DEFAULT_APPS),
     }
 
@@ -77,6 +207,53 @@ def _normalize_for_save(config: Dict) -> Dict:
     return persisted
 
 
+def _raw_has_plaintext_sensitive(raw: Any) -> bool:
+    """检测原始落盘配置中是否存在未加密的敏感明文（用于触发迁移）。"""
+    if not _HAS_SECURE:
+        return False
+    try:
+        from ..services.secure_store import is_available as _avail
+        if not _avail():
+            return False
+    except Exception:
+        return False
+    found = False
+
+    def _walk(o: Any, parent: Any = None):
+        nonlocal found
+        if found:
+            return
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if isinstance(v, dict):
+                    _walk(v, v)
+                elif isinstance(v, list):
+                    for it in v:
+                        if isinstance(it, (dict, list)):
+                            _walk(it, it if isinstance(it, dict) else None)
+                elif isinstance(v, str) and v and _is_sensitive_key(k):
+                    # 已是新式前缀则视为已加密
+                    if is_encrypted(v):
+                        continue
+                    # 兼容 email 旧式：password + password_protect=dpapi 视为已加密
+                    if k == "password" and isinstance(o, dict) and str(o.get("password_protect") or "") == "dpapi":
+                        # 尝试 base64 解码校验，若能解则视为已加密，失败则算明文
+                        try:
+                            import base64
+                            base64.b64decode(v.encode("ascii"))
+                            continue
+                        except Exception:
+                            pass
+                    found = True
+                    return
+        elif isinstance(o, list):
+            for it in o:
+                _walk(it, None)
+
+    _walk(raw, None)
+    return found
+
+
 def load(force: bool = False) -> Dict:
     global _cache
     if _cache is None or force:
@@ -85,7 +262,15 @@ def load(force: bool = False) -> Dict:
             try:
                 with open(_CONFIG_FILE, encoding="utf-8") as f:
                     raw = json.load(f)
-                _cache = _merge_defaults(defaults, raw)
+                merged = _merge_defaults(defaults, raw)
+                _cache = _decrypt_config(merged)
+                # 若原始文件含明文敏感字段且 DPAPI 可用，自动迁移为密文（后台重写一次）
+                if _raw_has_plaintext_sensitive(raw):
+                    try:
+                        # 用解密后的缓存重写一次，落盘时会自动加密
+                        save(_cache)
+                    except Exception:
+                        pass
             except (json.JSONDecodeError, OSError):
                 _cache = defaults
         else:
@@ -98,8 +283,18 @@ def atomic_write_json(path: Path, data: Dict) -> None:
 
     供所有需要直接写 app_config.json 的代码点统一调用，
     避免 `open(path, 'w')` 被另一个进程瞬时锁住抛 PermissionError。
+
+    若写入的是 app_config.json，会在落盘前自动对敏感字段做 DPAPI 加密
+    （内存中的传入 dict 不会被修改）。
     """
     path = Path(path)
+    # 落盘前自动加密 app_config.json 的敏感字段
+    write_data = data
+    try:
+        if path.resolve() == _CONFIG_FILE.resolve():
+            write_data = _encrypt_for_persist(data)
+    except Exception:
+        write_data = data
     fd, tmp_path = tempfile.mkstemp(
         dir=str(path.parent),
         prefix=".tmp_",
@@ -107,7 +302,7 @@ def atomic_write_json(path: Path, data: Dict) -> None:
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(write_data, f, ensure_ascii=False, indent=2)
         last_exc: Optional[Exception] = None
         for attempt in range(3):
             try:
@@ -167,7 +362,7 @@ def get_log_config() -> Dict:
     return {
         "dir": cfg.get("dir", "logs"),
         "file": cfg.get("file", "auto_runner.log"),
-        "backup_count": cfg.get("backup_count", 5),
+        "backup_count": cfg.get("backup_count", 0),
     }
 
 

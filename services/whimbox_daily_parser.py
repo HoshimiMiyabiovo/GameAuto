@@ -141,6 +141,7 @@ WHIMBOX_KEY_TASK_GROUPS: List[Dict[str, Any]] = [
 
 
 def _today_key() -> str:
+    """今天的日期键（按 RESET_HOUR=4 分界，凌晨 4 点前算前一天）。"""
     tm = time.localtime()
     if tm.tm_hour < RESET_HOUR:
         tm_yesterday = time.localtime(time.time() - 86400)
@@ -167,6 +168,7 @@ def _whimbox_log_dir() -> Optional[Path]:
 
 
 def find_today_whimbox_log() -> Optional[Path]:
+    """今天的 whimbox 日志文件（whimbox-YYYY-MM-DD.log），没有则 None。"""
     log_dir = _whimbox_log_dir()
     if log_dir is None or not log_dir.exists():
         return None
@@ -371,6 +373,8 @@ def parse_whimbox_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
         return None
 
     # 按白名单顺序输出（始终保证 8 项）
+    # 注意：current/total 必须同时放进 extra —— bridge 注入与 tracker.record_task
+    # 都从 extra 取计数，缺 extra 会让"朝夕心愿 100/500"这类真实进度被当成 0
     tasks_data: List[Dict[str, Any]] = []
     completed_count = 0
     for group in WHIMBOX_KEY_TASK_GROUPS:
@@ -383,6 +387,7 @@ def parse_whimbox_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
                 "message": "未追踪",
                 "current": 0,
                 "total": group["max"],
+                "extra": {"current": 0, "total": group["max"]},
             })
         else:
             tasks_data.append({
@@ -392,6 +397,7 @@ def parse_whimbox_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
                 "message": entry["message"],
                 "current": entry["current"],
                 "total": entry["total"],
+                "extra": {"current": entry["current"], "total": entry["total"]},
             })
             if entry["status"] in ("success", "skipped"):
                 completed_count += 1

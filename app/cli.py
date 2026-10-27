@@ -2,9 +2,17 @@ import sys
 import ctypes
 import logging
 
+# 强制 stdout/stderr 行缓冲，避免 PowerShell 把输出当管道处理时块缓冲导致日志不及时显示
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except (AttributeError, ValueError):
+    pass
+
 from ..settings import APP_ORDER, get_app_display_name, resolve_app_key
 from ..services.dependency_manager import run_full_dependency_check
 from ..services.instance_lock import acquire_instance_lock
+from ..services.mem_reduct_detect import warn_once_at_startup
 from ..runtime.automation_controller import AutomationController
 from ..runtime.task_batch_runner import run_task_batch
 from ..services.utils import (
@@ -32,10 +40,11 @@ def main():
 
     existing_pid = acquire_instance_lock()
     if existing_pid:
-        bootstrap_logger.error("[启动] 拒绝启动，检测到重复实例 PID=%d", existing_pid)
+        pid_str = str(existing_pid) if existing_pid > 0 else "未知"
+        bootstrap_logger.error("[启动] 拒绝启动，检测到重复实例 PID=%s", pid_str)
         ctypes.windll.user32.MessageBoxW(
             0,
-            f"已有 game_auto 实例在运行 (PID {existing_pid})，请先关闭它再启动 CLI。",
+            f"已有 game_auto 实例在运行 (PID {pid_str})，请先关闭它再启动 CLI。",
             "启动失败 - 已有实例",
             0x10,
         )
@@ -51,6 +60,10 @@ def main():
     report = []
 
     try:
+        force_rerun = "--force" in sys.argv or "-f" in sys.argv
+        if force_rerun:
+            sys.argv = [a for a in sys.argv if a not in ("--force", "-f")]
+
         if len(sys.argv) == 1:
             target_apps = get_saved_target_apps()
             if target_apps:
@@ -63,11 +76,15 @@ def main():
             script_choice = sys.argv[2] if len(sys.argv) > 2 else None
             target_apps = [(resolve_app_key(sys.argv[1]), script_choice)] if len(sys.argv) > 1 else [(app, None) for app in APP_ORDER]
 
+        if force_rerun:
+            print('[强制重跑] 已启用，跳过"今日已完成"检查')
+
         batch_result = run_task_batch(
             controller,
             target_apps,
             xm_enabled=get_saved_helper_enabled("GenshinImpact"),
             cj_enabled=get_saved_helper_enabled("InfinityNikki"),
+            force_rerun=force_rerun,
         )
         report.extend(batch_result.report)
         report.extend(batch_result.warnings)

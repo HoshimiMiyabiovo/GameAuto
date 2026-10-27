@@ -15,7 +15,7 @@ env/
 
 # Sensitive user config (contains tokens, cookies, paths)
 app_config.json
-app_config.json.bak
+app_config.json.bak*
 *.tmp_*
 
 # Logs and artifacts
@@ -42,6 +42,7 @@ desktop.ini
 %TEMP%/
 .trae/
 .claude/
+.workbuddy/
 
 # Tesseract OCR binaries (bundled separately)
 tools/tesseract/
@@ -51,3 +52,8 @@ tools/flet/
 
 # Tesseract installer binary
 tools/tesseract-installer.exe
+
+# 受保护点击序列备份（运行时生成，用于误删恢复）
+click_sequences/.protected_backup/
+# 终末地森空岛查询结果本地缓存（含用户游戏数据，不入库）
+storage/cache/

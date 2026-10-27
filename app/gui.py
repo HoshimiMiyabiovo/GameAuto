@@ -4,6 +4,9 @@ import os
 import sys
 from pathlib import Path
 
+# 屏蔽 Qt 剪贴板重试警告（剪贴板被其他进程占用时 Qt 会刷屏）
+os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.mime=false")
+
 from ..services.dependency_manager import run_full_dependency_check
 from ..services.instance_lock import acquire_instance_lock
 from ..services.mem_reduct_detect import warn_once_at_startup
@@ -21,20 +24,32 @@ def main():
 
     existing_pid = acquire_instance_lock()
     if existing_pid:
+        pid_str = str(existing_pid) if existing_pid > 0 else "未知"
         msg = (
-            f"已有 game_auto 实例在运行 (PID {existing_pid})，请先关闭它再启动新的窗口。\n\n"
+            f"已有 game_auto 实例在运行 (PID {pid_str})，请先关闭它再启动新的窗口。\n\n"
             "避免多个窗口同时跑 OK 监控导致任务竞争和日志混乱。"
         )
-        bootstrap_logger.error("[启动] 拒绝启动，检测到重复实例 PID=%d", existing_pid)
+        bootstrap_logger.error("[启动] 拒绝启动，检测到重复实例 PID=%s", pid_str)
         ctypes.windll.user32.MessageBoxW(0, msg, "启动失败 - 已有实例", 0x10)
         return
 
     warn_once_at_startup(bootstrap_logger)
 
-    dep_report = run_full_dependency_check(bootstrap_logger, auto_install=True)
+    # 依赖检测丢后台线程，首窗先出（dep_report 在 QML 侧仅透传未消费，结果就绪后 toast 提示）
+    import threading as _th
+    dep_state: dict = {}
+
+    def _depcheck_bg():
+        try:
+            dep_state["report"] = run_full_dependency_check(bootstrap_logger, auto_install=True)
+        except Exception as exc:
+            bootstrap_logger.warning("[启动] 后台依赖检测异常: %s", exc)
+            dep_state["report"] = None
+
+    _th.Thread(target=_depcheck_bg, daemon=True, name="DepCheck").start()
 
     try:
-        _launch_qml_ui(dep_report)
+        _launch_qml_ui(dep_state)
     except Exception as e:
         bootstrap_logger.exception("[启动] QML UI 启动失败")
         ctypes.windll.user32.MessageBoxW(
@@ -52,7 +67,7 @@ def _launch_qml_ui(dep_report=None) -> None:
 
     from PySide6.QtWidgets import QApplication
     from PySide6.QtQml import QQmlApplicationEngine
-    from PySide6.QtCore import QUrl
+    from PySide6.QtCore import QTimer, QUrl
     from pyhuskarui.husapp import HusApp
 
     app = QApplication(sys.argv)
@@ -60,6 +75,19 @@ def _launch_qml_ui(dep_report=None) -> None:
     app.setApplicationName("游戏自动化助手")
     # 明确启用：最后一个窗口关闭时退出事件循环
     app.setQuitOnLastWindowClosed(True)
+
+    # ── 卡死看门狗：主线程 2s 一次心跳，冻结超时自动转储全线程栈 ──
+    # 栈转储按故障类型分文件：主线程卡死写 watchdog_main_thread.log，
+    # 任务线程卡死（automation_controller 的 TaskHeartbeatWatchdog）写 watchdog_task_heartbeat.log
+    from ..services.hang_watchdog import HangWatchdog
+    from ..settings.paths import WATCHDOG_MAIN_LOG_FILE
+
+    watchdog = HangWatchdog(WATCHDOG_MAIN_LOG_FILE)
+    watchdog.start()
+    beat_timer = QTimer()
+    beat_timer.setInterval(2000)
+    beat_timer.timeout.connect(watchdog.beat)
+    beat_timer.start()
 
     engine = QQmlApplicationEngine()
     HusApp.initialize(engine)
@@ -71,6 +99,33 @@ def _launch_qml_ui(dep_report=None) -> None:
     bridge = UiBridge()
     engine.rootContext().setContextProperty("bridge", bridge)
     UILogHandler.set_bridge(bridge)
+
+    # ── 随 GUI 自动启动 WebUI（127.0.0.1:60171，账号在 GUI→WebUI 设置） ──
+    # 延迟到首帧后空闲再起：uvicorn import 约 0.6s，立即起会和 QML 首绘抢 GIL
+    def _start_webui_background():
+        try:
+            import threading
+
+            def _run():
+                try:
+                    import uvicorn
+                    from game_auto.webui.app import app as web_app
+                    from game_auto.webui.app import WEBUI_DEFAULT_PORT
+                    # 仅本机可控，避免局域网未鉴权暴露
+                    uvicorn.run(web_app, host="127.0.0.1", port=int(WEBUI_DEFAULT_PORT), log_level="warning", access_log=False)
+                except Exception as exc:
+                    ui_logger.warning("[WebUI] 启动失败（端口占用或依赖缺失）: %s", exc)
+
+            t = threading.Thread(target=_run, daemon=True, name="WebUI-Uvicorn")
+            t.start()
+            ui_logger.info("[WebUI] 已随 GUI 启动 http://127.0.0.1:60171")
+        except Exception as exc:
+            ui_logger.warning("[WebUI] 后台启动异常: %s", exc)
+
+    _webui_starter = QTimer()
+    _webui_starter.setSingleShot(True)
+    _webui_starter.timeout.connect(_start_webui_background)
+    _webui_starter.start(5000)
 
     # 将 UILogHandler 挂到 GameAutomation logger，后端日志自动转发到 QML
     game_logger = logging.getLogger("GameAutomation")
@@ -101,9 +156,30 @@ def _launch_qml_ui(dep_report=None) -> None:
     ui_logger.info("PyHuskarUI window launched with %d root object(s).",
                    len(engine.rootObjects()))
 
+    # 后台依赖检测结果回执：就绪后若有错误则 toast，不阻塞首窗
+    def _report_dep_result():
+        try:
+            state = dep_report if isinstance(dep_report, dict) else None
+            if state is not None and "report" not in state:
+                QTimer.singleShot(1000, _report_dep_result)
+                return
+            rep = state.get("report") if state is not None else dep_report
+            if rep is not None and getattr(rep, "errors", None):
+                bridge.emit_event("toast", message="依赖检测未通过，详见日志", color="#b04b44")
+        except Exception:
+            pass
+
+    QTimer.singleShot(3000, _report_dep_result)
+
     # ── 退出清理：停止后台自动化任务，防止子进程残留导致终端不释放 ──
     def _cleanup_on_quit():
         ui_logger.info("[退出] 开始清理资源...")
+        # 先停看门狗，避免退出瞬间被误判为卡死而写转储
+        try:
+            beat_timer.stop()
+            watchdog.stop()
+        except Exception:
+            pass
         try:
             if bridge._controller is not None:
                 bridge._controller.stop_current_task = True
@@ -133,7 +209,6 @@ def _launch_qml_ui(dep_report=None) -> None:
     app.aboutToQuit.connect(_cleanup_on_quit)
 
     exit_code = app.exec()
-    _cleanup_on_quit()
     ui_logger.info("[退出] 事件循环结束，exit_code=%s", exit_code)
     # 用 os._exit 强制终止解释器，避免 daemon 线程（requests/psutil/sqlite）
     # 和 subprocess 子进程持有 console handle 导致终端不返回提示符。

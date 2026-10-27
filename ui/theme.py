@@ -11,7 +11,7 @@ PALETTE = {
     "card": "#fffdf9",
     "cardActive": "#eef8f1",
     "line": "#dbcdbd",
-    "accent": "#2f7d4a",
+    "accent": "#18a05f",
     "accentSoft": "#dff1e4",
     "text": "#2c241d",
     "muted": "#6d6257",

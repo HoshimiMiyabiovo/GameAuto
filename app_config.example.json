@@ -26,6 +26,16 @@
       "genshin": true,
       "honkai_sr": true,
       "zzz": true
+    },
+    "_device_comment": "可选：真机设备指纹绑定，降低便笺查询 1034/10041 风控触发。字段用 copy-device-info APK 复制的内容填写；fp/device_id/seed_id/seed_time/registered 由程序首次运行后自动回填，无需手填。不配置则行为同旧版。",
+    "device": {
+      "deviceModel": "",
+      "androidVersion": "",
+      "deviceFingerprint": "",
+      "deviceName": "",
+      "deviceBoard": "",
+      "deviceProduct": "",
+      "oaid": ""
     }
   },
   "nikki": {

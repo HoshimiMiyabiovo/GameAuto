@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Iterable, List, Optional
 
 from ..settings import manager as cm
@@ -14,7 +15,6 @@ from ..clients.mihoyo_sign import (
 )
 from ..clients.wuwa_kujiequ import (
     perform_sign as perform_wuwa_sign,
-    profile_from_dict as wuwa_profile_from_dict,
 )
 from ..clients.tajiduo_sign import (
     TAJIDUO_SIGN_CONFIG_KEY,
@@ -27,6 +27,7 @@ from ..clients.skendfield_sign import (
     perform_sign as perform_skendfield_sign,
 )
 from .daily_progress_tracker import DailyProgressTracker, get_tracker
+from .credential_store import load_wuwa_kujiequ_profile
 from ..settings.paths import WORKFLOW_DB_PATH
 
 
@@ -66,7 +67,8 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
 
     wuwa_cfg = config.get("wuwa_kujiequ", {})
     if isinstance(wuwa_cfg, dict) and wuwa_cfg.get("auto_sign") and "WutheringWaves" in app_keys:
-        profile = wuwa_profile_from_dict(wuwa_cfg.get("profile"))
+        # token/did 存在数据库（DPAPI 加密），config 只留角色等非密钥信息
+        profile = load_wuwa_kujiequ_profile(config)
         if profile is not None:
             try:
                 LOGGER.info("[启动前签到] 开始执行鸣潮库街区签到")
@@ -76,6 +78,8 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
                 raw_status = result.get("status")
                 status = "success" if raw_status in ("success", "already") else "failed"
                 tracker.record_sign_result("wuwa", "鸣潮", "库街区", status, result.get("message") or "")
+                _write_sign_status_to_config(
+                    "wuwa_kujiequ", status, result.get("message") or "")
             except Exception as exc:
                 LOGGER.error("[启动前签到] 鸣潮库街区签到失败：%s", str(exc), exc_info=True)
                 lines.append(f"鸣潮库街区启动前签到: {str(exc)}")
@@ -101,6 +105,8 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
                     LOGGER.info("[启动前签到] %s", line)
                     lines.append(f"塔吉多启动前签到: {line}")
                 _record_tajiduo_sign_to_tracker(tracker, result)
+                _write_sign_status_to_config(
+                    TAJIDUO_SIGN_CONFIG_KEY, *_tajiduo_overall(result))
             except Exception as exc:
                 LOGGER.error("[启动前签到] 塔吉多签到失败：%s", str(exc), exc_info=True)
                 lines.append(f"塔吉多启动前签到: {str(exc)}")
@@ -121,6 +127,10 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
                     LOGGER.info("[启动前签到] %s", line)
                     lines.append(f"森空岛启动前签到: {line}")
                 _record_skendfield_sign_to_tracker(tracker, result)
+                _write_sign_status_to_config(
+                    SKENDFIELD_SIGN_CONFIG_KEY,
+                    "success" if result.get("status") in ("success", "already") else "failed",
+                    result.get("message") or "")
             except Exception as exc:
                 LOGGER.error("[启动前签到] 森空岛终末地签到失败：%s", str(exc), exc_info=True)
                 lines.append(f"森空岛启动前签到: {str(exc)}")
@@ -147,10 +157,12 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
                     msg = f"签到成功: {data.get('message', str(data)[:200])}"
                     lines.append(f"终末地协议终端启动前签到: {msg}")
                     tracker.record_sign_result("endfield", "终末地", "签到(协议终端)", "success", msg)
+                    _write_sign_status_to_config(ENDFIELD_PROTOCOL_CONFIG_KEY, "success", msg)
                 else:
                     msg = str(result.get("message", str(result)[:200])) if result else "无响应"
                     lines.append(f"终末地协议终端启动前签到: {msg}")
                     tracker.record_sign_result("endfield", "终末地", "签到(协议终端)", "failed", msg)
+                    _write_sign_status_to_config(ENDFIELD_PROTOCOL_CONFIG_KEY, "failed", msg)
             except Exception as exc:
                 LOGGER.error("[启动前签到] 终末地协议终端签到失败：%s", str(exc), exc_info=True)
                 lines.append(f"终末地协议终端启动前签到: {str(exc)}")
@@ -164,6 +176,44 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
         LOGGER.info("[启动前签到] 本轮共生成 %d 条结果", len(lines))
 
     return lines
+
+
+def _tajiduo_overall(result: dict):
+    """塔吉多整体签到判定：bbs + game[] 均 success/already 才算 success。"""
+    bbs = result.get("bbs") or {}
+    game = result.get("game") or []
+    ok = bbs.get("status") in ("success", "already")
+    if game:
+        ok = ok and all(g.get("status") in ("success", "already") for g in game)
+    message = bbs.get("message") or (
+        game[0].get("message", "") if game else "")
+    return ("success" if ok else "failed"), message
+
+
+def _write_sign_status_to_config(section_name: str, status: str, message: str) -> None:
+    """把签到结果写入 app_config.json 顶层 {section_name}.last_sign_*。
+
+    与 bridge._update_sign_status 同字段同格式。DailyView 的签到行读这些
+    字段（wuwa/endfield/nte 不经 tracker），启动前签到路径此前只写 tracker
+    不写配置，导致 UI 显示"今日尚未签到"（2026-10-12 实例：实际已签到成功，
+    last_sign_date 却停在 3 个月前）。写失败只告警，不影响签到主流程。
+    """
+    try:
+        from ..settings.manager import atomic_write_json
+        from ..settings.paths import APP_CONFIG_PATH
+        cfg = cm.load()
+        section = cfg.get(section_name) or {}
+        if not isinstance(section, dict):
+            section = {}
+        section["last_sign_date"] = time.strftime("%Y-%m-%d")
+        section["last_sign_status"] = status
+        section["last_sign_message"] = message or ""
+        cfg[section_name] = section
+        atomic_write_json(APP_CONFIG_PATH, cfg)
+        LOGGER.info("[启动前签到] 签到状态已写入配置: section=%s status=%s",
+                    section_name, status)
+    except Exception as exc:
+        LOGGER.warning("[启动前签到] 写 %s 签到状态失败: %s", section_name, exc)
 
 
 def _record_mihoyo_sign_to_tracker(tracker: DailyProgressTracker, result: dict):

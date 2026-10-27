@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone, timedelta
@@ -15,6 +17,8 @@ POOL_TYPE_MAP = {
     "E_CharacterGachaPoolType_Beginner": "新手池",
     "E_CharacterGachaPoolType_Special": "限定角色池",
     "E_CharacterGachaPoolType_Standard": "常驻角色池",
+    # 辉光庆典（联合池）：与 bhaoo/endfield-gacha 对齐
+    "E_CharacterGachaPoolType_Joint": "辉光庆典",
 }
 
 WEAPON_POOL_TYPE_MAP = {
@@ -35,8 +39,50 @@ def _rarity_label(rarity: int) -> str:
 
 
 def load_endfield_gacha(file_path: str) -> Dict[str, Any]:
-    with open(file_path, encoding="utf-8-sig") as f:
-        return json.load(f)
+    """读取终末地抽卡 JSON，兼容 UTF-8/GBK/UTF-16 编码。
+
+    有些导出工具用 GBK 存文件，直接 utf-8-sig 会报 UnicodeDecodeError；
+    选错文件（xlsx/网页等）时给出能看懂的报错，而不是 json 内部异常。
+    """
+    text = None
+    for enc in ("utf-8-sig", "gb18030", "utf-16"):
+        try:
+            with open(file_path, encoding=enc) as f:
+                text = f.read()
+            break
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    if text is None:
+        raise ValueError(
+            "文件编码无法识别（已尝试 UTF-8/GBK/UTF-16），"
+            "请确认选择的是 Endfield Gacha 工具导出的 gachaData JSON 文件。"
+        )
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"文件不是有效的 JSON（{exc.msg}，行 {exc.lineno}），可能选错了文件。"
+        ) from exc
+    if not isinstance(data, dict):
+        raise ValueError("文件顶层不是抽卡 JSON 对象，请确认是 Endfield Gacha 导出的 gachaData 文件。")
+    return data
+
+
+# 终末地 gachaData 文件名约定：<uid>_<roleId>.json（来自 Endfield Gacha 工具导出）
+_UID_FROM_FILENAME_RE = re.compile(r"^(\d+)_\d+$")
+
+
+def extract_uid_from_filename(file_path: str) -> str:
+    """从 `<uid>_<roleId>.json` 文件名提取真实终末地 UID。
+
+    匹配失败时返回空字符串（与历史行为兼容）。
+    """
+    try:
+        stem = os.path.splitext(os.path.basename(file_path))[0]
+    except Exception:
+        return ""
+    m = _UID_FROM_FILENAME_RE.match(stem)
+    return m.group(1) if m else ""
 
 
 def _normalize_character_records(data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -87,6 +133,15 @@ def _normalize_weapon_records(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def load_all_records(file_path: str) -> List[Dict[str, Any]]:
     data = load_endfield_gacha(file_path)
+    return load_records_from_dict(data)
+
+
+def load_records_from_dict(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """从已解析的字典（文件或 API 同步结果）生成标准化记录列表。
+
+    data 结构：{"character": {pool_type: [...]}, "weapon": {pool_id: [...]}}
+    与 clients.endfield_gacha.fetch_gacha_records() 的返回值同构。
+    """
     records = _normalize_character_records(data) + _normalize_weapon_records(data)
     records.sort(key=lambda r: (r["gacha_ts"], r["seq_id"]))
     return records

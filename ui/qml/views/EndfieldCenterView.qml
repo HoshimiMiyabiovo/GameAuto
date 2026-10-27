@@ -12,6 +12,12 @@ Item {
 
     // ── Data center state ──
     property var queryResult: ({})
+    property bool showEndfieldRaw: false
+
+    readonly property bool isSklandResult: (root.queryResult.query_type || "") === "skland"
+    // 始终返回对象（null 改为 {}），避免未查询时子项绑定解引用 null 抛 TypeError；
+    // 卡片可见性仍由 isSklandResult 控制，此处只影响数据访问安全性。
+    readonly property var sklandData: root.isSklandResult ? (root.queryResult.data || {}) : ({})
 
     // ── Gacha analysis state ──
     property var gachaData: ({})
@@ -29,11 +35,16 @@ Item {
     Component.onCompleted: {
         bridge.loadEndfieldDefault()
         bridge.loadCredentials()
+        bridge.loadEndfieldSklandCache()   // 进页面即时展示上次缓存，过期才后台刷新
     }
 
-    // 视图从隐藏→显示时重新灌一次凭据（应对外部修改 app_config.json 的场景）
+    property double _lastVisibleTs: 0
     onVisibleChanged: {
-        if (visible) bridge.loadCredentials()
+        if (visible && Date.now() - _lastVisibleTs > 30000) {
+            _lastVisibleTs = Date.now()
+            bridge.loadCredentials()
+            bridge.loadEndfieldSklandCache()
+        }
     }
 
     function updateGachaDisplay() {
@@ -65,6 +76,19 @@ Item {
                 var sk = creds.skendfield_sign || {}
                 if (sk.token) skendfieldTokenInput.text = sk.token
                 skendfieldStartupCheck.checked = !!sk.startup_sign
+
+                // 终末地抽卡 token 同步凭据
+                var eg = creds.endfield_gacha || {}
+                if (eg.token) endfieldGachaTokenInput.text = eg.token
+                if (eg.uid) endfieldGachaUidInput.text = eg.uid
+                if (eg.server_id) endfieldGachaServerIdInput.text = eg.server_id
+                var egProvider = eg.provider || "hypergryph"
+                for (var i = 0; i < endfieldGachaProviderSelect.count; i++) {
+                    if (endfieldGachaProviderSelect.model.get(i).value === egProvider) {
+                        endfieldGachaProviderSelect.currentIndex = i
+                        break
+                    }
+                }
             } catch(e) { /* ignore */ }
         }
         function onEndfieldQueryResultChanged(jsonStr) {
@@ -146,6 +170,95 @@ Item {
                             type: HusButton.Type_Primary
                             enabled: endfieldPathInput.text.length > 0
                             onClicked: bridge.importEndfieldGacha(endfieldPathInput.text)
+                        }
+                    }
+                }
+            }
+
+            // ── 终末地抽卡 Token 同步（参考 bhaoo/endfield-gacha）──
+            HusCard {
+                Layout.fillWidth: true
+                title: "🪙 终末地抽卡 Token 同步"
+                padding: 18
+
+                contentItem: ColumnLayout {
+                    spacing: 10
+
+                    HusText {
+                        text: "填写终末地账号的 OAuth token + UID，直接从官方接口拉取抽卡记录。Token 仅保存在本地 app_config.json，不会上传任何第三方。"
+                        font.pixelSize: Math.round(12 * root.fs)
+                        color: "#6d6257"
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+
+                    // token 必须用 CredentialInput（默认 password 模式 + 显示/隐藏按钮）
+                    CredentialInput {
+                        id: endfieldGachaTokenInput
+                        Layout.fillWidth: true
+                        placeholderText: "粘贴终末地 OAuth Token..."
+                        onEditingFinished: bridge.saveCredential("endfield_gacha", "token", text)
+                    }
+
+                    RowLayout {
+                        spacing: 10
+                        Layout.fillWidth: true
+
+                        HusInput {
+                            id: endfieldGachaUidInput
+                            Layout.fillWidth: true
+                            placeholderText: "终末地 UID..."
+                            onEditingFinished: bridge.saveCredential("endfield_gacha", "uid", text)
+                        }
+                        HusSelect {
+                            id: endfieldGachaProviderSelect
+                            Layout.preferredWidth: 160
+                            clearEnabled: false
+                            model: ListModel {
+                                ListElement { label: "国服 (Hypergryph)"; value: "hypergryph" }
+                                ListElement { label: "国际服 (Gryphline)"; value: "gryphline" }
+                            }
+                            currentIndex: 0
+                            onActivated: {
+                                var v = model.get(currentIndex).value
+                                bridge.saveCredential("endfield_gacha", "provider", v)
+                                // 国服固定 server_id=1，国际服允许用户填写
+                                if (v === "hypergryph") {
+                                    endfieldGachaServerIdInput.text = "1"
+                                    bridge.saveCredential("endfield_gacha", "server_id", "1")
+                                }
+                            }
+                        }
+                        HusInput {
+                            id: endfieldGachaServerIdInput
+                            Layout.preferredWidth: 100
+                            placeholderText: "Server ID"
+                            text: "1"
+                            onEditingFinished: bridge.saveCredential("endfield_gacha", "server_id", text)
+                        }
+                    }
+
+                    RowLayout {
+                        spacing: 10
+                        Layout.fillWidth: true
+
+                        HusButton {
+                            text: "通过 Token 同步"
+                            type: HusButton.Type_Primary
+                            enabled: !bridge.isRunning && endfieldGachaTokenInput.text.length > 0 && endfieldGachaUidInput.text.length > 0
+                            onClicked: {
+                                // 先把当前输入写回 config，再触发后端同步
+                                bridge.saveCredential("endfield_gacha", "token", endfieldGachaTokenInput.text)
+                                bridge.saveCredential("endfield_gacha", "uid", endfieldGachaUidInput.text)
+                                bridge.saveCredential("endfield_gacha", "server_id", endfieldGachaServerIdInput.text)
+                                bridge.fetchEndfieldGachaByToken()
+                            }
+                        }
+                        HusText {
+                            text: "状态: 等待操作"
+                            font.pixelSize: Math.round(12 * root.fs)
+                            color: "#6d6257"
+                            Layout.fillWidth: true
                         }
                     }
                 }
@@ -505,10 +618,39 @@ Item {
                 contentItem: ColumnLayout {
                     spacing: 10
 
+                    // ── 默认方式：森空岛官方 API ──
+                    // 复用下方「森空岛签到」已填的 Token，无需额外注册
+                    HusText {
+                        text: "默认走森空岛官方 API，复用下方「森空岛签到」已填的 Token，无需额外注册。"
+                        font.pixelSize: Math.round(12 * root.fs)
+                        color: "#6d6257"
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+                    HusButton {
+                        Layout.fillWidth: true
+                        text: "查询每日数据（森空岛）"
+                        type: HusButton.Type_Primary
+                        enabled: !bridge.isRunning
+                        onClicked: bridge.queryEndfieldSkland()
+                    }
+
+                    Rectangle { Layout.fillWidth: true; height: 1; color: "#e0d6c8" }
+
+                    // ── 高级：第三方协议终端（需自行注册 API Key）──
+                    HusText {
+                        text: "以下为第三方协议终端（end.shallow.ink），需自行注册 API Key；"
+                              + "仅在森空岛不可用时才需要配置。"
+                        font.pixelSize: Math.round(12 * root.fs)
+                        color: "#8a7f72"
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+
                     CredentialInput {
                         id: apikeyInput
                         Layout.fillWidth: true
-                        placeholderText: "API Key..."
+                        placeholderText: "API Key（协议终端，可选）..."
                         onEditingFinished: bridge.saveCredential("endfield_protocol", "api_key", text)
                     }
                     CredentialInput {
@@ -534,42 +676,68 @@ Item {
                         }
                     }
 
-                    // 查询按钮区 (按钮映射到 query_type)
+                    // 查询按钮区 (按钮映射到 query_type，与 Flet 版 8 个入口对齐)
+                    // 注意：gacha_records 需要 pools 参数，此处无法提供，故用 gacha_accounts / gacha_stats 替代
                     GridLayout {
                         Layout.fillWidth: true
-                        columns: 3
+                        columns: 4
                         rowSpacing: 6
                         columnSpacing: 6
 
                         HusButton {
                             Layout.fillWidth: true
                             text: "便笺查询"; type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning
                             onClicked: bridge.queryEndfieldCenter("note")
                         }
                         HusButton {
                             Layout.fillWidth: true
                             text: "理智查询"; type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning
                             onClicked: bridge.queryEndfieldCenter("stamina")
                         }
                         HusButton {
                             Layout.fillWidth: true
                             text: "干员查询"; type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning
                             onClicked: bridge.queryEndfieldCenter("search_chars")
                         }
                         HusButton {
                             Layout.fillWidth: true
-                            text: "建设查询"; type: HusButton.Type_Outlined
+                            text: "帝江号建设"; type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning
                             onClicked: bridge.queryEndfieldCenter("spaceship")
                         }
                         HusButton {
                             Layout.fillWidth: true
-                            text: "抽卡查询"; type: HusButton.Type_Outlined
-                            onClicked: bridge.queryEndfieldCenter("gacha_records")
+                            text: "地区建设"; type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning
+                            onClicked: bridge.queryEndfieldCenter("domain")
+                        }
+                        HusButton {
+                            Layout.fillWidth: true
+                            text: "抽卡统计"; type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning
+                            onClicked: bridge.queryEndfieldCenter("gacha_stats")
+                        }
+                        HusButton {
+                            Layout.fillWidth: true
+                            text: "抽卡账号"; type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning
+                            onClicked: bridge.queryEndfieldCenter("gacha_accounts")
                         }
                         HusButton {
                             Layout.fillWidth: true
                             text: "成就查询"; type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning
                             onClicked: bridge.queryEndfieldCenter("achieve")
+                        }
+                        // 清空结果（与 Flet 版一致）
+                        HusButton {
+                            Layout.fillWidth: true
+                            Layout.columnSpan: 4
+                            text: "清空结果"; type: HusButton.Type_Outlined
+                            onClicked: root.queryResult = ({})
                         }
                     }
 
@@ -577,56 +745,408 @@ Item {
                     Rectangle {
                         Layout.fillWidth: true
                         visible: root.queryResult.query_type !== undefined
-                        height: resultColumn.height + 20
+                        // 注意：本矩形是 HusCard contentItem(ColumnLayout) 的布局子项，
+                        // 直接用 height: 会被布局忽略并改用 implicitHeight(矩形默认 0)，
+                        // 导致结果卡塌缩、内容溢出到下方签到卡之下。必须用 Layout.preferredHeight。
+                        Layout.preferredHeight: resultColumn.implicitHeight + 20
                         color: root.queryResult.success ? "#dff1e4" : "#f7dfdd"
-                        radius: 6
+                        radius: 8
                         border.color: root.queryResult.success ? "#2f7d4a" : "#b04b44"
                         border.width: 1
 
                         ColumnLayout {
                             id: resultColumn
-                            anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 6
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.leftMargin: 12
+                            anchors.rightMargin: 12
+                            anchors.topMargin: 12
+                            spacing: 10
 
+                            // ── 结果标题 ──
                             RowLayout {
                                 spacing: 8
                                 HusText {
                                     text: root.queryResult.success ? "✓ " + (root.queryResult.query_type || "") + " 查询成功"
                                           : "✗ " + (root.queryResult.query_type || "") + " 查询失败"
-                                    font.pixelSize: Math.round(13 * root.fs); font.bold: true
+                                    font.pixelSize: Math.round(14 * root.fs); font.bold: true
                                     color: root.queryResult.success ? "#2f7d4a" : "#b04b44"
                                 }
                             }
 
+                            // ── 缓存更新时间提示 ──
+                            HusText {
+                                Layout.fillWidth: true
+                                visible: !!(root.queryResult.cached_at)
+                                text: {
+                                    var t = root.queryResult.cached_at
+                                    if (!t) return ""
+                                    var d = new Date(t * 1000)
+                                    var hh = ("0" + d.getHours()).slice(-2)
+                                    var mm = ("0" + d.getMinutes()).slice(-2)
+                                    return "📦 数据更新于 " + hh + ":" + mm + " · 过期后自动刷新，也可点上方按钮手动刷新"
+                                }
+                                font.pixelSize: Math.round(11 * root.fs)
+                                color: "#6b7d6b"
+                                wrapMode: Text.Wrap
+                            }
+
+                            // ── 失败/提示消息 ──
                             HusText {
                                 text: root.queryResult.message || ""
                                 font.pixelSize: Math.round(12 * root.fs)
                                 color: "#2f4f4f"
                                 wrapMode: Text.Wrap
                                 Layout.fillWidth: true
-                                visible: !!(root.queryResult.message)
+                                visible: !!(root.queryResult.message) && !root.isSklandResult
                             }
 
-                            ScrollView {
+                            // ── 森空岛官方 API：结构化卡片 ──
+                            Rectangle {
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 280
-                                visible: root.queryResult.data !== null && root.queryResult.data !== undefined
+                                visible: root.isSklandResult
+                                color: "#ffffff"
+                                radius: 6
+                                border.color: "#d4c8b8"
+                                border.width: 1
+                                // 本矩形是 resultColumn(ColumnLayout) 的布局子项，必须用 Layout.preferredHeight
+                                Layout.preferredHeight: sklandColumn.implicitHeight + 16
 
-                                HusText {
-                                    text: {
-                                        try {
-                                            var d = root.queryResult.data
-                                            if (d === null || d === undefined) return ""
-                                            return JSON.stringify(d, null, 2)
-                                        } catch(e) {
-                                            return String(root.queryResult.data || "")
+                                ColumnLayout {
+                                    id: sklandColumn
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    anchors.topMargin: 8
+                                    spacing: 10
+
+                                    // 角色头部
+                                    RowLayout {
+                                        spacing: 10
+                                        Layout.fillWidth: true
+
+                                        HusText {
+                                            text: root.sklandData.role_name || "未知角色"
+                                            font.pixelSize: Math.round(18 * root.fs)
+                                            font.bold: true
+                                            color: "#2c241d"
+                                        }
+
+                                        Rectangle {
+                                            visible: (root.sklandData.extras || {}).level !== undefined
+                                            color: "#fff1d6"
+                                            radius: 4
+                                            height: levelText.height + 6
+                                            width: levelText.width + 12
+                                            HusText {
+                                                id: levelText
+                                                anchors.centerIn: parent
+                                                text: "Lv." + ((root.sklandData.extras || {}).level || "-")
+                                                font.pixelSize: Math.round(12 * root.fs)
+                                                font.bold: true
+                                                color: "#b66f1f"
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            visible: !!root.sklandData.server_name
+                                            color: "#e8f4fc"
+                                            radius: 4
+                                            height: serverText.height + 6
+                                            width: serverText.width + 12
+                                            HusText {
+                                                id: serverText
+                                                anchors.centerIn: parent
+                                                text: root.sklandData.server_name || ""
+                                                font.pixelSize: Math.round(11 * root.fs)
+                                                color: "#295d86"
+                                            }
+                                        }
+
+                                        Item { Layout.fillWidth: true }
+
+                                        HusText {
+                                            text: "UID: " + (root.sklandData.uid || "-")
+                                            font.pixelSize: Math.round(11 * root.fs)
+                                            color: "#8a7a68"
                                         }
                                     }
-                                    font.family: "Consolas, Monaco, monospace"
-                                    font.pixelSize: Math.round(11 * root.fs)
-                                    color: "#2f4f4f"
-                                    wrapMode: Text.WrapAnywhere
+
+                                    // 每日活跃（核心）
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        color: "#faf6f0"
+                                        radius: 6
+                                        height: dailyColumn.implicitHeight + 16
+
+                                        ColumnLayout {
+                                            id: dailyColumn
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.top: parent.top
+                                            anchors.leftMargin: 10
+                                            anchors.rightMargin: 10
+                                            anchors.topMargin: 10
+                                            spacing: 8
+
+                                            RowLayout {
+                                                spacing: 8
+                                                HusText {
+                                                    text: "每日活跃"
+                                                    font.pixelSize: Math.round(14 * root.fs)
+                                                    font.bold: true
+                                                    color: "#2c241d"
+                                                }
+                                                Rectangle {
+                                                    visible: !!(root.sklandData.daily)
+                                                    color: {
+                                                        var cur = (root.sklandData.daily || {}).current || 0
+                                                        var tot = (root.sklandData.daily || {}).total || 0
+                                                        return (tot > 0 && cur >= tot) ? "#dff1e4" : "#fff1d6"
+                                                    }
+                                                    radius: 4
+                                                    height: statusText.height + 5
+                                                    width: statusText.width + 10
+                                                    HusText {
+                                                        id: statusText
+                                                        anchors.centerIn: parent
+                                                        text: {
+                                                            var cur = (root.sklandData.daily || {}).current || 0
+                                                            var tot = (root.sklandData.daily || {}).total || 0
+                                                            if (!root.sklandData.daily) return "未识别"
+                                                            return (tot > 0 && cur >= tot) ? "已完成" : "未完成"
+                                                        }
+                                                        font.pixelSize: Math.round(11 * root.fs)
+                                                        font.bold: true
+                                                        color: {
+                                                            var cur = (root.sklandData.daily || {}).current || 0
+                                                            var tot = (root.sklandData.daily || {}).total || 0
+                                                            return (tot > 0 && cur >= tot) ? "#2f7d4a" : "#b66f1f"
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            RowLayout {
+                                                spacing: 6
+                                                HusText {
+                                                    text: {
+                                                        var daily = root.sklandData.daily
+                                                        if (!daily) return "-"
+                                                        return (daily.current || 0) + " / " + (daily.total || 0)
+                                                    }
+                                                    font.pixelSize: Math.round(28 * root.fs)
+                                                    font.bold: true
+                                                    color: "#2c241d"
+                                                }
+                                                HusText {
+                                                    text: {
+                                                        var daily = root.sklandData.daily
+                                                        if (!daily || !(daily.total > 0)) return ""
+                                                        var pct = Math.round((daily.current || 0) / daily.total * 100)
+                                                        return "(" + pct + "%)"
+                                                    }
+                                                    font.pixelSize: Math.round(13 * root.fs)
+                                                    color: "#8a7a68"
+                                                    Layout.alignment: Qt.AlignBottom
+                                                    Layout.bottomMargin: 4
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                visible: !!(root.sklandData.daily) && ((root.sklandData.daily || {}).total > 0)
+                                                Layout.fillWidth: true
+                                                Layout.preferredHeight: 6
+                                                color: "#e8ddd0"
+                                                radius: 3
+                                                property real ratio: {
+                                                    var daily = root.sklandData.daily || {}
+                                                    var tot = daily.total || 1
+                                                    return tot > 0 ? Math.min(1.0, (daily.current || 0) / tot) : 0
+                                                }
+                                                Rectangle {
+                                                    width: parent.width * parent.ratio
+                                                    height: parent.height
+                                                    radius: 3
+                                                    color: parent.ratio >= 1.0 ? "#2f7d4a" : "#c98a2e"
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // 统计网格
+                                    GridLayout {
+                                        Layout.fillWidth: true
+                                        columns: 4
+                                        rowSpacing: 8
+                                        columnSpacing: 8
+
+                                        Repeater {
+                                            model: [
+                                                {
+                                                    label: "理智",
+                                                    visible: (root.sklandData.extras || {}).stamina !== undefined,
+                                                    text: (root.sklandData.extras || {}).stamina + " / " + ((root.sklandData.extras || {}).max_stamina || "-")
+                                                },
+                                                {
+                                                    label: "电台等级",
+                                                    visible: (root.sklandData.extras || {}).bp_level !== undefined,
+                                                    text: (root.sklandData.extras || {}).bp_level + " / " + ((root.sklandData.extras || {}).bp_max_level || "-")
+                                                },
+                                                {
+                                                    label: "成就",
+                                                    visible: (root.sklandData.extras || {}).achieve_count !== undefined,
+                                                    text: String((root.sklandData.extras || {}).achieve_count || "-")
+                                                },
+                                                {
+                                                    label: "干员数",
+                                                    visible: (root.sklandData.extras || {}).char_num !== undefined,
+                                                    text: String((root.sklandData.extras || {}).char_num || "-")
+                                                },
+                                                {
+                                                    label: "世界等级",
+                                                    visible: (root.sklandData.extras || {}).world_level !== undefined,
+                                                    text: "Lv." + ((root.sklandData.extras || {}).world_level || "-")
+                                                }
+                                            ]
+
+                                            Rectangle {
+                                                visible: modelData.visible
+                                                Layout.fillWidth: true
+                                                Layout.preferredHeight: 62
+                                                color: "#faf6f0"
+                                                radius: 6
+                                                border.color: "#e8ddd0"
+                                                border.width: 1
+
+                                                ColumnLayout {
+                                                    id: statInner
+                                                    anchors.centerIn: parent
+                                                    spacing: 2
+
+                                                    HusText {
+                                                        text: modelData.label
+                                                        font.pixelSize: Math.round(11 * root.fs)
+                                                        color: "#8a7a68"
+                                                        Layout.alignment: Qt.AlignHCenter
+                                                    }
+                                                    HusText {
+                                                        text: modelData.text
+                                                        font.pixelSize: Math.round(14 * root.fs)
+                                                        font.bold: true
+                                                        color: "#2c241d"
+                                                        Layout.alignment: Qt.AlignHCenter
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // 主线进度
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        visible: !!(root.sklandData.extras || {}).main_mission
+                                        color: "#f0f7ff"
+                                        radius: 6
+                                        border.color: "#cfe0f5"
+                                        border.width: 1
+                                        height: missionInner.implicitHeight + 14
+                                        ColumnLayout {
+                                            id: missionInner
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.top: parent.top
+                                            anchors.leftMargin: 8
+                                            anchors.rightMargin: 8
+                                            anchors.topMargin: 8
+                                            spacing: 2
+                                            HusText {
+                                                text: "主线进度"
+                                                font.pixelSize: Math.round(11 * root.fs)
+                                                color: "#6d8cb0"
+                                            }
+                                            HusText {
+                                                text: (root.sklandData.extras || {}).main_mission || ""
+                                                font.pixelSize: Math.round(13 * root.fs)
+                                                font.bold: true
+                                                color: "#2c5a8c"
+                                                wrapMode: Text.Wrap
+                                                Layout.fillWidth: true
+                                            }
+                                        }
+                                    }
+
+                                    // 查看原始数据
+                                    HusButton {
+                                        Layout.alignment: Qt.AlignRight
+                                        text: root.showEndfieldRaw ? "收起原始数据" : "查看原始数据"
+                                        type: HusButton.Type_Text
+                                        onClicked: root.showEndfieldRaw = !root.showEndfieldRaw
+                                    }
+
+                                    Loader {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 220
+                                        active: root.showEndfieldRaw
+                                        visible: root.showEndfieldRaw
+                                        sourceComponent: rawJsonView
+                                    }
+                                    Component {
+                                        id: rawJsonView
+                                        ScrollView {
+                                            anchors.fill: parent
+                                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                            HusText {
+                                                text: {
+                                                    try {
+                                                        var d = root.sklandData.raw
+                                                        if (d === null || d === undefined) return "无原始数据"
+                                                        return JSON.stringify(d, null, 2)
+                                                    } catch(e) {
+                                                        return String(root.sklandData.raw || "")
+                                                    }
+                                                }
+                                                font.family: "Consolas, Monaco, monospace"
+                                                font.pixelSize: Math.round(11 * root.fs)
+                                                color: "#2f4f4f"
+                                                wrapMode: Text.WrapAnywhere
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ── 其他查询类型：通用原始结果 ──
+                            Loader {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 240
+                                active: !root.isSklandResult && root.queryResult.data !== null && root.queryResult.data !== undefined
+                                visible: active
+                                sourceComponent: genericRawView
+                            }
+                            Component {
+                                id: genericRawView
+                                ScrollView {
+                                    anchors.fill: parent
+                                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                    HusText {
+                                        text: {
+                                            try {
+                                                var d = root.queryResult.data
+                                                if (d === null || d === undefined) return ""
+                                                return JSON.stringify(d, null, 2)
+                                            } catch(e) {
+                                                return String(root.queryResult.data || "")
+                                            }
+                                        }
+                                        font.family: "Consolas, Monaco, monospace"
+                                        font.pixelSize: Math.round(11 * root.fs)
+                                        color: "#2f4f4f"
+                                        wrapMode: Text.WrapAnywhere
+                                    }
                                 }
                             }
                         }

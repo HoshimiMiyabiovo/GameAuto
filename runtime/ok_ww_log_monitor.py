@@ -18,6 +18,7 @@ from .foreground_flow_runner import (
     _window_rect,
 )
 from .process_supervisor import ProcessSupervisor
+from ..services.utils import read_file_with_timeout
 from ..settings.paths import TEMPLATES_DIR
 
 
@@ -363,6 +364,7 @@ class OkScriptErrorMonitor:
         on_stall_fallback: Optional[Callable[["OkScriptErrorMonitor", str], bool]] = None,
         completion_markers: Optional[Iterable[str]] = None,
         ignore_error_patterns: Optional[Iterable[str]] = None,
+        read_timeout: float = 10.0,
     ):
         self.logger = logger
         self.log_dir = Path(log_dir)
@@ -377,6 +379,8 @@ class OkScriptErrorMonitor:
         self.on_restart_requested = on_restart_requested
         self.on_stall_fallback = on_stall_fallback
         self.completion_markers = [str(marker) for marker in (completion_markers or []) if str(marker).strip()]
+        # 读超时：IO 卡住时放弃本轮，绝不死等
+        self.read_timeout = max(1.0, float(read_timeout))
 
         self.stop_event = threading.Event()
         self.error_detected_event = threading.Event()
@@ -538,12 +542,16 @@ class OkScriptErrorMonitor:
                     self._offsets[file_key] = previous_offset
                     continue
 
-                try:
-                    with open(path, "r", encoding=self.encoding, errors="ignore") as handle:
-                        handle.seek(previous_offset)
-                        chunk = handle.read()
-                except OSError as exc:
-                    self.logger.debug(f"[OK监控] 读取 {self.script_name} 日志失败 {path}: {str(exc)}")
+                # 带超时读取：IO 卡住时放弃本轮，绝不死等
+                # （2026-10-15 复盘：同步 read 会把监控线程钉死在坏盘上）
+                chunk, read_exc = read_file_with_timeout(
+                    path, previous_offset, self.encoding, self.read_timeout)
+                if chunk is None and read_exc is None:
+                    self.logger.debug(
+                        f"[OK监控] 读取超时({self.read_timeout:.0f}s)，本轮跳过: {path.name}")
+                    continue
+                if read_exc is not None:
+                    self.logger.debug(f"[OK监控] 读取 {self.script_name} 日志失败 {path}: {str(read_exc)}")
                     continue
 
                 self._offsets[file_key] = current_size
@@ -635,82 +643,46 @@ def start_ok_script_log_monitor(
         encoding=str(monitor_config.get("encoding", "utf-8") or "utf-8"),
         on_restart_requested=_handle_restart_requested,
         on_stall_fallback=ui_stall_fallback,
+        read_timeout=float(monitor_config.get("read_timeout", 10.0) or 10.0),
     ).start()
 
 
-def run_ok_script_with_retry(
+def run_ok_script_once(
     controller,
     config: dict,
     script_choice: Optional[str] = None,
     *,
     app_key: str,
-    before_retry: Optional[Callable[[int, float, OkScriptAttemptResult], None]] = None,
     monitor_config_key: str = "ok_script_log_monitor",
-) -> list[OkScriptAttemptResult]:
-    monitor_config = _get_monitor_config(config, monitor_config_key)
-    max_retries = max(0, int(monitor_config.get("max_retries", 1) or 1))
-    restart_delay = max(0.0, float(monitor_config.get("restart_delay_sec", 10) or 10))
+) -> OkScriptAttemptResult:
+    """执行一次 OK 系列脚本任务（ok-ww / ok-ef），不内部重试。
+
+    重试统一由 task_batch_runner 的失败重试逻辑处理。
+    保留日志监控用于检测 completion_markers（任务完成标记）和记录错误日志（仅诊断用，
+    不再触发重试或强制判失败）。
+    """
     script_name = str(config.get("script_name", app_key) or app_key)
-    display_name = str(config.get("display_name", app_key) or app_key)
-    attempts: list[OkScriptAttemptResult] = []
+    monitor = start_ok_script_log_monitor(config, controller.logger, monitor_config_key=monitor_config_key)
+    try:
+        success, message, duration = controller.execute_task(app_key, script_choice)
+    finally:
+        if monitor is not None:
+            monitor.stop()
 
-    for attempt_index in range(max_retries + 1):
-        monitor = start_ok_script_log_monitor(config, controller.logger, monitor_config_key=monitor_config_key)
-        try:
-            success, message, duration = controller.execute_task(app_key, script_choice)
-        finally:
-            if monitor is not None:
-                monitor.stop()
-
-        attempt = OkScriptAttemptResult(
-            success=success,
-            message=message,
-            duration=duration,
-            restart_requested=bool(monitor and monitor.should_retry()),
-            error_detected=bool(monitor and monitor.error_detected_event.is_set()),
-            failure_reason=monitor.failure_reason if monitor else "",
-            error_file=monitor.first_error_file if monitor else "",
-            error_line=monitor.first_error_line if monitor else "",
-        )
-        if not attempt.failure_reason and attempt.error_detected and attempt.error_line:
-            attempt.failure_reason = f"{script_name} 日志检测到异常；首条异常：{attempt.error_line}"
-        attempts.append(attempt)
-
-        should_retry = (
-            (attempt.restart_requested or (attempt.error_detected and not attempt.success and not (monitor and monitor.completed_event.is_set())))
-            and attempt_index < max_retries
-            and not controller.stop_current_task
-        )
-        if not should_retry:
-            break
-
-        controller.logger.warning(
-            f"[OK监控] 检测到 {script_name} 日志异常，{int(restart_delay)} 秒后自动重试{display_name}任务 (第 {attempt_index + 2} 次尝试)"
-        )
-        if before_retry is not None:
-            before_retry(attempt_index + 1, restart_delay, attempt)
-        time.sleep(restart_delay)
-
-    return attempts
+    attempt = OkScriptAttemptResult(
+        success=success,
+        message=message,
+        duration=duration,
+        restart_requested=False,  # 不再使用重启机制
+        error_detected=bool(monitor and monitor.error_detected_event.is_set()),
+        failure_reason=monitor.failure_reason if monitor else "",
+        error_file=monitor.first_error_file if monitor else "",
+        error_line=monitor.first_error_line if monitor else "",
+    )
+    if not attempt.failure_reason and attempt.error_detected and attempt.error_line:
+        attempt.failure_reason = f"{script_name} 日志检测到异常；首条异常：{attempt.error_line}"
+    return attempt
 
 
 def start_wuthering_waves_log_monitor(config: dict, logger) -> Optional[OkScriptErrorMonitor]:
     return start_ok_script_log_monitor(config, logger, monitor_config_key="ok_ww_log_monitor")
-
-
-def run_wuthering_waves_with_retry(
-    controller,
-    config: dict,
-    script_choice: Optional[str] = None,
-    *,
-    app_key: str = "WutheringWaves",
-    before_retry: Optional[Callable[[int, float, WutheringWavesAttemptResult], None]] = None,
-) -> list[WutheringWavesAttemptResult]:
-    return run_ok_script_with_retry(
-        controller,
-        config,
-        script_choice=script_choice,
-        app_key=app_key,
-        before_retry=before_retry,
-        monitor_config_key="ok_ww_log_monitor",
-    )

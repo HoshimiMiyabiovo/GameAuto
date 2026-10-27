@@ -111,17 +111,43 @@ def load_email_config() -> Optional[EmailConfig]:
     )
 
 
-# ── Windows DPAPI 加密（仅 Windows，非 Windows 平台回退到原值） ───────────
+# ── Windows DPAPI 加密（统一走 services.secure_store） ───────────
 
 _PASSWORD_PROTECT = "dpapi"
 
+# 兼容旧接口：email 模块对外仍暴露 is_dpapi_available / protect_password 等，
+# 内部转调 secure_store，保证新式 dpapi: 前缀与旧式 base64+flag 均可解密
+try:
+    from .secure_store import (  # type: ignore
+        is_available as _sec_available,
+        protect as _sec_protect,
+        unprotect as _sec_unprotect,
+        is_encrypted as _sec_is_encrypted,
+    )
+    _HAS_SECURE = True
+except Exception:
+    _sec_available = lambda: False  # type: ignore
+    _sec_protect = None  # type: ignore
+    _sec_unprotect = None  # type: ignore
+    _sec_is_encrypted = lambda v: False  # type: ignore
+    _HAS_SECURE = False
+
 
 def is_dpapi_available() -> bool:
+    # 统一走 secure_store
+    if _HAS_SECURE:
+        try:
+            return bool(_sec_available())
+        except Exception:
+            return _HAS_DPAPI
     return _HAS_DPAPI
 
 
 def protect_password(plain: str) -> str:
-    """明文密码 → base64 加密串。可用作写入 app_config.json。"""
+    """明文密码 → 加密串（新式 dpapi: 前缀）。"""
+    if _HAS_SECURE and _sec_protect is not None:
+        return _sec_protect(plain)
+    # 回退旧实现
     if not _HAS_DPAPI:
         raise RuntimeError("当前环境没有 win32crypt，无法使用 DPAPI 加密")
     if not plain:
@@ -131,24 +157,55 @@ def protect_password(plain: str) -> str:
 
 
 def unprotect_password(protected: str) -> str:
-    """base64 加密串 → 明文密码。仅供内部发邮件时调用，不应返回给 UI。"""
+    """加密串 → 明文（兼容新式前缀与旧式 base64）。"""
+    if _HAS_SECURE and _sec_is_encrypted(protected):
+        return _sec_unprotect(protected)  # type: ignore
+    if _HAS_SECURE and _sec_unprotect is not None:
+        # 尝试新式解密，失败则回退旧式
+        try:
+            if protected.startswith("dpapi:"):
+                return _sec_unprotect(protected)  # type: ignore
+        except Exception:
+            pass
     if not _HAS_DPAPI:
         raise RuntimeError("当前环境没有 win32crypt，无法解密 DPAPI 密码")
     if not protected:
         return ""
-    blob = base64.b64decode(protected.encode("ascii"))
-    return win32crypt.CryptUnprotectData(blob)[1].decode("utf-8")
+    # 兼容旧式无前缀 base64
+    try:
+        blob = base64.b64decode(protected.encode("ascii"))
+        return win32crypt.CryptUnprotectData(blob)[1].decode("utf-8")
+    except Exception:
+        # 若本身是新式前缀，尝试 secure_store 解密
+        if _HAS_SECURE and _sec_unprotect is not None:
+            return _sec_unprotect(protected)  # type: ignore
+        raise
 
 
 def _resolve_password(raw_password: str, protect_flag: str) -> str:
     """根据 protect_flag 解密；未标记时视为明文（向后兼容）。"""
     if not raw_password:
         return ""
+    # 优先走统一 secure_store（支持新式 dpapi: 前缀与旧式 base64）
+    if _HAS_SECURE:
+        try:
+            from .secure_store import resolve as _resolve  # type: ignore
+
+            return _resolve(raw_password, protect_flag)
+        except Exception as exc:
+            LOGGER.debug("[email] secure_store 解密失败，回退旧逻辑: %s", exc)
     if protect_flag == _PASSWORD_PROTECT:
         try:
             return unprotect_password(raw_password)
         except Exception as exc:
             LOGGER.warning("[email] DPAPI 解密失败，尝试作为明文处理: %s", exc)
+            return raw_password
+    # 新式前缀即使无 flag 也尝试解密
+    if raw_password.startswith("dpapi:"):
+        try:
+            return unprotect_password(raw_password)
+        except Exception as exc:
+            LOGGER.warning("[email] DPAPI 解密失败，回退明文: %s", exc)
             return raw_password
     return raw_password
 
@@ -220,6 +277,7 @@ def build_daily_report(
     automation_success: int,
     automation_failed: int,
     daily_snapshot,  # DailyProgressSnapshot | None
+    snapshot_fresh: bool = False,  # True=发信前刚实时查过；False=用的是数据库缓存
 ) -> tuple[str, str]:
     """构造 (subject, body_text)。body_text 是纯文本，兼容所有邮件客户端。"""
     date_key = time.strftime("%Y-%m-%d")
@@ -255,7 +313,15 @@ def build_daily_report(
         lines.append("[每日任务进度]")
         lines.append("  (今日无 tracker 记录，请先在『每日进度』页点击刷新)")
     else:
-        lines.append(f"[每日任务进度] {daily_snapshot.date_key}")
+        # 明确标注数据新鲜度，避免收件人把缓存数据当成刚查的结果
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        if snapshot_fresh:
+            lines.append(f"[每日任务进度] {daily_snapshot.date_key}  （发信前实时查询，{stamp}）")
+        else:
+            lines.append(
+                f"[每日任务进度] {daily_snapshot.date_key}  "
+                f"⚠ 实时查询未成功，以下为数据库缓存数据（生成于 {stamp}），可能不是最新"
+            )
         for game in daily_snapshot.games:
             if game.is_all_success:
                 head = "✅ 全部完成"

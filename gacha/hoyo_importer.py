@@ -235,6 +235,177 @@ def import_genshin_uigf(file_path: str, db_path: str = WORKFLOW_DB_PATH) -> List
     return import_uigf(file_path, db_path, allowed_game_codes=[GENSHIN_GAME_CODE])
 
 
+# HoYo.Gacha 本地库直读：exe 运行目录下的 HoYo.Gacha.v1.db（lgou2w v1，
+# 表 HG_GACHA_RECORDS + business 0/1/2）或旧版 HoYo.Gacha.db
+# （genshin/starrail/zzz_gacha_records 三张表）。
+# 只读抽卡记录表；账号表里有 gachaUrl（含 authkey），绝不读取、不落盘、不打日志。
+HOYOGACHA_V1_BUSINESS_MAP = {0: "hk4e", 1: "hkrpg", 2: "nap"}
+HOYOGACHA_LEGACY_TABLE_MAP = {
+    "genshin_gacha_records": "hk4e",
+    "starrail_gacha_records": "hkrpg",
+    "zzz_gacha_records": "nap",
+}
+
+
+def _copy_db_to_temp(db_path: str) -> Path:
+    """拷到临时文件再读：不锁 HoYo.Gacha 正在用的库，避免 WAL/占用冲突。"""
+    import shutil
+    import tempfile
+
+    src = Path(db_path)
+    if not src.is_file():
+        raise FileNotFoundError(f"找不到 HoYo.Gacha 数据库: {src}")
+    tmp = Path(tempfile.mkdtemp(prefix="hoyogacha_")) / src.name
+    shutil.copy2(str(src), str(tmp))
+    return tmp
+
+
+def _read_hoyogacha_v1(conn) -> Dict[str, List[Dict[str, Any]]]:
+    """读 v1 库，返回 {(game_code, uid): [normalized record]}。"""
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "HG_GACHA_RECORDS" not in tables:
+        raise ValueError("该库不是 HoYo.Gacha v1 数据库（缺少 HG_GACHA_RECORDS 表）")
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    unknown = set()
+    rows = conn.execute(
+        "SELECT business, uid, id, gacha_type, rank_type, count, time, lang, name, item_type, item_id"
+        " FROM HG_GACHA_RECORDS ORDER BY business, uid, time"
+    )
+    for business, uid, rid, gacha_type, rank_type, count, time, lang, name, item_type, item_id in rows:
+        game_code = HOYOGACHA_V1_BUSINESS_MAP.get(int(business))
+        if game_code is None:
+            unknown.add(business)
+            continue
+        key = (game_code, str(uid))
+        grouped.setdefault(key, []).append(_normalize_record(
+            {
+                "id": str(rid or ""),
+                "gacha_type": str(gacha_type or ""),
+                "uigf_gacha_type": str(gacha_type or ""),
+                "item_id": str(item_id or ""),
+                "name": str(name or ""),
+                "item_type": str(item_type or ""),
+                "rank_type": str(rank_type or ""),
+                "count": count,
+                "time": str(time or ""),
+                "lang": str(lang or "zh-cn"),
+            },
+            "zh-cn",
+            "UTC+8",
+        ))
+    if unknown:
+        import logging
+        logging.getLogger("GameAutomation").warning("HoYo.Gacha 存在未知 business，已跳过: %s", sorted(unknown))
+    return grouped
+
+
+def _read_hoyogacha_legacy(conn) -> Dict[str, List[Dict[str, Any]]]:
+    """读旧版库（三张分表），返回同上结构。"""
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    found = False
+    for table, game_code in HOYOGACHA_LEGACY_TABLE_MAP.items():
+        if table not in tables:
+            continue
+        found = True
+        rows = conn.execute(
+            f"SELECT id, uid, gacha_type, item_id, count, time, name, lang, item_type, rank_type"
+            f" FROM [{table}] ORDER BY uid, time"
+        )
+        for rid, uid, gacha_type, item_id, count, time, name, lang, item_type, rank_type in rows:
+            key = (game_code, str(uid or ""))
+            grouped.setdefault(key, []).append(_normalize_record(
+                {
+                    "id": str(rid or ""),
+                    "gacha_type": str(gacha_type or ""),
+                    "uigf_gacha_type": str(gacha_type or ""),
+                    "item_id": str(item_id or ""),
+                    "name": str(name or ""),
+                    "item_type": str(item_type or ""),
+                    "rank_type": str(rank_type or ""),
+                    "count": count,
+                    "time": str(time or ""),
+                    "lang": str(lang or "zh-cn"),
+                },
+                "zh-cn",
+                "UTC+8",
+            ))
+    if not found:
+        raise ValueError("该库既不是 v1 也不是旧版 HoYo.Gacha 数据库")
+    return grouped
+
+
+def import_hoyogacha_db(
+    db_path: str,
+    db_path_workflow: str = WORKFLOW_DB_PATH,
+    *,
+    allowed_game_codes: Optional[Iterable[str]] = None,
+) -> List[Dict[str, Any]]:
+    """从 HoYo.Gacha 本地 SQLite 直接导入抽卡记录（v1/旧版双兼容）。
+
+    幂等：以 HoYo.Gacha 的 id 为 record_id，UNIQUE(game_code, uid, record_id)，
+    重复导入只更新不翻倍。只读 HG_*_records 表，不碰账号/authkey。
+    """
+    import logging
+    import sqlite3
+
+    logger = logging.getLogger("GameAutomation")
+    tmp = _copy_db_to_temp(db_path)
+    try:
+        conn = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
+        try:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "HG_GACHA_RECORDS" in tables:
+                grouped = _read_hoyogacha_v1(conn)
+                export_app = "HoYo.Gacha"
+            else:
+                grouped = _read_hoyogacha_legacy(conn)
+                export_app = "HoYo.Gacha(legacy)"
+        finally:
+            conn.close()
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+            tmp.parent.rmdir()
+        except OSError:
+            pass
+
+    if allowed_game_codes is not None:
+        allowed = {str(code) for code in allowed_game_codes}
+        grouped = {k: v for k, v in grouped.items() if k[0] in allowed}
+    if not grouped:
+        raise ValueError("HoYo.Gacha 库中未找到受支持的抽卡记录")
+
+    db = WorkflowDB(str(db_path_workflow))
+    summaries: List[Dict[str, Any]] = []
+    for (game_code, uid), records in sorted(grouped.items()):
+        if not uid or not records:
+            continue
+        import_id = db.start_gacha_import(
+            {
+                "game_code": game_code,
+                "uid": uid,
+                "source_path": str(Path(db_path)),
+                "source_hash": "",
+                "uigf_version": "",
+                "export_app": export_app,
+                "export_app_version": "",
+                "export_timestamp": "",
+                "lang": "zh-cn",
+                "timezone": "UTC+8",
+                "total_records": len(records),
+                "notes": "HoYo.Gacha.db 直读导入",
+            }
+        )
+        stats = db.upsert_gacha_records(game_code, uid, import_id, records)
+        summaries.append(_account_summary(game_code, uid, records, stats))
+        logger.info(
+            "[HoYo.Gacha] %s UID %s 导入完成: 共 %d 条（新增 %d，更新 %d）",
+            game_code, uid, len(records), stats["inserted_count"], stats["updated_count"],
+        )
+    return summaries
+
+
 def _format_summary(summary: Dict[str, Any]) -> str:
     banner_text = "，".join(f"{name}:{count}" for name, count in summary.get("banner_counts", {}).items())
     high_label = str(summary.get("high_rarity_label", "最高稀有度"))

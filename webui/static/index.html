@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>GameAuto WebUI</title>
+<link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">G</span><b>GameAuto</b><small>WebUI</small><small id="authUser" class="muted" style="margin-left:8px"></small></div>
+  <div class="top-actions">
+    <button id="btnLogout" class="btn ghost" style="display:none">退出</button>
+    <button id="btnStop" class="btn ghost">停止</button>
+    <span id="runBadge" class="badge">空闲</span>
+  </div>
+</header>
+<div id="loginOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:center;justify-content:center">
+  <div class="card" style="width:360px">
+    <h3>登录 GameAuto</h3>
+    <p class="muted" id="loginHint">请输入账号密码（在桌面 GUI 设置）</p>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px">
+      <input id="loginUser" placeholder="账号" style="padding:10px;border:1px solid #dbcdbd;border-radius:8px"/>
+      <input id="loginPass" type="password" placeholder="密码" style="padding:10px;border:1px solid #dbcdbd;border-radius:8px"/>
+      <button id="btnLogin" class="btn primary">登录</button>
+      <small id="loginErr" style="color:#b04b44;display:none"></small>
+      <small class="muted">未设置账号时可在 GUI → 设置 → WebUI 账号 中创建；端口 60171，仅本机可控。</small>
+    </div>
+  </div>
+</div>
+<nav class="tabs">
+  <button data-tab="auto" class="active">自动化</button>
+  <button data-tab="daily">每日进度</button>
+  <button data-tab="wool">薅羊毛</button>
+  <button data-tab="click">点击录制</button>
+  <button data-tab="logs">日志</button>
+</nav>
+<main>
+  <section id="tab-auto" class="tab active">
+    <div class="card" id="runStatusCard" style="display:none">
+      <h3>当前运行 <small class="muted" id="runElapsed"></small> <small class="muted" id="runSource"></small></h3>
+      <div id="runCurrent" style="margin:8px 0;font-weight:600"></div>
+      <div id="runQueue" class="list"></div>
+    </div>
+    <div class="card">
+      <h3>任务队列</h3>
+      <p class="muted">勾选后按顺序执行，拖拽或按钮调整顺序，启用状态落库 <code>workflow.sqlite3</code></p>
+      <div id="appList" class="list"></div>
+      <div class="row gap">
+        <button id="btnRefreshApps" class="btn">刷新</button>
+        <button id="btnSavePrefs" class="btn primary">保存勾选</button>
+        <button id="btnRun" class="btn primary">开始执行</button>
+        <label class="chk"><input type="checkbox" id="chkForce"/> 强制重跑（忽略今日已完成）</label>
+      </div>
+    </div>
+    <div class="card">
+      <h3>执行结果</h3>
+      <pre id="lastReport" class="pre"></pre>
+    </div>
+  </section>
+
+  <section id="tab-daily" class="tab">
+    <div class="card">
+      <h3>每日进度</h3>
+      <div class="row gap">
+        <button id="btnDailyLoad" class="btn">加载上次记录</button>
+        <button id="btnDailyCheck" class="btn primary">刷新每日进度</button>
+        <span id="dailyDate" class="muted"></span>
+      </div>
+      <div id="dailyGames" class="grid"></div>
+    </div>
+    <div class="card">
+      <h3>最近失败记录</h3>
+      <div class="row gap">
+        <button id="btnFailLoad" class="btn">刷新</button>
+        <select id="failDays" class="btn">
+          <option value="7">最近 7 天</option>
+          <option value="30">最近 30 天</option>
+          <option value="90">最近 90 天</option>
+        </select>
+        <span id="failCount" class="muted"></span>
+      </div>
+      <div id="failSummary" class="list"></div>
+      <div id="failList"></div>
+    </div>
+  </section>
+
+  <section id="tab-wool" class="tab">
+    <div class="card">
+      <h3>薅羊毛集合</h3>
+      <div id="woolList"></div>
+      <button id="btnWoolRun" class="btn primary">执行薅羊毛</button>
+    </div>
+  </section>
+
+  <section id="tab-click" class="tab">
+    <div class="card">
+      <h3>点击序列</h3>
+      <p class="muted">白荆三条为一条龙内置（🔒防误删），删除需二次确认，缺失可一键恢复</p>
+      <div id="seqList"></div>
+      <div class="row gap">
+        <button id="btnSeqRefresh" class="btn">刷新</button>
+        <button id="btnSeqRestore" class="btn">恢复内置序列</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-logs" class="tab">
+    <div class="card">
+      <h3>实时日志 <small class="muted">WS 推送，断线自动重连</small></h3>
+      <div class="row gap" style="margin-bottom:8px;flex-wrap:wrap">
+        <button id="btnLogAll" class="btn primary">全部日志</button>
+        <button id="btnLogLogin" class="btn">仅登录记录</button>
+        <button id="btnLogRefresh" class="btn">刷新</button>
+        <button id="btnLogClear" class="btn ghost">清空视图</button>
+        <small class="muted" id="logHint">含 WebUI 登录/登出 IP 记录（成功/失败/限频）</small>
+      </div>
+      <pre id="logView" class="pre log"></pre>
+    </div>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

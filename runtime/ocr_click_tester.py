@@ -2,15 +2,163 @@ import os
 import re
 import time
 import ctypes
+import ctypes.wintypes
 import logging
 import shutil
 import sqlite3
 from typing import Optional, Tuple, List, Dict
+import threading
 
 import pyautogui
 import win32gui
 from PIL import ImageOps, ImageEnhance, ImageDraw, Image
+import numpy as np
 from ..settings.paths import OCR_DEBUG_DIR, TEMPLATES_DIR, TESSDATA_DIR, TESSERACT_EXE, WORKFLOW_DB_PATH as PROJECT_WORKFLOW_DB_PATH
+
+# CUDA EP 会把整套 cublas/cuDNN（约 2.2G DLL 映射）载入 GUI 进程，
+# 实测占了 3.4G 常驻里的绝大部分。默认关闭，只在 GAMEAUTO_OCR_CUDA=1 时启用。
+_USE_CUDA_OCR = os.environ.get("GAMEAUTO_OCR_CUDA", "0") == "1"
+
+# ── 让 onnxruntime-gpu 能加载 CUDA/cuDNN 运行时（来自 nvidia-* pip wheels）──
+# CUDA 默认关闭时直接跳过：不污染 PATH/DLL 目录，避免意外载入 2G+ 的 toolkit。
+def _ensure_nvidia_cuda_dlls():
+    if not _USE_CUDA_OCR:
+        return
+    """nvidia-cuda-runtime/cublas/cudnn 等 pip 包把 DLL 放在
+    site-packages/nvidia/<pkg>/{bin,lib}。onnxruntime-gpu 需要这些 DLL 在进程
+    DLL 搜索路径里。
+
+    两层注册都要做，且必须在 import onnxruntime 之前调用：
+    1) os.add_dll_directory：对 Python 侧 ctypes / 扩展模块加载有效；
+    2) 修改 os.environ['PATH']：onnxruntime 的 CUDAExecutionProvider 通过自身
+       LoadLibrary 加载 cublasLt64_*.dll / cudnn64_*.dll，Windows 加载器只按
+       PATH（与程序目录、system32）搜索，不会自动查 add_dll_directory 列表。
+       实测仅 add_dll_directory 时 CUDA 会静默回退 CPU，必须同时把 nvidia 的
+       bin/lib 目录前置进 PATH 才能真正让 CUDA EP 加载成功。
+    """
+    try:
+        sp = os.path.dirname(os.path.dirname(np.__file__))  # .../site-packages
+        base = os.path.join(sp, "nvidia")
+    except Exception:
+        return
+    if not os.path.isdir(base):
+        return
+    extra = []
+    for root, _dirs, _files in os.walk(base):
+        for sub in ("bin", "lib"):
+            p = os.path.join(root, sub)
+            if os.path.isdir(p) and any(
+                f.lower().endswith(".dll") for f in os.listdir(p)
+            ):
+                try:
+                    os.add_dll_directory(p)
+                except Exception:
+                    pass
+                extra.append(p)
+    if extra:
+        existing = os.environ.get("PATH", "")
+        seen, ordered = set(), []
+        for p in extra + existing.split(";"):   # nvidia 目录前置，优先被搜到
+            if p and p not in seen:
+                seen.add(p)
+                ordered.append(p)
+        os.environ["PATH"] = ";".join(ordered)
+_ensure_nvidia_cuda_dlls()
+
+
+# ── 截图封装：WGC(Windows Graphics Capture, GPU 直采) 优先，pyautogui(GDI) 回退 ──
+_wgc_capture = None
+_wgc_thread = None
+_wgc_latest = None       # 最新一帧 BGRA numpy（来自 WGC）
+_wgc_control = None
+_wgc_running = False
+_wgc_failed = False      # 首次失败则禁用，避免反复尝试拖慢循环
+
+
+def _wgc_on_frame(frame, control):
+    global _wgc_latest, _wgc_control
+    try:
+        _wgc_latest = frame.frame_buffer
+        _wgc_control = control
+    except Exception:
+        pass
+
+
+def _wgc_thread_main():
+    global _wgc_running
+    try:
+        import windows_capture as wc
+        cap = wc.WindowsCapture(cursor_capture=False, draw_border=False, monitor_index=1)
+
+        @cap.event
+        def on_frame_arrived(frame, control):
+            _wgc_on_frame(frame, control)
+
+        @cap.event
+        def on_closed():
+            pass
+
+        cap.start()   # 阻塞直到 control.stop()
+    except Exception as e:
+        logging.getLogger("GameAutomation").warning(f"[WGC] 捕获线程异常，回退 pyautogui: {e}")
+    finally:
+        _wgc_running = False
+
+
+def _wgc_ensure_started() -> bool:
+    """启动持久 WGC 捕获线程；无显示器/不可用返回 False（调用方走 pyautogui 回退）。"""
+    global _wgc_thread, _wgc_running, _wgc_failed
+    if _wgc_failed:
+        return False
+    if _wgc_running and _wgc_latest is not None:
+        return True
+    try:
+        import windows_capture  # noqa: F401  未安装则直接回退
+    except ImportError:
+        _wgc_failed = True
+        return False
+    t = threading.Thread(target=_wgc_thread_main, daemon=True)
+    t.start()
+    for _ in range(50):            # 等待首帧（最多 ~2.5s）
+        if _wgc_latest is not None:
+            break
+        time.sleep(0.05)
+    if _wgc_latest is None:
+        _wgc_failed = True
+        _wgc_running = False
+        return False
+    _wgc_running = True
+    _wgc_thread = t
+    return True
+
+
+def grab_screen(region=None):
+    """统一截图：优先 WGC（GPU 直采，高帧率、不卡游戏）；失败/无显示器回退 pyautogui(GDI)。
+
+    region: (left, top, width, height) 或 None 全屏（与 pyautogui 约定一致）。
+    返回 PIL.Image(RGB)，与 pyautogui.screenshot() 完全兼容。
+    """
+    if _wgc_ensure_started() and _wgc_latest is not None:
+        try:
+            import cv2
+            buf = _wgc_latest
+            if buf.ndim == 3 and buf.shape[2] == 4:
+                rgb = cv2.cvtColor(buf[:, :, :3], cv2.COLOR_BGR2RGB)
+            elif buf.ndim == 3 and buf.shape[2] == 3:
+                rgb = cv2.cvtColor(buf, cv2.COLOR_BGR2RGB)
+            else:
+                rgb = buf
+            img = Image.fromarray(rgb)
+            if region is not None:
+                left, top, width, height = region
+                img = img.crop((left, top, left + width, top + height))
+            return img
+        except Exception as e:
+            logging.getLogger("GameAutomation").warning(f"[WGC] 帧转换失败，回退 pyautogui: {e}")
+    if region is not None:
+        return pyautogui.screenshot(region=region)
+    return pyautogui.screenshot()
+
 
 try:
     import pytesseract
@@ -19,15 +167,73 @@ except ImportError:
 
 try:
     from rapidocr_onnxruntime import RapidOCR
+    import onnxruntime as _ort
     _rapidocr_engine = None
     _tesseract_error_logged = False  # 避免重复记录Tesseract错误
 
-    def _get_rapidocr_engine():
+    def _patch_rapidocr_gpu_providers():
+        """运行时给 RapidOCR 的 ONNX session 注入 EP 列表。
+
+        默认 DirectML → CPU（不碰 CUDA，省 2G+ 内存映射）。
+        仅 GAMEAUTO_OCR_CUDA=1 时才把 CUDA 放首位。
+        RapidOCR 原生的 ``OrtInferSession`` 只认 CUDA/CPU，根本不注册
+        DirectML（DmlExecutionProvider）。本函数 patch 其 EP 列表，使装有
+        onnxruntime-directml 的环境也能走 GPU。仅在首次构造引擎时 patch 一次。
+        """
+        from rapidocr_onnxruntime.utils import (
+            OrtInferSession, SessionOptions, GraphOptimizationLevel,
+            get_available_providers, InferenceSession,
+        )
+        if getattr(OrtInferSession, "_gpu_provider_patched", False):
+            return
+
+        def _gpu_init(self, config):
+            sess_opt = SessionOptions()
+            sess_opt.log_severity_level = 4
+            sess_opt.enable_cpu_mem_arena = False
+            sess_opt.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
+            cpu_ep = "CPUExecutionProvider"
+            cpu_opts = {"arena_extend_strategy": "kSameAsRequested"}
+            cuda_ep = "CUDAExecutionProvider"
+            cuda_opts = {
+                "device_id": 0,
+                "arena_extend_strategy": "kSameAsRequested",
+                "cudnn_conv_algo_search": "HEURISTIC",
+                "do_copy_in_default_stream": True,
+            }
+            dml_ep = "DmlExecutionProvider"
+            avail = get_available_providers()
+            # 默认跳过 CUDA（省内存）；显式开启才放首位
+            ep_list = []
+            if _USE_CUDA_OCR and cuda_ep in avail:
+                ep_list.append((cuda_ep, cuda_opts))
+            if dml_ep in avail:
+                ep_list.append((dml_ep, {}))
+            ep_list.append((cpu_ep, cpu_opts))
+            self._verify_model(config["model_path"])
+            self.session = InferenceSession(
+                config["model_path"], sess_options=sess_opt, providers=ep_list)
+
+        OrtInferSession.__init__ = _gpu_init
+        OrtInferSession._gpu_provider_patched = True
+
+    def _get_rapidocr_engine(logger: logging.Logger = None) -> object:
         global _rapidocr_engine
         if _rapidocr_engine is None:
             try:
-                _rapidocr_engine = RapidOCR()
-            except Exception:
+                _patch_rapidocr_gpu_providers()
+                eng = RapidOCR()
+                _rapidocr_engine = eng
+                lg = logger or logging.getLogger("GameAutomation")
+                avail = _ort.get_available_providers()
+                lg.info(f"[OCR] RapidOCR 已加载，可用 EP={avail}（CUDA={'开' if _USE_CUDA_OCR else '关(GAMEAUTO_OCR_CUDA=1 开启)'}，按 DirectML→CPU 选择）")
+                # 打印实际生效 EP（取识别模型 session）
+                try:
+                    lg.info(f"[OCR] 生效 EP={eng.text_recognizer.session.session.get_providers()}")
+                except Exception:
+                    pass
+            except Exception as e:
+                logging.getLogger("GameAutomation").warning(f"RapidOCR 初始化失败: {e}")
                 return None
         return _rapidocr_engine
 except ImportError:
@@ -159,6 +365,250 @@ def _activate_window(hwnd: int, logger: logging.Logger):
         logger.warning(f"激活窗口失败: {str(e)}")
 
 
+# ── OCR 防护：日志特征文本识别 ────────────────────────────────────────────────
+# 本项目的日志窗口 / 控制台窗口经常和游戏窗口同时存在于屏幕上。OCR 一旦把
+# 日志文本（如 "[OCR匹配] 未找到: ['今日已签到']"、"测试识别点击流程完成"）当成
+# 游戏界面文字，就会出现"自己干扰自己"的假匹配。
+# 2026-10-17 起升级为「探测 + 告警 + 硬拦截」：命中特征文本的条目一律剔除，
+# 禁止参与匹配（详见 _check_log_contamination 的教训记录）。
+_LOG_SIGNATURE_PATTERNS = (
+    "gameautomation:",
+    "[rapidocr]",
+    "[tesseract]",
+    "[ocr匹配]",
+    "[联合识别]",
+    "[wgc]",
+    "[bridge]",
+    "traceback (most recent call last)",
+    "auto_runner.log",
+    "# 操作日志",
+    "重试当前步骤",
+    "点击签到入口",
+    "未找到:",
+    "未找到：",
+    "扫描了",
+    "个区域",
+    "置信度:",
+    "置信度：",
+    "步骤失败",
+    "已取消当前任务",
+    "用户请求停止任务",
+    "================================",
+    "--------------------------------",
+)
+_LOG_ALERT_INTERVAL_SEC = 30.0
+_last_log_alert_ts = 0.0
+
+
+def _is_log_signature_text(text: str) -> bool:
+    """单条 OCR 文本是否命中日志特征模式。"""
+    lowered = str(text or "").lower()
+    return any(pat in lowered for pat in _LOG_SIGNATURE_PATTERNS)
+
+
+def _detect_log_signature(results: List[Dict]) -> List[str]:
+    """在 OCR 结果里找"日志特征文本"。"""
+    hits = []
+    for r in results or []:
+        text = str(r.get("text") or "")
+        if _is_log_signature_text(text):
+            hits.append(text)
+    return hits
+
+
+def _check_log_contamination(logger: logging.Logger, results: List[Dict]) -> List[Dict]:
+    """统一入口：识别结果中若混入日志特征文本，节流告警 + 硬拦截剔除，返回干净结果。
+
+    2026-10-17 实例（XM 流程整体失败）：窗口不可用回退全屏 → 记事本里开着的
+    auto_runner.log 被拍进截图 → OCR 把日志文字当成「进入脱机」假命中（0.87）
+    → 点到记事本上 → 确认失败 → 步骤重试到耗尽。当时只有告警、没有拦截。
+    从此命中特征文本的条目一律剔除，禁止参与匹配。
+    阈值策略：>=2 条才节流告警（防噪音）；任何 1 条命中即剔除（防漏网）。
+    目标文字都是界面标签（进入脱机/登录/开始），不含日志特征模式，剔除不会误杀目标。
+    """
+    if not results:
+        return results
+    hits = _detect_log_signature(results)
+    if not hits:
+        return results
+    if len(hits) >= 2:
+        _alert_log_contamination(logger, hits)
+    kept = [r for r in results if not _is_log_signature_text(str(r.get("text") or ""))]
+    dropped = len(results) - len(kept)
+    logger.info(
+        f"[OCR防护] 🚫 硬拦截日志污染文本 {dropped} 条，不参与匹配（保留 {len(kept)} 条）"
+    )
+    return kept
+
+
+def _alert_log_contamination(logger: logging.Logger, hits: List[str]) -> None:
+    """节流告警：日志窗口正在被 OCR 读到，会污染识别结果。"""
+    global _last_log_alert_ts
+    now = time.time()
+    if now - _last_log_alert_ts < _LOG_ALERT_INTERVAL_SEC:
+        return
+    _last_log_alert_ts = now
+    preview = " | ".join(h[:40] for h in hits[:5])
+    logger.warning(
+        f"[OCR防护] ⚠️ 识别区域疑似包含日志/控制台窗口（命中 {len(hits)} 条特征文本）: {preview}"
+    )
+    logger.warning(
+        "[OCR防护] 该文本会被当成界面文字参与匹配，可能导致假命中。"
+        "建议：1) 关闭/最小化 auto_runner.log 记事本与控制台窗口；"
+        "2) 为步骤配置 local_region 限制识别区域；3) 用 search_scope=window 只识别目标窗口。"
+    )
+
+
+# ── OCR 防护：目标窗口被遮挡检测 ──────────────────────────────────────────────
+# WGC/pyautogui 抓的是「屏幕合成结果」，被别的窗口盖住的区域照样会被抓进来。
+# 用 WindowFromPoint 在窗口内做网格采样：采样点归属的窗口既不是自己、也不是
+# 自己的子窗口，就算被遮挡。轻量、不引入新依赖。
+_OBSCURE_CHECK_INTERVAL_SEC = 10.0
+_last_obscure_check_ts = 0.0
+# 遮挡比例达到这个值就视为"目标窗口基本不可见"：抓屏等于在识别遮挡窗口的内容，
+# 识别结果必假（2026-10-26 实例：MiniMax Code 被聊天窗口完全盖住，OCR 把聊天里
+# 贴的截图当成应用界面，定位到假的「签到得」按钮）。
+_OCCLUSION_REFUSE_RATIO = 0.9
+
+
+def _try_raise_target(logger: logging.Logger, hwnd: int) -> bool:
+    """尝试把被遮挡的目标窗口提到前台；返回 True 表示遮挡已解除。
+
+    置顶失败不算错——上层会按"未匹配"重试，重试路径里会再次 focus。
+    """
+    try:
+        from .foreground_flow_runner import _focus_window
+
+        _focus_window(hwnd)
+    except Exception:
+        logger.debug("[OCR防护] 置顶目标窗口失败", exc_info=True)
+        return False
+    time.sleep(0.4)
+    new_ratio = _window_obscured_ratio(hwnd)
+    return new_ratio is not None and new_ratio < _OCCLUSION_REFUSE_RATIO
+
+
+def _window_obscured_ratio(hwnd: int, samples: int = 5) -> Optional[float]:
+    """返回窗口被遮挡的采样点比例（0.0~1.0）；无法判定返回 None。"""
+    try:
+        if not hwnd or not win32gui.IsWindow(hwnd):
+            return None
+        if win32gui.IsIconic(hwnd):
+            return 1.0
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        width, height = right - left, bottom - top
+        if width <= 0 or height <= 0:
+            return None
+        try:
+            root_owner = ctypes.windll.user32.GetAncestor(hwnd, 2)  # GA_ROOTOWNER
+        except Exception:
+            root_owner = hwnd
+        try:
+            # Win8+ 需进程声明 DPI 感知，否则 WindowFromPoint 返回的是缩放后坐标
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            pass
+
+        covered = 0
+        total = 0
+        for ix in range(1, samples + 1):
+            for iy in range(1, samples + 1):
+                x = left + int(width * ix / (samples + 1))
+                y = top + int(height * iy / (samples + 1))
+                try:
+                    pt = ctypes.wintypes.POINT(int(x), int(y))
+                    hit = ctypes.windll.user32.WindowFromPoint(pt)
+                except Exception:
+                    continue
+                if not hit:
+                    continue
+                total += 1
+                if hit == hwnd or hit == root_owner:
+                    continue
+                # 子窗口（控件）不算遮挡
+                try:
+                    if ctypes.windll.user32.GetAncestor(hit, 2) == root_owner:
+                        continue
+                except Exception:
+                    pass
+                covered += 1
+        if total == 0:
+            return None
+        return covered / float(total)
+    except Exception:
+        return None
+
+
+def _alert_window_obscured(logger: logging.Logger, hwnd: int, ratio: float) -> None:
+    """节流告警：目标窗口被遮挡，抓屏会拍到遮挡窗口的内容。"""
+    global _last_obscure_check_ts
+    now = time.time()
+    if now - _last_obscure_check_ts < _OBSCURE_CHECK_INTERVAL_SEC:
+        return
+    _last_obscure_check_ts = now
+    title = ""
+    try:
+        title = win32gui.GetWindowText(hwnd) or ""
+    except Exception:
+        pass
+    logger.warning(
+        f"[OCR防护] ⚠️ 目标窗口被遮挡约 {ratio * 100:.0f}%（HWND={hwnd} 标题={title!r}）"
+    )
+    logger.warning(
+        "[OCR防护] 截图是屏幕合成结果，被遮挡区域会把遮挡窗口的文字一起识别进来。"
+        "请将目标窗口置顶或移开遮挡窗口。"
+    )
+
+
+_FULLSCREEN_ALERT_INTERVAL_SEC = 60.0
+_last_fullscreen_alert_ts = 0.0
+
+
+def _alert_fullscreen_scope(logger: logging.Logger) -> None:
+    """节流告警：本次识别没有任何区域约束，拿到的是整屏内容。"""
+    global _last_fullscreen_alert_ts
+    now = time.time()
+    if now - _last_fullscreen_alert_ts < _FULLSCREEN_ALERT_INTERVAL_SEC:
+        return
+    _last_fullscreen_alert_ts = now
+    logger.warning(
+        "[OCR防护] ⚠️ 本次 OCR 未限定识别区域，将扫描整个屏幕"
+        "（日志窗口、控制台、浏览器内容都会被一并识别，可能造成假匹配）"
+    )
+    logger.warning(
+        "[OCR防护] 如需缩小范围：1) 调用时传 hwnd 或 region；"
+        "2) 在 flow_configs.json 对应步骤配置 local_region / 保持 search_scope=\"window\"。"
+    )
+
+
+_DEAD_WINDOW_ALERT_INTERVAL_SEC = 30.0
+_last_dead_window_alert = {"ts": 0.0, "hwnd": None}
+
+
+def _restore_window_if_minimized(hwnd: int) -> bool:
+    """窗口被最小化时尝试还原（SW_RESTORE）。成功返回 True；非最小化/已死/失败返回 False。"""
+    try:
+        if not hwnd or not win32gui.IsWindow(hwnd):
+            return False
+        if not win32gui.IsIconic(hwnd):
+            return False
+        win32gui.ShowWindow(hwnd, 9)  # SW_RESTORE
+        time.sleep(0.2)
+        return not win32gui.IsIconic(hwnd)
+    except Exception:
+        return False
+
+
+def _ensure_window_region(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
+    """取窗口的屏幕绝对坐标；窗口最小化返回 None。"""
+    try:
+        if win32gui.IsIconic(hwnd):
+            return None
+    except Exception:
+        pass
+    return _get_window_region(hwnd)
+
+
 def _get_window_region(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
     try:
         left, top, right, bottom = win32gui.GetWindowRect(hwnd)
@@ -214,7 +664,7 @@ def _get_template_path_from_db(template_key: str) -> Optional[str]:
 
 
 def _find_text_center(target_text: str, region: Optional[Tuple[int, int, int, int]] = None) -> Optional[Tuple[int, int]]:
-    screenshot = pyautogui.screenshot(region=region) if region else pyautogui.screenshot()
+    screenshot = grab_screen(region=region) if region else grab_screen()
     target = _normalize_text(target_text)
 
     # 优先使用 RapidOCR（中文识别准确率更高）
@@ -222,7 +672,7 @@ def _find_text_center(target_text: str, region: Optional[Tuple[int, int, int, in
         try:
             ocr_engine = _get_rapidocr_engine()
             if ocr_engine:
-                result, elapse = ocr_engine(screenshot)
+                result, elapse = ocr_engine(np.asarray(screenshot))
                 if result:
                     for box, text, confidence in result:
                         text_normalized = _normalize_text(text)
@@ -391,7 +841,7 @@ def _click_text_with_retry(
     if debug_dir:
         os.makedirs(debug_dir, exist_ok=True)
         debug_file = os.path.join(debug_dir, f"ocr_fail_{_normalize_text(text)}_{int(time.time())}.png")
-        shot = pyautogui.screenshot(region=region) if region else pyautogui.screenshot()
+        shot = grab_screen(region=region) if region else grab_screen()
         shot.save(debug_file)
         logger.warning(f"已保存失败截图: {debug_file}")
         # 额外输出 OCR 框选叠加图，便于定位识别偏差
@@ -400,7 +850,7 @@ def _click_text_with_retry(
             if _get_rapidocr_engine:
                 ocr_engine = _get_rapidocr_engine()
                 if ocr_engine:
-                    rapid_result, _ = ocr_engine(shot)
+                    rapid_result, _ = ocr_engine(np.asarray(shot))
                     if rapid_result:
                         overlay = shot.copy()
                         draw = ImageDraw.Draw(overlay)
@@ -537,20 +987,96 @@ def ocr_window_content(
     """
     对窗口或区域进行OCR识别，返回详细的识别结果列表。
     每个结果包含：text（文字）、confidence（置信度）、box（坐标框）、center（中心点）
+
+    区域优先级（重要）：
+        region（调用方显式指定的局部区域）> hwnd 对应窗口区域 > 全屏
+    以前写成 `_get_window_region(hwnd) if hwnd else region`，只要传了 hwnd，
+    调用方精调的局部搜索区域就会被整窗覆盖，`_calc_local_search_region` 形同虚设。
+
+    窗口不可用时的行为（2026-10-17 起，重要）：
+        传了 hwnd 但窗口最小化/已关闭 → 先尝试 SW_RESTORE 还原；还原失败 →
+        打 ERROR 并返回空列表，**不再回退全屏识别**。
+        旧行为（安静回退全屏）闯过大祸：全屏把日志窗口文字卷进来 → 假命中 →
+        "自己干扰自己"。返回空让上层按"未匹配"处理，步骤重试时
+        run_flow 的 _refresh_flow_window 会重新枚举窗口，比全屏瞎认更正确。
     """
     global _tesseract_error_logged
     results = []
-    current_region = _get_window_region(hwnd) if hwnd else region
-    screenshot = pyautogui.screenshot(region=current_region) if current_region else pyautogui.screenshot()
+    if region:
+        current_region = region
+    elif hwnd:
+        current_region = _ensure_window_region(hwnd)
+        if current_region is None and _restore_window_if_minimized(hwnd):
+            current_region = _ensure_window_region(hwnd)
+        if current_region is None:
+            now = time.time()
+            if (
+                now - _last_dead_window_alert["ts"] >= _DEAD_WINDOW_ALERT_INTERVAL_SEC
+                or _last_dead_window_alert["hwnd"] != hwnd
+            ):
+                _last_dead_window_alert["ts"] = now
+                _last_dead_window_alert["hwnd"] = hwnd
+                logger.error(
+                    f"[OCR防护] ❌ 窗口不可用（已最小化或已关闭）HWND={hwnd}，"
+                    f"还原失败，拒绝回退全屏识别，本次返回空结果"
+                    f"（上层将按未匹配重试，并借 _refresh_flow_window 重新枚举窗口）"
+                )
+            return []
+    else:
+        current_region = None
+
+    # 防护1：目标窗口被遮挡告警（只在指定了 hwnd 且未显式限定 region 时检查）
+    if hwnd and not region:
+        ratio = _window_obscured_ratio(hwnd)
+        if ratio is not None and ratio >= 0.3:
+            _alert_window_obscured(logger, hwnd, ratio)
+            if ratio >= _OCCLUSION_REFUSE_RATIO:
+                # 几乎完全被挡住：截图内容基本是遮挡窗口的，识别结果必假。
+                # 先尝试把目标提到前台；仍不可见就拒绝识别（返回空结果），
+                # 让上层按"未匹配"重试，而不是拿着假坐标去点。
+                if not _try_raise_target(logger, hwnd):
+                    logger.error(
+                        f"[OCR防护] ❌ 目标窗口几乎完全被遮挡（{ratio * 100:.0f}%），"
+                        f"置顶后仍不可见，本次拒绝识别（返回空结果），"
+                        f"避免把遮挡窗口的文字当成目标"
+                    )
+                    return []
+
+    # 防护3：无任何区域约束时说明本次是全屏识别，日志/其他窗口的内容会全部进来。
+    # 这是历史上"自己干扰自己"的直接成因，必须显式留痕（节流）。
+    if current_region is None and hwnd is None and not region:
+        _alert_fullscreen_scope(logger)
+
+    screenshot = grab_screen(region=current_region) if current_region else grab_screen()
+
+    # 防护2：坐标系自检。WGC 抓的是 monitor_index=1 那一块屏，若窗口区域
+    # 超出该屏范围，裁剪出来的坐标会整体错位，必须先发现再告警（不静默出错）。
+    try:
+        sw, sh = screenshot.size
+        if current_region:
+            rw, rh = current_region[2], current_region[3]
+            if rw > sw or rh > sh:
+                logger.warning(
+                    f"[OCR防护] ⚠️ 识别区域({rw}x{rh})超出截图({sw}x{sh})，"
+                    f"可能因显示器缩放/多屏导致坐标错位 region={current_region} hwnd={hwnd}"
+                )
+    except Exception:
+        pass
 
     # 使用 RapidOCR
     if _get_rapidocr_engine:
         try:
             ocr_engine = _get_rapidocr_engine()
             if ocr_engine:
-                result, elapse = ocr_engine(screenshot)
+                result, elapse = ocr_engine(np.asarray(screenshot))
                 if result:
                     for box, text, confidence in result:
+                        # rapidocr_onnxruntime 1.2.x 的 score 是字符串，必须转 float，
+                        # 否则下游 `confidence >= min_confidence` 会 str>=float 崩溃
+                        try:
+                            confidence = float(confidence)
+                        except (TypeError, ValueError):
+                            confidence = 0.0
                         x1 = min(p[0] for p in box)
                         y1 = min(p[1] for p in box)
                         x2 = max(p[0] for p in box)
@@ -567,11 +1093,16 @@ def ocr_window_content(
                             "center": (center_x, center_y),
                             "source": "rapidocr"
                         })
-                    logger.debug(f"[RapidOCR] 识别到 {len(results)} 个文本区域，耗时 {elapse*1000:.1f}ms")
+                    # 1.2.x 的 elapse 是 [det, cls, rec] 列表，不能直接 :.1f 格式化
+                    if isinstance(elapse, (list, tuple)):
+                        elapse_ms = sum(float(e) for e in elapse) * 1000
+                    else:
+                        elapse_ms = float(elapse or 0) * 1000
+                    logger.debug(f"[RapidOCR] 识别到 {len(results)} 个文本区域，耗时 {elapse_ms:.1f}ms")
                     if len(results) <= 5:  # 只在数量少时输出详细信息
                         for i, r in enumerate(results):
                             logger.debug(f"  [{i+1}] \"{r['text']}\" ({r['confidence']:.2f}) @ {r['center']}")
-                    return results
+                    return _check_log_contamination(logger, results)
         except Exception as e:
             logger.debug(f"RapidOCR识别失败: {str(e)}")
 
@@ -617,7 +1148,41 @@ def ocr_window_content(
                 logger.warning("后续将仅使用 RapidOCR 进行识别")
                 _tesseract_error_logged = True
 
-    return results
+    return _check_log_contamination(logger, results)
+
+
+def ocr_find_any_text(
+    target_texts: List[str],
+    logger: logging.Logger,
+    hwnd: Optional[int] = None,
+    region: Optional[Tuple[int, int, int, int]] = None,
+    min_confidence: float = 0.5,
+) -> Optional[Dict]:
+    """抄 ok-script match=[...]：单次 OCR 统一过滤多候选，避免每候选截一次屏。
+
+    返回首个命中的结果 dict（含 matched_target），未命中返回 None。
+    """
+    candidates = [str(t or "").strip() for t in (target_texts or []) if str(t or "").strip()]
+    if not candidates:
+        return None
+    normalized = [_normalize_text(t) for t in candidates]
+    results = ocr_window_content(logger, hwnd=hwnd, region=region)
+    for idx, target_normalized in enumerate(normalized):
+        for r in results:
+            text_normalized = _normalize_text(r["text"])
+            if r["confidence"] < min_confidence:
+                continue
+            if target_normalized in text_normalized:
+                logger.info(f"[OCR匹配] ✅ 找到 \"{candidates[idx]}\" -> \"{r['text']}\" ({r['confidence']:.2f}) @ {r['center']}")
+                return {**r, "matched_target": candidates[idx]}
+            if (
+                text_normalized in target_normalized
+                and len(text_normalized) >= max(2, len(target_normalized) // 2)
+            ):
+                logger.info(f"[OCR匹配] ✅ 找到 \"{candidates[idx]}\" -> \"{r['text']}\" ({r['confidence']:.2f}) @ {r['center']}")
+                return {**r, "matched_target": candidates[idx]}
+    logger.debug(f"[OCR匹配] 未找到: {candidates} (扫描了 {len(results)} 个区域)")
+    return None
 
 
 def ocr_find_text(

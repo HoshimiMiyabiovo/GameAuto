@@ -14,6 +14,8 @@ Item {
     property var queueItems: []       // parsed from bridge.queueListJson
     property bool shutdownAfterFinish: false  // 一条龙：完成后自动关机
     property bool emailAfterFinish: false     // 一条龙：完成后发送每日进度邮件
+    property bool forceRerun: false           // 强制重跑：跳过"今日已完成"检查
+    property var schedTasks: []               // 定时启动任务列表（bridge.scheduledTasksJson）
 
     // ── Email config dialog state ──
     property bool emailDialogOpen: false
@@ -41,30 +43,39 @@ Item {
             : "首次配置：QQ/163/Gmail 等需在邮箱后台开启 SMTP 并使用授权码"
         root.emailDialogStatusColor = "#6d6257"
         root.emailDialogOpen = true
+        passwordField.clear()
     }
 
     function submitEmailConfig() {
-        var d = root.emailDraft
-        var recipients = (d.recipients || "").split(/[,，;；\n]/).map(function(s){ return s.trim() }).filter(function(s){ return s.length > 0 })
-        if (!d.smtp_host || !d.sender || recipients.length === 0) {
+        // 直接从输入框读值，不依赖 emailDraft 对象内部属性（QML property var 修改内部属性不可靠）
+        var smtpHost = smtpHostField.text || ""
+        var sender = senderField.text || ""
+        var recipientsRaw = recipientsField.text || ""
+        var recipients = recipientsRaw.split(/[,，;；\n]/).map(function(s){ return s.trim() }).filter(function(s){ return s.length > 0 })
+        var password = passwordField.text || ""
+        var smtpPort = parseInt(smtpPortField.text) || 465
+        var useSsl = useSslField.checked
+        var subjectPrefix = subjectPrefixField.text || "[GameAuto]"
+
+        if (!smtpHost || !sender || recipients.length === 0) {
             root.emailDialogStatus = "SMTP 主机、发件人、收件人不能为空"
             root.emailDialogStatusColor = "#b04b44"
             return
         }
-        if (!d.has_password && !d.password) {
+        if (!root.emailDraft.has_password && !password) {
             root.emailDialogStatus = "请填写 SMTP 授权码（或关闭弹窗保持现有配置）"
             root.emailDialogStatusColor = "#b04b44"
             return
         }
         var payload = {
             enabled: true,
-            smtp_host: d.smtp_host,
-            smtp_port: parseInt(d.smtp_port) || 465,
-            use_ssl: !!d.use_ssl,
-            sender: d.sender,
-            password: d.password || "",  // 空 = 沿用旧密码
+            smtp_host: smtpHost,
+            smtp_port: smtpPort,
+            use_ssl: useSsl,
+            sender: sender,
+            password: password,  // 空 = 沿用旧密码
             recipients: recipients,
-            subject_prefix: d.subject_prefix || "[GameAuto]"
+            subject_prefix: subjectPrefix
         }
         bridge.saveEmailConfig(JSON.stringify(payload))
         root.emailDialogOpen = false
@@ -75,6 +86,11 @@ Item {
         target: bridge
         function onAppListChanged(jsonStr) {
             try { root.appList = JSON.parse(jsonStr || "[]") } catch(e) { root.appList = [] }
+            // 同步到定时启动的任务下拉框
+            schedTaskModel.clear()
+            for (var j = 0; j < root.appList.length; j++) {
+                schedTaskModel.append({ label: root.appList[j].display_name || root.appList[j].app_key })
+            }
             taskListModel.clear()
             for (var i = 0; i < root.appList.length; i++) {
                 var app = root.appList[i]
@@ -108,6 +124,9 @@ Item {
         function onLogTextChanged() {
             logTextArea.text = bridge.logText
         }
+        function onScheduledTasksChanged(jsonStr) {
+            try { root.schedTasks = JSON.parse(jsonStr || "[]") } catch(e) { root.schedTasks = [] }
+        }
     }
 
     function updateSelectionSummary() {
@@ -138,6 +157,28 @@ Item {
         return JSON.stringify(prefs)
     }
 
+    // 当前列表的完整 app_key 顺序（用于持久化任务排序）
+    function collectFullOrder() {
+        var keys = []
+        for (var i = 0; i < taskListModel.count; i++) {
+            keys.push(taskListModel.get(i).app_key)
+        }
+        return JSON.stringify(keys)
+    }
+
+    // 上移/下移：交换 ListModel 中相邻任务并重排序号，随后持久化顺序
+    function moveTask(index, dir) {
+        var j = index + dir
+        if (j < 0 || j >= taskListModel.count) return
+        taskListModel.move(index, j, 1)
+        for (var k = 0; k < taskListModel.count; k++) {
+            taskListModel.setProperty(k, "orderNum", k + 1)
+        }
+        bridge.reorderApps(root.collectFullOrder())
+    }
+
+    function _pad2(n) { return (n < 10 ? "0" : "") + n }
+
     // ── Load app list on startup ──
     Component.onCompleted: {
         bridge.loadAppList()
@@ -145,6 +186,15 @@ Item {
             var prefs = JSON.parse(bridge.loadPostRunPrefs() || "{}")
             root.emailAfterFinish = !!prefs.email
             root.shutdownAfterFinish = !!prefs.shutdown
+        } catch(e) {}
+        try { root.schedTasks = JSON.parse(bridge.getScheduledTasks() || "[]") } catch(e) { root.schedTasks = [] }
+        // 定时启动的小时/分钟下拉：默认选中当前时间，不用手填
+        try {
+            for (var h = 0; h < 24; h++) schedHourModel.append({ label: root._pad2(h) })
+            for (var m = 0; m < 60; m++) schedMinModel.append({ label: root._pad2(m) })
+            var now = new Date()
+            schedHourSelect.currentIndex = now.getHours()
+            schedMinSelect.currentIndex = now.getMinutes()
         } catch(e) {}
     }
 
@@ -208,7 +258,7 @@ Item {
                             anchors.rightMargin: 10
                             spacing: 4
 
-                            HusText { text: "顺序"; Layout.preferredWidth: 60; font.pixelSize: Math.round(12 * root.fs); color: "#6d6257" }
+                            HusText { text: "顺序"; Layout.preferredWidth: 96; font.pixelSize: Math.round(12 * root.fs); color: "#6d6257" }
                             HusText { text: "启用"; Layout.preferredWidth: 40; font.pixelSize: Math.round(12 * root.fs); color: "#6d6257" }
                             HusText { text: "任务"; Layout.preferredWidth: 140; font.pixelSize: Math.round(12 * root.fs); color: "#6d6257" }
                             HusText { text: "启动方式"; Layout.preferredWidth: 180; font.pixelSize: Math.round(12 * root.fs); color: "#6d6257" }
@@ -248,12 +298,65 @@ Item {
                                 anchors.rightMargin: 10
                                 spacing: 4
 
-                                // Order number
-                                HusText {
-                                    Layout.preferredWidth: 60
-                                    text: model.orderNum || (index + 1)
-                                    font.pixelSize: Math.round(13 * root.fs)
-                                    color: "#6d6257"
+                                // Order number + move buttons（自绘，避免 HusButton Type_Text 在委托内透明不可见）
+                                RowLayout {
+                                    Layout.preferredWidth: 96
+                                    spacing: 3
+
+                                    HusText {
+                                        Layout.preferredWidth: 26
+                                        text: model.orderNum || (index + 1)
+                                        font.pixelSize: Math.round(13 * root.fs)
+                                        color: "#6d6257"
+                                    }
+
+                                    Rectangle {
+                                        id: upBtn
+                                        Layout.preferredWidth: 30
+                                        Layout.preferredHeight: 28
+                                        radius: 6
+                                        color: upArea.containsMouse ? "#e7dccb" : "#f1e8d8"
+                                        border.color: "#d8c9b4"
+                                        border.width: 1
+                                        enabled: index > 0 && !bridge.isRunning
+                                        MouseArea {
+                                            id: upArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            enabled: parent.enabled
+                                            onClicked: root.moveTask(index, -1)
+                                        }
+                                        HusText {
+                                            anchors.centerIn: parent
+                                            text: "↑"
+                                            font.pixelSize: Math.round(14 * root.fs)
+                                            color: (index > 0 && !bridge.isRunning) ? "#5b5147" : "#bcae9c"
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        id: downBtn
+                                        Layout.preferredWidth: 30
+                                        Layout.preferredHeight: 28
+                                        radius: 6
+                                        color: downArea.containsMouse ? "#e7dccb" : "#f1e8d8"
+                                        border.color: "#d8c9b4"
+                                        border.width: 1
+                                        enabled: index < taskListModel.count - 1 && !bridge.isRunning
+                                        MouseArea {
+                                            id: downArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            enabled: parent.enabled
+                                            onClicked: root.moveTask(index, 1)
+                                        }
+                                        HusText {
+                                            anchors.centerIn: parent
+                                            text: "↓"
+                                            font.pixelSize: Math.round(14 * root.fs)
+                                            color: (index < taskListModel.count - 1 && !bridge.isRunning) ? "#5b5147" : "#bcae9c"
+                                        }
+                                    }
                                 }
 
                                 // Checkbox
@@ -345,8 +448,26 @@ Item {
                 badgeLabel: bridge.statusBadge
                 showSpinner: bridge.progressVisible
 
-                onStartClicked: bridge.startAutomation(root.collectSelectedApps(), root.shutdownAfterFinish, root.emailAfterFinish)
+                onStartClicked: bridge.startAutomation(root.collectSelectedApps(), root.shutdownAfterFinish, root.emailAfterFinish, root.forceRerun)
                 onStopClicked: bridge.stopAutomation()
+            }
+
+            // ── Force rerun option ──────────────────────────────
+            HusCard {
+                Layout.fillWidth: true
+                title: "运行选项"
+                padding: 14
+
+                contentItem: ColumnLayout {
+                    spacing: 8
+
+                    HusCheckBox {
+                        text: "强制重跑（忽略\"今日已完成\"，所有选中任务重新执行）"
+                        checked: root.forceRerun
+                        enabled: !bridge.isRunning
+                        onClicked: root.forceRerun = checked
+                    }
+                }
             }
 
             // ── Post-run options ─────────────────────────────────
@@ -417,6 +538,147 @@ Item {
                         text: "勾选邮件后，任务结束时会尝试发送本轮报告 + 今日进度；勾选关机后无论邮件是否发送成功，60 秒后都会自动关机。运行中无法修改这两项。"
                         font.pixelSize: Math.round(12 * root.fs)
                         color: "#6d6257"
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+                }
+            }
+
+            // ── 定时启动 ─────────────────────────────────────────
+            HusCard {
+                Layout.fillWidth: true
+                title: "⏰ 定时启动"
+                padding: 14
+
+                contentItem: ColumnLayout {
+                    spacing: 8
+
+                    HusText {
+                        text: "每天到设定时间自动启动所选任务（GUI 需保持运行）。邮件 / 自动关机跟随上方「完成后操作」的勾选。"
+                        font.pixelSize: Math.round(12 * root.fs)
+                        color: "#6d6257"
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+
+                    RowLayout {
+                        spacing: 8
+                        HusText { text: "任务:"; font.pixelSize: Math.round(13 * root.fs) }
+                        HusSelect {
+                            id: schedTaskSelect
+                            clearEnabled: false
+                            model: ListModel { id: schedTaskModel }
+                            currentIndex: -1
+                            Layout.preferredWidth: Math.round(220 * root.fs)
+                        }
+                        HusText { text: "时间:"; font.pixelSize: Math.round(13 * root.fs) }
+                        HusSelect {
+                            id: schedHourSelect
+                            clearEnabled: false
+                            textRole: "label"
+                            model: ListModel { id: schedHourModel }
+                            Layout.preferredWidth: Math.round(70 * root.fs)
+                        }
+                        HusText { text: ":"; font.pixelSize: Math.round(13 * root.fs) }
+                        HusSelect {
+                            id: schedMinSelect
+                            clearEnabled: false
+                            textRole: "label"
+                            model: ListModel { id: schedMinModel }
+                            Layout.preferredWidth: Math.round(70 * root.fs)
+                        }
+                        HusButton {
+                            text: "添加"
+                            type: HusButton.Type_Primary
+                            onClicked: {
+                                var idx = schedTaskSelect.currentIndex
+                                if (idx < 0) {
+                                    schedErrorText.text = "请先选择要定时启动的任务"
+                                    return
+                                }
+                                var app = root.appList[idx] || {}
+                                if (!app.app_key) return
+                                var hh = root._pad2(schedHourSelect.currentIndex)
+                                var mm = root._pad2(schedMinSelect.currentIndex)
+                                var okFlag = bridge.addScheduledTask(JSON.stringify({
+                                    name: (app.display_name || app.app_key) + " @ " + hh + ":" + mm,
+                                    time: hh + ":" + mm,
+                                    apps: [{ app_key: app.app_key, script_choice: app.script_choice || null }],
+                                    enabled: true,
+                                    skip_if_done_today: schedSkipDoneCheck.checked
+                                }))
+                                if (okFlag) { schedErrorText.text = "" }
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    RowLayout {
+                        spacing: 8
+                        HusCheckBox {
+                            id: schedSkipDoneCheck
+                            text: "仅补跑今日未完成（已成功则跳过）"
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Repeater {
+                        model: root.schedTasks
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            HusText {
+                                text: modelData.time
+                                font.pixelSize: Math.round(15 * root.fs)
+                                font.bold: true
+                                color: modelData.enabled ? "#2c241d" : "#b0a898"
+                                Layout.preferredWidth: Math.round(64 * root.fs)
+                            }
+                            HusText {
+                                text: modelData.name || ""
+                                font.pixelSize: Math.round(13 * root.fs)
+                                color: modelData.enabled ? "#2c241d" : "#8a7a68"
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                            }
+                            HusText {
+                                visible: modelData.skip_if_done_today === true
+                                text: "仅补跑"
+                                font.pixelSize: Math.round(11 * root.fs)
+                                color: "#2f7d4a"
+                            }
+                            HusText {
+                                visible: modelData.last_fired_date === Qt.formatDate(new Date(), "yyyy-MM-dd")
+                                text: "今日已触发"
+                                font.pixelSize: Math.round(11 * root.fs)
+                                color: "#2f7d4a"
+                            }
+                            HusCheckBox {
+                                text: "启用"
+                                checked: modelData.enabled
+                                onClicked: bridge.toggleScheduledTask(modelData.id, checked)
+                            }
+                            HusButton {
+                                text: "删除"
+                                type: HusButton.Type_Outlined
+                                onClicked: bridge.removeScheduledTask(modelData.id)
+                            }
+                        }
+                    }
+
+                    HusText {
+                        visible: root.schedTasks.length === 0
+                        text: "暂无定时任务"
+                        font.pixelSize: Math.round(12 * root.fs)
+                        color: "#8a7a68"
+                    }
+
+                    HusText {
+                        id: schedErrorText
+                        text: ""
+                        visible: text !== ""
+                        font.pixelSize: Math.round(12 * root.fs)
+                        color: "#b04b44"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -553,10 +815,10 @@ Item {
                     spacing: 8
                     HusText { text: "SMTP 主机"; Layout.preferredWidth: 96 }
                     HusInput {
+                        id: smtpHostField
                         Layout.fillWidth: true
                         text: root.emailDraft.smtp_host || ""
                         placeholderText: "smtp.qq.com"
-                        onTextChanged: { root.emailDraft.smtp_host = text }
                     }
                 }
 
@@ -565,19 +827,14 @@ Item {
                     spacing: 8
                     HusText { text: "端口"; Layout.preferredWidth: 96 }
                     HusInput {
+                        id: smtpPortField
                         Layout.preferredWidth: 120
                         text: String(root.emailDraft.smtp_port || 465)
-                        onEditingFinished: {
-                            var v = parseInt(text)
-                            if (!isNaN(v) && v > 0 && v <= 65535) {
-                                root.emailDraft.smtp_port = v
-                            }
-                        }
                     }
                     HusCheckBox {
+                        id: useSslField
                         text: "SSL/TLS"
                         checked: root.emailDraft.use_ssl !== false
-                        onClicked: { root.emailDraft.use_ssl = checked }
                     }
                 }
 
@@ -586,10 +843,10 @@ Item {
                     spacing: 8
                     HusText { text: "发件人"; Layout.preferredWidth: 96 }
                     HusInput {
+                        id: senderField
                         Layout.fillWidth: true
                         text: root.emailDraft.sender || ""
                         placeholderText: "your@qq.com"
-                        onTextChanged: { root.emailDraft.sender = text }
                     }
                 }
 
@@ -604,22 +861,6 @@ Item {
                             ? "（已留空时沿用旧授权码，重新输入则覆盖）"
                             : "SMTP 授权码（非登录密码）"
                     }
-                    Connections {
-                        target: passwordField
-                        function onEditingFinished() {
-                            root.emailDraft.password = passwordField.text
-                        }
-                    }
-                }
-
-                // 每次 dialog 打开时把 password 绑回 draft
-                Connections {
-                    target: root
-                    function onEmailDialogOpenChanged() {
-                        if (root.emailDialogOpen) {
-                            passwordField.text = ""
-                        }
-                    }
                 }
 
                 RowLayout {
@@ -627,10 +868,10 @@ Item {
                     spacing: 8
                     HusText { text: "收件人"; Layout.preferredWidth: 96 }
                     HusInput {
+                        id: recipientsField
                         Layout.fillWidth: true
                         text: root.emailDraft.recipients || ""
                         placeholderText: "a@example.com, b@example.com"
-                        onTextChanged: { root.emailDraft.recipients = text }
                     }
                 }
 
@@ -639,9 +880,9 @@ Item {
                     spacing: 8
                     HusText { text: "主题前缀"; Layout.preferredWidth: 96 }
                     HusInput {
+                        id: subjectPrefixField
                         Layout.fillWidth: true
                         text: root.emailDraft.subject_prefix || "[GameAuto]"
-                        onTextChanged: { root.emailDraft.subject_prefix = text }
                     }
                 }
 
@@ -665,10 +906,7 @@ Item {
                     HusButton {
                         text: "保存"
                         type: HusButton.Type_Primary
-                        onClicked: {
-                            root.emailDraft.password = passwordField.text
-                            root.submitEmailConfig()
-                        }
+                        onClicked: root.submitEmailConfig()
                     }
                 }
             }

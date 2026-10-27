@@ -1,7 +1,6 @@
 {
   "XM": {
     "enabled": true,
-    "exe_glob": "D:\\Program Files\\新建文件夹\\XM Seer脱机日常 ver *.exe",
     "enable_ocr_fallback": true,
     "window_title_keywords": [
       "xm seer",
@@ -26,7 +25,7 @@
       {
         "name": "进入脱机",
         "action": "click_template",
-        "template": "E:\\GithubProject\\game_auto\\模板\\进入脱机.png",
+        "template": "模板\\进入脱机.png",
         "target_text": "进入脱机",
         "enable_ocr_fallback": true,
         "confirm_type": "disappear",
@@ -34,7 +33,7 @@
         "clicks": 1,
         "post_delay_sec": 1.2,
         "confirm_templates": [
-          "E:\\GithubProject\\game_auto\\模板\\XM登录.png"
+          "模板\\XM登录.png"
         ],
         "confirm_timeout_sec": 12,
         "on_fail": "retry_step",
@@ -43,7 +42,7 @@
       {
         "name": "登录",
         "action": "click_template",
-        "template": "E:\\GithubProject\\game_auto\\模板\\XM登录.png",
+        "template": "模板\\XM登录.png",
         "target_text": "登录",
         "enable_ocr_fallback": true,
         "confirm_type": "template_match",
@@ -51,7 +50,7 @@
         "clicks": 1,
         "post_delay_sec": 2.0,
         "confirm_templates": [
-          "E:\\GithubProject\\game_auto\\模板\\XM开始.png"
+          "模板\\XM开始.png"
         ],
         "confirm_timeout_sec": 20,
         "on_fail": "retry_step",
@@ -60,7 +59,7 @@
       {
         "name": "开始",
         "action": "click_template",
-        "template": "E:\\GithubProject\\game_auto\\模板\\XM开始.png",
+        "template": "模板\\XM开始.png",
         "target_text": "开始",
         "enable_ocr_fallback": true,
         "confirm_type": "template_match",
@@ -68,7 +67,7 @@
         "clicks": 1,
         "post_delay_sec": 1.5,
         "confirm_templates": [
-          "E:\\GithubProject\\game_auto\\模板\\XM运行中.png"
+          "模板\\XM运行中.png"
         ],
         "confirm_timeout_sec": 25,
         "on_fail": "retry_step",
@@ -77,7 +76,7 @@
       {
         "name": "运行中确认",
         "action": "wait_template",
-        "template": "E:\\GithubProject\\game_auto\\模板\\XM运行中.png",
+        "template": "模板\\XM运行中.png",
         "target_text": "停止",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -87,7 +86,7 @@
       {
         "name": "执行完毕",
         "action": "wait_template",
-        "template": "E:\\GithubProject\\game_auto\\模板\\XM执行完毕.png",
+        "template": "模板\\XM执行完毕.png",
         "target_text": "选择任务已执行完毕",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -99,7 +98,6 @@
   },
   "CJ": {
     "enabled": true,
-    "exe_glob": "D:\\Program Files\\新建文件夹\\重聚脱机巅峰*.exe",
     "enable_ocr_fallback": true,
     "window_title_keywords": [
       "重聚",
@@ -124,7 +122,7 @@
       {
         "name": "登录1",
         "action": "click_template",
-        "template": "E:\\GithubProject\\game_auto\\模板\\CJ登录-1.png",
+        "template": "模板\\CJ登录-1.png",
         "target_text": "登录",
         "enable_ocr_fallback": true,
         "confirm_type": "template_match",
@@ -132,7 +130,7 @@
         "clicks": 1,
         "post_delay_sec": 2.0,
         "confirm_templates": [
-          "E:\\GithubProject\\game_auto\\模板\\CJ登录-2.png"
+          "模板\\CJ登录-2.png"
         ],
         "confirm_timeout_sec": 15,
         "on_fail": "retry_step",
@@ -141,7 +139,7 @@
       {
         "name": "登录2",
         "action": "click_template",
-        "template": "E:\\GithubProject\\game_auto\\模板\\CJ登录-2.png",
+        "template": "模板\\CJ登录-2.png",
         "target_text": "登录",
         "enable_ocr_fallback": true,
         "confirm_type": "template_match",
@@ -149,7 +147,7 @@
         "clicks": 1,
         "post_delay_sec": 2.5,
         "confirm_templates": [
-          "E:\\GithubProject\\game_auto\\模板\\CJ登陆成功.png"
+          "模板\\CJ登陆成功.png"
         ],
         "confirm_timeout_sec": 20,
         "on_fail": "retry_step",
@@ -159,14 +157,14 @@
         "name": "登录成功确认",
         "action": "click_template",
         "no_click": true,
-        "template": "E:\\GithubProject\\game_auto\\模板\\CJ登陆成功.png",
+        "template": "模板\\CJ登陆成功.png",
         "target_text": "退出",
         "enable_ocr_fallback": true,
         "confirm_type": "template_match",
         "timeout_sec": 180,
         "post_delay_sec": 1.0,
         "confirm_templates": [
-          "E:\\GithubProject\\game_auto\\模板\\CJ进入对战-1.png"
+          "模板\\CJ进入对战-1.png"
         ],
         "confirm_timeout_sec": 20,
         "on_fail": "retry_prev",
@@ -175,7 +173,7 @@
       {
         "name": "进入对战1",
         "action": "click_template",
-        "template": "E:\\GithubProject\\game_auto\\模板\\CJ进入对战-1.png",
+        "template": "模板\\CJ进入对战-1.png",
         "target_text": "进入对战",
         "enable_ocr_fallback": true,
         "confirm_type": "template_match",
@@ -183,7 +181,7 @@
         "clicks": 1,
         "post_delay_sec": 2.0,
         "confirm_templates": [
-          "E:\\GithubProject\\game_auto\\模板\\CJ进入对战-2.png"
+          "模板\\CJ进入对战-2.png"
         ],
         "confirm_timeout_sec": 15,
         "on_fail": "retry_step",
@@ -192,7 +190,7 @@
       {
         "name": "进入对战2",
         "action": "click_template",
-        "template": "E:\\GithubProject\\game_auto\\模板\\CJ进入对战-2.png",
+        "template": "模板\\CJ进入对战-2.png",
         "target_text": "一键刷任务",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -203,7 +201,9 @@
         "max_attempts": 2
       }
     ],
-    "close_process_on_finish": false
+    "close_process_on_finish": false,
+    "close_process_on_fail": false,
+    "_comment": "重聚=脱机挂机流程，跑完后必须保持运行，禁止开启任何自动关闭"
   },
   "NTE": {
     "enabled": true,
@@ -236,7 +236,7 @@
       {
         "name": "开始更新",
         "action": "click_template",
-        "template": "E:\\GithubProject\\game_auto\\模板\\异环-开始更新.png",
+        "template": "模板\\异环-开始更新.png",
         "target_text": "开始更新",
         "confirm_type": "none",
         "timeout_sec": 8,
@@ -249,7 +249,7 @@
       {
         "name": "等待开始游戏",
         "action": "wait_template",
-        "template": "E:\\GithubProject\\game_auto\\模板\\异环-开始游戏.png",
+        "template": "模板\\异环-开始游戏.png",
         "target_text": "开始游戏",
         "timeout_sec": 1200,
         "post_delay_sec": 1.0
@@ -257,7 +257,7 @@
       {
         "name": "开始游戏",
         "action": "click_template",
-        "template": "E:\\GithubProject\\game_auto\\模板\\异环-开始游戏.png",
+        "template": "模板\\异环-开始游戏.png",
         "target_text": "开始游戏",
         "confirm_type": "none",
         "timeout_sec": 180,
@@ -269,7 +269,7 @@
       {
         "name": "确定",
         "action": "click_template",
-        "template": "E:\\GithubProject\\game_auto\\模板\\异环-确定.png",
+        "template": "模板\\异环-确定.png",
         "search_scope": "screen",
         "confirm_type": "none",
         "timeout_sec": 45,
@@ -293,7 +293,7 @@
       {
         "name": "进入游戏",
         "action": "click_template",
-        "template": "E:\\GithubProject\\game_auto\\模板\\异环-进入游戏.png",
+        "template": "模板\\异环-进入游戏.png",
         "confirm_type": "disappear",
         "timeout_sec": 120,
         "clicks": 1,
@@ -304,5 +304,927 @@
       }
     ],
     "close_process_on_finish": false
+  },
+  "MINIMAX": {
+    "_comment": "2026-10-25 新版 UI（3.1.6）：签到入口改为左下角昵称 → 菜单「每日签到」→ 签到卡片。2026-10-26 修正两处：①卡片主按钮文案是「签到得 ⊙ 400」不是「立即签到」，旧文案导致这一步永远匹配不到、从来没人点过签到；②末步 UI 兜底弃用模板（minimax-今日已签到.png 与未签到的黑底「签到得 ⊙ 400」按钮在 TM_CCOEFF_NORMED 下 conf=0.95 假阳性），改 OCR 文案「今日已签到」。成败仍以 signin/claim 接口日志为准。",
+    "enabled": true,
+    "window_title_keywords": [],
+    "window_process_names": [
+      "MiniMax Code.exe"
+    ],
+    "startup_wait_sec": 15,
+    "match_scales": [
+      1.0,
+      1.25,
+      1.37,
+      0.8
+    ],
+    "match_confidences": [
+      0.92,
+      0.9
+    ],
+    "steps": [
+      {
+        "name": "点击左下角昵称",
+        "action": "click_template",
+        "template": "模板\\minimax-昵称.png",
+        "target_text": "MiniMax",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 10,
+        "clicks": 1,
+        "post_delay_sec": 1.2,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.0
+      },
+      {
+        "name": "悬停每日签到菜单",
+        "action": "click_template",
+        "hover": true,
+        "template": "模板\\minimax-每日签到菜单.png",
+        "target_text": "每日签到",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 10,
+        "post_delay_sec": 1.5,
+        "optional_if_missing": true,
+        "on_fail": "retry_prev",
+        "max_attempts": 2,
+        "search_interval_sec": 1.0
+      },
+      {
+        "name": "等待签到卡片",
+        "action": "wait_template",
+        "template": "",
+        "target_text": "连续签到",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 10,
+        "post_delay_sec": 0.5,
+        "optional_if_missing": true,
+        "on_fail": "retry_step",
+        "max_attempts": 1,
+        "search_interval_sec": 1.0
+      },
+      {
+        "name": "点击签到得按钮",
+        "action": "click_template",
+        "template": "",
+        "target_text": "签到得",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 8,
+        "clicks": 1,
+        "post_delay_sec": 1.5,
+        "optional_if_missing": true,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.0
+      },
+      {
+        "name": "日志确认签到",
+        "action": "wool_verify_log",
+        "source": "MINIMAX",
+        "ui_text": "今日已签到",
+        "timeout_sec": 30,
+        "on_fail": "fail"
+      }
+    ],
+    "close_process_on_finish": true,
+    "close_process_on_fail": true
+  },
+  "WORKBUDDY": {
+    "enabled": true,
+    "window_title_keywords": [
+      "WorkBuddy"
+    ],
+    "window_process_names": [
+      "WorkBuddy.exe"
+    ],
+    "reuse_existing_window": true,
+    "startup_wait_sec": 8,
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8
+    ],
+    "match_confidences": [
+      0.88,
+      0.84,
+      0.8
+    ],
+    "steps": [
+      {
+        "name": "点击左下角头像",
+        "action": "click_template",
+        "template": "模板\\hy4-左下角头像.png",
+        "target_text": "头像",
+        "enable_ocr_fallback": false,
+        "confirm_type": "none",
+        "timeout_sec": 10,
+        "clicks": 1,
+        "post_delay_sec": 1.2,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.0
+      },
+      {
+        "name": "点击菜单里的Buddy加油站",
+        "action": "click_template",
+        "template": "模板\\hy4-Buddy加油站菜单.png",
+        "target_text": "Buddy加油站",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 10,
+        "clicks": 1,
+        "post_delay_sec": 2.5,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.0
+      },
+      {
+        "name": "等待加油站页面的立即领取",
+        "action": "wait_template",
+        "template": "模板\\hy4-立即领取.png",
+        "target_text": "立即领取",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 30,
+        "post_delay_sec": 0.5,
+        "optional_if_missing": true,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.5
+      },
+      {
+        "name": "点击立即领取",
+        "_comment": "2026-10-25：领取接口约 6s 才回，原 text_change 在 +3s 单次检查必然误判；本步改为不确认，成败交给后续非 optional 的「今日已领取」验证。",
+        "action": "click_template",
+        "template": "模板\\hy4-立即领取.png",
+        "target_text": "立即领取",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 10,
+        "clicks": 1,
+        "post_delay_sec": 1.0,
+        "optional_if_missing": true,
+        "on_fail": "retry_step",
+        "max_attempts": 3,
+        "search_interval_sec": 1.0
+      },
+      {
+        "name": "重新点击左下角头像",
+        "_comment": "2026-10-27 实锤：点完「立即领取」后加油站页面会整个关闭退回聊天页，「今日已领取」必须重新导航才能看到。本步 optional——页面还开着（头像被盖住）时超时跳过，交给下一步。",
+        "action": "click_template",
+        "template": "模板\\hy4-左下角头像.png",
+        "target_text": "头像",
+        "enable_ocr_fallback": false,
+        "confirm_type": "none",
+        "timeout_sec": 6,
+        "clicks": 1,
+        "post_delay_sec": 1.2,
+        "optional_if_missing": true,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.0
+      },
+      {
+        "name": "重新点击菜单里的Buddy加油站",
+        "_comment": "同上：重新打开加油站页面再看「今日已领取」。页面还开着时菜单不存在，超时跳过。",
+        "action": "click_template",
+        "template": "模板\\hy4-Buddy加油站菜单.png",
+        "target_text": "Buddy加油站",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 6,
+        "clicks": 1,
+        "post_delay_sec": 2.5,
+        "optional_if_missing": true,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.0
+      },
+      {
+        "name": "确认今日已领取（导航失败或未领取都会失败）",
+        "action": "wait_template",
+        "template": "",
+        "target_text": "今日已领取",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 20,
+        "post_delay_sec": 0.5,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.5
+      }
+    ],
+    "close_process_on_finish": false,
+    "close_process_on_fail": false
+  },
+  "TRAE": {
+    "enabled": true,
+    "window_title_keywords": [],
+    "window_process_names": [
+      "Trae CN.exe"
+    ],
+    "startup_wait_sec": 10,
+    "reuse_existing_window": true,
+    "match_scales": [
+      1.0,
+      1.25,
+      1.4,
+      0.8
+    ],
+    "match_confidences": [
+      0.9
+    ],
+    "steps": [
+      {
+        "name": "等待左下角头像出现",
+        "action": "wait_template",
+        "template": "模板\\trae-用户头像.png",
+        "target_text": "用户",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 90,
+        "post_delay_sec": 0.5,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.5
+      },
+      {
+        "name": "点击左下角头像展开用户区",
+        "action": "click_template",
+        "template": "模板\\trae-用户头像.png",
+        "target_text": "用户",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 10,
+        "clicks": 1,
+        "post_delay_sec": 2.5,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.0
+      },
+      {
+        "name": "等待侧边栏签到按钮出现",
+        "action": "wait_template",
+        "template": "模板\\trae-签到.png",
+        "target_text": "签到",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 30,
+        "post_delay_sec": 0.5,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.5
+      },
+      {
+        "name": "点击侧边栏签到按钮",
+        "action": "click_template",
+        "template": "模板\\trae-签到.png",
+        "target_text": "签到",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 10,
+        "clicks": 1,
+        "post_delay_sec": 2.0,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.0
+      },
+      {
+        "name": "等待签到弹窗按钮出现",
+        "_comment": "2026-10-25：签到接口成功后不一定弹抽奖窗（当天日志已 claim 200 OK 但 3 分钟没弹窗）。抽奖弹窗只是附加奖励，改为 optional 短等，成败由末步日志核验决定。",
+        "action": "wait_template",
+        "template": "模板\\trae-签到弹窗.png",
+        "target_text": "签到参与抽奖",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 15,
+        "post_delay_sec": 0.5,
+        "optional_if_missing": true,
+        "on_fail": "retry_step",
+        "max_attempts": 1,
+        "search_interval_sec": 1.5
+      },
+      {
+        "name": "点击签到参与抽奖",
+        "action": "click_template",
+        "template": "模板\\trae-签到弹窗.png",
+        "target_text": "签到参与抽奖",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 10,
+        "clicks": 1,
+        "post_delay_sec": 2.0,
+        "optional_if_missing": true,
+        "on_fail": "retry_step",
+        "max_attempts": 1,
+        "search_interval_sec": 1.0
+      },
+      {
+        "name": "日志确认签到",
+        "action": "wool_verify_log",
+        "source": "TRAE",
+        "timeout_sec": 30,
+        "on_fail": "fail"
+      }
+    ],
+    "close_process_on_finish": true,
+    "close_process_on_fail": false
+  },
+  "QODER": {
+    "enabled": true,
+    "not_before": "10:00",
+    "window_title_keywords": [
+      "Qoder"
+    ],
+    "window_process_names": [
+      "Qoder.exe"
+    ],
+    "reuse_existing_window": true,
+    "startup_wait_sec": 12,
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8
+    ],
+    "match_confidences": [
+      0.97,
+      0.96,
+      0.95
+    ],
+    "steps": [
+      {
+        "name": "打开权益中心",
+        "action": "qoder_open_campaign",
+        "timeout_sec": 20,
+        "on_fail": "fail"
+      },
+      {
+        "name": "等待领取按钮",
+        "action": "wait_template",
+        "template": "模板\\qoder-领取.png",
+        "target_text": "领取",
+        "enable_ocr_fallback": false,
+        "confirm_type": "none",
+        "timeout_sec": 30,
+        "post_delay_sec": 0.5,
+        "optional_if_missing": true,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.5
+      },
+      {
+        "name": "点击领取",
+        "action": "click_template",
+        "template": "模板\\qoder-领取.png",
+        "target_text": "领取",
+        "enable_ocr_fallback": false,
+        "confirm_type": "disappear",
+        "confirm_timeout_sec": 45,
+        "timeout_sec": 15,
+        "clicks": 1,
+        "post_delay_sec": 1.0,
+        "optional_if_missing": true,
+        "on_fail": "retry_step",
+        "max_attempts": 3,
+        "search_interval_sec": 1.0
+      },
+      {
+        "name": "确认已领取",
+        "action": "qoder_verify_claim",
+        "timeout_sec": 60,
+        "on_fail": "fail"
+      }
+    ],
+    "close_process_on_finish": false,
+    "close_process_on_fail": false
+  },
+  "HSR_MONTHLY": {
+    "enabled": true,
+    "exe_from_app": "HonkaiStarRail",
+    "window_title_keywords": [],
+    "window_process_names": [
+      "StarRail.exe"
+    ],
+    "startup_wait_sec": 15,
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8
+    ],
+    "match_confidences": [
+      0.88,
+      0.84,
+      0.8
+    ],
+    "steps": [
+      {
+        "name": "进入崩铁主界面",
+        "action": "starrail_enter_main",
+        "login_timeout_sec": 600,
+        "timeout_sec": 600,
+        "post_delay_sec": 3.0,
+        "on_fail": "fail",
+        "max_attempts": 1,
+        "_comment": "复用 StarRailLauncher 的进入方法（复刻三月七）：点击进入 → 月卡/欢迎弹窗 → 主界面特征连续 2 次命中。已在主界面时首轮即通过。"
+      },
+      {
+        "name": "余烬兑换每月兑换",
+        "action": "monthly_exchange",
+        "log_label": "余烬兑换",
+        "shop_entry_text": "商店",
+        "nav_text": "兑换商店",
+        "nav_region_frac": [
+          0.0,
+          0.18,
+          0.2,
+          0.95
+        ],
+        "tab_text": "余烬兑换",
+        "tab_template": "模板\\崩铁-余烬兑换页签.png",
+        "tab_between_texts": [
+          "星芒兑换",
+          "星尘之礼"
+        ],
+        "forbidden_texts": [
+          "银河铁道之夜",
+          "时节不居",
+          "但战斗还未结束",
+          "无可取代的东西",
+          "以世界之名"
+        ],
+        "confirm_template": "",
+        "exit_marker_template": "模板\\崩铁-主界面.png",
+        "timeout_sec": 600,
+        "post_delay_sec": 2.0,
+        "on_fail": "fail",
+        "max_attempts": 1,
+        "items": [],
+        "_comment": "ESC → 商店 → 左侧兑换商店 → 顶部余烬兑换（未选中态模板消失才算切换成功，点两次还不行就整步失败）。用户 2026-10-25 强调：星芒兑换的五星光锥（银河铁道之夜/时节不居/但战斗还未结束/无可取代的东西/以世界之名）一定要消失——forbidden_texts 在购买前做 OCR 反向拦截，看到任意一个就失败不买。items 为空时只记「待定」且不打开商店。confirm_template 故意留空：余烬兑换的确认弹窗尚未截图，补清单时必须同时补弹窗截图再填，不要凭猜点。"
+      }
+    ],
+    "close_process_on_finish": false
+  },
+  "ZZZ_MONTHLY": {
+    "enabled": true,
+    "exe_from_app": "ZenlessZoneZero",
+    "window_title_keywords": [],
+    "window_process_names": [
+      "ZenlessZoneZero.exe"
+    ],
+    "startup_wait_sec": 15,
+    "match_scales": [
+      1.0,
+      1.25,
+      1.5,
+      0.8,
+      0.67
+    ],
+    "match_confidences": [
+      0.88,
+      0.84,
+      0.8
+    ],
+    "steps": [
+      {
+        "name": "点击进入游戏",
+        "action": "click_template",
+        "template": "",
+        "target_text": "点击进入游戏",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 300,
+        "clicks": 1,
+        "post_delay_sec": 3.0,
+        "on_fail": "retry_step",
+        "max_attempts": 2
+      },
+      {
+        "name": "等待进入主界面",
+        "action": "wait_template",
+        "template": "模板\\绝区零-主界面-电台.png",
+        "target_text": "星期",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 600,
+        "post_delay_sec": 5.0,
+        "on_fail": "retry_prev",
+        "max_attempts": 3,
+        "_comment": "大世界特征：OneDragon normal_world/map 模板 + OCR 兜底「星期」。未匹配则回退上一步重试（客户端内可能还有第二层进入游戏按钮），最多 3 轮。"
+      },
+      {
+        "name": "信号残响每月兑换",
+        "action": "monthly_exchange",
+        "log_label": "信源兑换",
+        "shop_entry_template": "模板\\绝区零-商城入口.png",
+        "shop_entry_text": "商城",
+        "nav_text": "信源清单",
+        "tab_text": "信号残响",
+        "tab_template": "模板\\绝区零-信号残响页签.png",
+        "forbidden_texts": [
+          "硫磺石",
+          "燃狱齿轮",
+          "嵌合编译器",
+          "啜泣摇篮",
+          "嚼泣摇篮"
+        ],
+        "confirm_template": "模板\\绝区零-商店-确认.png",
+        "exit_marker_template": "模板\\绝区零-主菜单按钮.png",
+        "timeout_sec": 600,
+        "post_delay_sec": 2.0,
+        "on_fail": "fail",
+        "max_attempts": 1,
+        "items": [],
+        "_comment": "主界面 ESC → 商城(24HOUR) → 信源清单 → 信号残响，每月小额兑换。用户 2026-10-25 要求屏蔽信号余波的商品（硫磺石/燃狱齿轮/嵌合编译器/啜泣摇篮）：forbidden_texts 在购买前 OCR 反向拦截，看到即失败不买。注意 RapidOCR 把「啜泣摇篮」认成「嚼泣摇篮」（conf 0.61），两个写法都配上。items 为空时只记「待定」且不点开商城；具体买什么下月再定（项写法 {\"name\", \"template\"?, \"ocr_text\"?, \"count\"?}，无模板时用商品名 OCR 定位）。兑换交互复用后勤商店「点商品→确认」，信号残响页尚未实跑，首次补清单后按日志校验弹窗形态。"
+      },
+      {
+        "name": "打开功能菜单",
+        "action": "click_template",
+        "template": "模板\\绝区零-主菜单按钮.png",
+        "target_text": "",
+        "enable_ocr_fallback": false,
+        "confirm_type": "none",
+        "timeout_sec": 30,
+        "clicks": 1,
+        "post_delay_sec": 2.5,
+        "on_fail": "retry_step",
+        "max_attempts": 3,
+        "_comment": "主界面右下角省略号按钮（OneDragon normal_world/message 模板），打开丽都功能菜单。"
+      },
+      {
+        "name": "点击后勤商店",
+        "action": "click_template",
+        "template": "模板\\绝区零-后勤商店入口.png",
+        "target_text": "后勤商店",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 60,
+        "clicks": 1,
+        "post_delay_sec": 4.0,
+        "on_fail": "retry_step",
+        "max_attempts": 3
+      },
+      {
+        "name": "等待商店界面",
+        "action": "wait_template",
+        "template": "模板\\绝区零-商店-哨站后勤页签.png",
+        "target_text": "哨站后勤",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 90,
+        "post_delay_sec": 2.0,
+        "on_fail": "retry_step",
+        "max_attempts": 3
+      },
+      {
+        "name": "后勤商店采购",
+        "action": "zzz_shop_buy",
+        "confirm_template": "模板\\绝区零-商店-确认.png",
+        "timeout_sec": 1800,
+        "post_delay_sec": 3.0,
+        "on_fail": "fail",
+        "max_attempts": 1,
+        "shop_groups": [
+          {
+            "name": "哨站后勤",
+            "tab_selected_template": "模板\\绝区零-商店-哨站后勤页签.png",
+            "items": [
+              {
+                "name": "原装母带",
+                "template": "模板\\绝区零-商店-原装母带.png",
+                "count": 2
+              },
+              {
+                "name": "日常业绩",
+                "template": "模板\\绝区零-商店-日常业绩.png",
+                "count": 10
+              },
+              {
+                "name": "邦布券",
+                "template": "模板\\绝区零-商店-邦布券.png",
+                "count": 5
+              },
+              {
+                "name": "调律校音器",
+                "template": "模板\\绝区零-商店-调律校音器.png",
+                "count": 1
+              }
+            ]
+          },
+          {
+            "name": "协会物资",
+            "tab_template": "模板\\绝区零-商店-协会物资页签.png",
+            "items": [
+              {
+                "name": "日常业绩",
+                "template": "模板\\绝区零-商店-日常业绩.png",
+                "count": 10
+              },
+              {
+                "name": "邦布券",
+                "template": "模板\\绝区零-商店-邦布券.png",
+                "count": 5
+              },
+              {
+                "name": "调律校音器",
+                "template": "模板\\绝区零-商店-调律校音器.png",
+                "count": 1
+              },
+              {
+                "name": "仓鼠笼访问器",
+                "template": "模板\\绝区零-商店-仓鼠笼访问器.png",
+                "ocr_text": "仓鼠笼访问器",
+                "count": 1
+              }
+            ]
+          }
+        ],
+        "_comment": "交互：点商品→弹兑换确认→点确认，默认每次1个，买N个=N轮。已达上限点商品不出弹窗则跳过。仓鼠笼访问器暂无模板图，走 ocr_text OCR 兜底（点文字中心，整卡热区）；用户 2026-10-21 确认「音擎残芯」不是音擎能源模块且本月已购，待用户提供该商品截图后再加项。"
+      }
+    ],
+    "close_process_on_finish": false
+  },
+  "GENSHIN_MONTHLY": {
+    "enabled": true,
+    "_comment": "原神每月任务：直接启动游戏本体（exe_from_game 走 apps.GenshinImpact._discovery.game_exe_path，不能走 exe_from_app——那只配了 BetterGI）→ genshin_enter_main 进主界面 → ESC 商城 → 尘辉兑换 → 星尘兑换 每月采购。星尘兑换清单 items 暂空（用户 2026-10-25 说明下月再定）；空清单只记待定且不打开商城。",
+    "exe_from_game": "GenshinImpact",
+    "window_title_keywords": [
+      "原神",
+      "YuanShen",
+      "Genshin"
+    ],
+    "window_process_names": [
+      "YuanShen.exe"
+    ],
+    "startup_wait_sec": 15,
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8,
+      1.5,
+      0.67
+    ],
+    "match_confidences": [
+      0.9,
+      0.88,
+      0.85
+    ],
+    "steps": [
+      {
+        "name": "进入原神主界面",
+        "action": "genshin_enter_main",
+        "timeout_sec": 900,
+        "login_timeout_sec": 600,
+        "post_delay_sec": 3.0,
+        "on_fail": "retry_step",
+        "max_attempts": 2
+      },
+      {
+        "name": "星尘兑换每月兑换",
+        "action": "monthly_exchange",
+        "log_label": "星尘兑换",
+        "shop_entry_text": "商城",
+        "nav_text": "尘辉兑换",
+        "tab_text": "星尘兑换",
+        "tab_template": "模板\\原神-星尘兑换页签.png",
+        "tab_between_texts": [
+          "星辉兑换",
+          "原石购买"
+        ],
+        "tab_selected_brightness": 150,
+        "forbidden_texts": [
+          "宗室长剑",
+          "宗室大剑",
+          "宗室猎枪",
+          "宗室秘法录",
+          "宗室长弓"
+        ],
+        "confirm_template": "",
+        "exit_marker_template": "模板\\原神-主界面.png",
+        "timeout_sec": 600,
+        "post_delay_sec": 2.0,
+        "on_fail": "fail",
+        "max_attempts": 1,
+        "items": [],
+        "_comment": "用户 2026-10-25 强调「一定要确认在星尘兑换（不能看到宗室长剑/大剑/猎枪/秘法录/长弓）」：页签模板未选中态消失 + 亮度阈值 150（实测选中 186 vs 未选中 103-114，原神的未选中页签背景比绝区零/崩铁亮，不能用默认 110）+ 宗室武器 OCR 反向拦截，三保险；任一不过整步失败、不购买。confirm_template 故意留空：星尘兑换的确认弹窗尚未截图，下月补清单时必须同时补弹窗截图再填，不要凭猜点。"
+      }
+    ],
+    "close_process_on_finish": false
+  },
+  "WuwaLauncher": {
+    "_comment": "鸣潮官方启动器前置流程：启动 launcher.exe → 检测并处理游戏更新 → 点击「进入游戏」→ 等游戏进程出现。由 apps.WutheringWaves.prelaunch_flow 引用；本流程跑完后 automation_controller 才启动 ok-ww，从而保证 ok-ww 启动时游戏已在运行。更新检测步骤 optional_if_missing，无更新最多多等 8 秒。",
+    "enabled": true,
+    "exe_path": "E://Program Files//Game//Wuthering Waves//launcher.exe",
+    "window_title_keywords": [
+      "wuthering",
+      "waves",
+      "鸣潮",
+      "launcher"
+    ],
+    "window_process_names": [
+      "launcher.exe",
+      "launcher_main.exe",
+      "Wuthering Waves.exe"
+    ],
+    "reuse_existing_window": true,
+    "startup_wait_sec": 8,
+    "enable_ocr_fallback": true,
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8,
+      1.5,
+      0.67
+    ],
+    "match_confidences": [
+      0.92,
+      0.88,
+      0.84,
+      0.8
+    ],
+    "close_process_on_finish": false,
+    "steps": [
+      {
+        "name": "游戏更新",
+        "action": "click_template",
+        "template": "模板\\鸣潮-更新.png",
+        "target_text": "更新",
+        "search_scope": "window",
+        "confirm_type": "none",
+        "timeout_sec": 8,
+        "clicks": 1,
+        "post_delay_sec": 5.0,
+        "optional_if_missing": true,
+        "on_fail": "retry_step",
+        "max_attempts": 2
+      },
+      {
+        "name": "等待更新完成",
+        "action": "wait_template",
+        "template": "模板\\鸣潮-进入游戏.png",
+        "target_text": "进入游戏",
+        "search_scope": "window",
+        "timeout_sec": 3600,
+        "post_delay_sec": 2.0,
+        "on_fail": "retry_step",
+        "max_attempts": 3
+      },
+      {
+        "name": "进入游戏",
+        "action": "click_template",
+        "template": "模板\\鸣潮-进入游戏.png",
+        "target_text": "进入游戏",
+        "search_scope": "window",
+        "confirm_type": "none",
+        "timeout_sec": 180,
+        "clicks": 1,
+        "post_delay_sec": 3.0,
+        "on_fail": "retry_step",
+        "max_attempts": 10
+      },
+      {
+        "name": "游戏启动确认",
+        "action": "wait_process",
+        "process_name": "Wuthering Waves.exe",
+        "target_text": "Wuthering Waves.exe",
+        "timeout_sec": 600,
+        "switch_window_to_process": false,
+        "post_delay_sec": 4.0,
+        "on_fail": "retry_step",
+        "max_attempts": 3
+      }
+    ]
+  },
+  "NikkiLauncher": {
+    "_comment": "无限暖暖前置流程：启动叠纸启动器 → 处理更新/点击启动游戏 → 等游戏窗口 → OCR 登录页 → 加载弹窗 → 左下角聊天气泡（主界面特征）。由 apps.InfinityNikki.prelaunch_flow 引用；流程结束后 whimbox 会检测到已在主界面并跳过自己的启动/进入步骤。",
+    "enabled": true,
+    "exe_path": "E://Program Files//Game//InfinityNikki Launcher//launcher.exe",
+    "window_title_keywords": [
+      "无限暖暖",
+      "Infinity Nikki"
+    ],
+    "window_process_names": [
+      "launcher.exe",
+      "xstarter.exe",
+      "launcher_main.exe",
+      "X6Game-Win64-Shipping.exe"
+    ],
+    "reuse_existing_window": true,
+    "startup_wait_sec": 5,
+    "enable_ocr_fallback": true,
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8,
+      1.5,
+      0.67
+    ],
+    "match_confidences": [
+      0.88,
+      0.84,
+      0.8
+    ],
+    "close_process_on_finish": false,
+    "close_process_on_fail": false,
+    "steps": [
+      {
+        "name": "进入无限暖暖主界面",
+        "action": "nikki_enter_game",
+        "target_text": "主界面",
+        "timeout_sec": 900,
+        "launcher_timeout_sec": 60,
+        "update_timeout_sec": 3600,
+        "game_window_timeout_sec": 300,
+        "login_timeout_sec": 180,
+        "loading_timeout_sec": 240,
+        "on_fail": "retry_step",
+        "max_attempts": 2
+      }
+    ]
+  },
+  "StarRailLauncher": {
+    "_comment": "崩铁进入主界面前置流程，方法复刻自 March7th Assistant v2.2.0.3（2026-10-24）：直接启动 StarRail.exe（不走官方启动器）→ 「点击进入」模板/OCR 点击 → 主界面特征 main.png 连续 2 次命中；途中点掉 开始游戏/月卡/欢迎/消息 弹窗，OCR 见「前往启动器」字样快速失败（客户端未更新）。默认不接线：apps.HonkaiStarRail.prelaunch_flow 未配置，一条龙仍由 March7th 自己启动游戏；要启用时在 app_config.json 的 apps.HonkaiStarRail 加 \"prelaunch_flow\": \"StarRailLauncher\"。",
+    "enabled": true,
+    "exe_path": "E://Program Files//Game//Star Rail//Game//StarRail.exe",
+    "window_title_keywords": [
+      "崩坏：星穹铁道",
+      "崩坏:星穹铁道",
+      "Star Rail",
+      "StarRail"
+    ],
+    "window_process_names": [
+      "StarRail.exe"
+    ],
+    "reuse_existing_window": true,
+    "startup_wait_sec": 5,
+    "enable_ocr_fallback": true,
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8,
+      1.5,
+      0.67
+    ],
+    "match_confidences": [
+      0.92,
+      0.9
+    ],
+    "close_process_on_finish": false,
+    "close_process_on_fail": false,
+    "steps": [
+      {
+        "name": "进入崩铁主界面",
+        "action": "starrail_enter_main",
+        "target_text": "主界面",
+        "timeout_sec": 900,
+        "login_timeout_sec": 600,
+        "on_fail": "retry_step",
+        "max_attempts": 2
+      }
+    ]
+  },
+  "GenshinLauncher": {
+    "_comment": "原神进入主界面前置流程，方法复刻自 BetterGI 0.66 GameLoading 任务（2026-10-24）：直接启动 YuanShen.exe（不走米哈游启动器）→ 「点击进入/进入游戏」模板+OCR 点击 → 空月祝福弹窗点「领取」→ 主界面特征（左上角派蒙图标 paimon_menu）连续 2 次命中。默认不接线：apps.GenshinImpact.prelaunch_flow 未配置，一条龙仍由 BetterGI 自己启动游戏；要启用时在 app_config.json 的 apps.GenshinImpact 加 \"prelaunch_flow\": \"GenshinLauncher\"。",
+    "enabled": true,
+    "exe_path": "D://Program Files//Game//Genshin Impact Game//YuanShen.exe",
+    "window_title_keywords": [
+      "原神",
+      "YuanShen",
+      "Genshin"
+    ],
+    "window_process_names": [
+      "YuanShen.exe"
+    ],
+    "reuse_existing_window": true,
+    "startup_wait_sec": 5,
+    "enable_ocr_fallback": true,
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8,
+      1.5,
+      0.67
+    ],
+    "match_confidences": [
+      0.88,
+      0.85
+    ],
+    "close_process_on_finish": false,
+    "close_process_on_fail": false,
+    "steps": [
+      {
+        "name": "进入原神主界面",
+        "action": "genshin_enter_main",
+        "target_text": "主界面",
+        "timeout_sec": 900,
+        "login_timeout_sec": 600,
+        "on_fail": "retry_step",
+        "max_attempts": 2
+      }
+    ]
   }
 }

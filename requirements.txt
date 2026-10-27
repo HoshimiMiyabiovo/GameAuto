@@ -17,3 +17,7 @@ openpyxl>=3.1.0
 rsa>=4.9
 genshin>=1.7
 pycryptodome>=3.20.0
+pynput>=1.8.0
+fastapi>=0.110
+uvicorn[standard]>=0.29
+websockets>=12.0

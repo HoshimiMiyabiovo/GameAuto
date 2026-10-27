@@ -16,18 +16,24 @@ Item {
     property bool isPearpal: false
 
     Component.onCompleted: {
-        bridge.loadNikkiGacha()
+        console.log("[DBG] view onCompleted entered, bridge=", bridge)
+        try {
+            bridge.loadNikkiGacha()
+            console.log("[DBG] loadNikkiGacha() returned")
+        } catch(e) { console.log("[DBG] loadNikkiGacha THROW:", e) }
         bridge.loadCredentials()
     }
 
     Connections {
         target: bridge
         function onNikkiGachaChanged(jsonStr) {
-            try { root.gachaData = JSON.parse(jsonStr || "{}") } catch(e) { root.gachaData = ({}) }
+            console.log("[DBG] onNikkiGachaChanged called, len=", (jsonStr||"").length)
+            try { root.gachaData = JSON.parse(jsonStr || "{}") } catch(e) { console.log("[DBG] parse FAIL:", e); root.gachaData = ({}) }
             root.overview = root.gachaData.overview || {}
             root.pools = root.gachaData.pools || []
             root.isPearpal = (root.overview.mode === "pearpal")
             root.updateDisplay()
+            console.log("[DBG] after update: pools=", root.pools.length, "mode=", root.overview.mode)
         }
         function onCredentialsChanged(jsonStr) {
             try {
@@ -97,6 +103,56 @@ Item {
                         color: "#6d6257"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
+                    }
+
+                    // ── 五星套装汇总（全局，按套装聚合）──
+                    ColumnLayout {
+                        visible: root.isPearpal && (root.overview.outfit_summary || []).length > 0
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        HusText {
+                            text: "★ 五星套装汇总（" + (root.overview.outfit_summary || []).length + " 个套装 / "
+                                  + (root.overview.five_count || 0) + " 件五星）"
+                            font.pixelSize: Math.round(15 * root.fs)
+                            font.bold: true
+                            color: "#a8741f"
+                        }
+                        Repeater {
+                            model: root.overview.outfit_summary || []
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 2
+                                RowLayout {
+                                    spacing: 8
+                                    HusText {
+                                        text: "★ " + (modelData.outfit_name || "?") + "（" + (modelData.parts || []).length + " 件）"
+                                        font.pixelSize: Math.round(13 * root.fs)
+                                        font.bold: true
+                                        color: "#d4a017"
+                                    }
+                                    HusText {
+                                        visible: !!modelData.min_pity
+                                        text: "最低 " + modelData.min_pity + " 抽出货"
+                                        font.pixelSize: Math.round(11 * root.fs)
+                                        color: "#2f7d4a"
+                                    }
+                                }
+                                HusText {
+                                    text: {
+                                        var parts = modelData.parts || []
+                                        var names = []
+                                        for (var i = 0; i < parts.length; i++) names.push(parts[i].name || "?")
+                                        return "　　" + names.join("、")
+                                    }
+                                    font.pixelSize: Math.round(12 * root.fs)
+                                    color: "#6d6257"
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
+                                    Layout.leftMargin: Math.round(14 * root.fs)
+                                }
+                            }
+                        }
                     }
 
                     Repeater {
@@ -175,6 +231,39 @@ Item {
                                     color: "#6d6257"
                                     Layout.fillWidth: true
                                     wrapMode: Text.Wrap
+                                }
+
+                                // 本池 5★ 套装聚合（比逐件列表更直观）
+                                ColumnLayout {
+                                    visible: root.isPearpal && (modelData.outfit_summary || []).length > 0
+                                    Layout.fillWidth: true
+                                    spacing: 2
+                                    HusText {
+                                        text: "本池 5★ 套装（" + (modelData.outfit_summary || []).length + "）"
+                                        font.pixelSize: Math.round(13 * root.fs)
+                                        font.bold: true
+                                        color: "#a8741f"
+                                        Layout.topMargin: 4
+                                    }
+                                    Repeater {
+                                        model: modelData.outfit_summary || []
+                                        HusText {
+                                            text: {
+                                                var parts = modelData.parts || []
+                                                var names = []
+                                                for (var i = 0; i < parts.length; i++) {
+                                                    names.push((parts[i].name || "?") + (parts[i].part_type ? "·" + parts[i].part_type : ""))
+                                                }
+                                                var pity = modelData.min_pity ? ("　最低 " + modelData.min_pity + " 抽") : ""
+                                                return "★ " + (modelData.outfit_name || "?") + "（" + parts.length + "件）" + pity + "：" + names.join("、")
+                                            }
+                                            font.pixelSize: Math.round(12 * root.fs)
+                                            color: "#6d6257"
+                                            wrapMode: Text.Wrap
+                                            Layout.fillWidth: true
+                                            Layout.leftMargin: Math.round(10 * root.fs)
+                                        }
+                                    }
                                 }
 
                                 // 5★ 出货历史标题 (pearpal 模式才有 rarity 信息)

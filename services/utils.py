@@ -65,3 +65,32 @@ def get_user_selection() -> List[Tuple[str, str]]:
             return selected_apps
         print(f"输入无效，请输入{code_len}位由0和1组成的数字代码")
 # qBittorrent 可以移到 controller 或这里
+
+def read_file_with_timeout(path, offset: int, encoding: str = "utf-8",
+                           timeout: float = 10.0):
+    """带超时的文件增量读取。返回 (chunk, error)；超时返回 (None, None)。
+
+    用途：日志 watcher 轮询读取。USB/机械盘 IO 卡住时同步 read 会把
+    整个 watcher/任务线程钉死（2026-10-15 复盘），读线程为 daemon，
+    超时后即使仍挂起也不阻塞进程退出。
+    """
+    import threading
+
+    result: Dict[str, object] = {}
+
+    def _worker():
+        try:
+            with open(path, "r", encoding=encoding, errors="ignore") as fh:
+                fh.seek(offset)
+                result["chunk"] = fh.read()
+        except OSError as exc:
+            result["error"] = exc
+        except Exception as exc:  # 解码等异常不当 IO 卡死处理
+            result["error"] = exc
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        return None, None
+    return result.get("chunk"), result.get("error")

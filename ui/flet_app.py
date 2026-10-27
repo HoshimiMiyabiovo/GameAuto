@@ -6912,3 +6912,7 @@ def run_flet_gui(dep_report=None):
         ft.run(main, **app_kwargs)
     else:
         ft.app(target=main, **app_kwargs)
+
+
+if __name__ == "__main__":
+    run_flet_gui()

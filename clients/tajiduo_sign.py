@@ -265,6 +265,20 @@ class TajiduoClient:
             return j.get("data") or []
         return []
 
+    def fetch_role_home(self, role_id) -> Dict[str, Any]:
+        """游戏名片聚合数据：体力/城市体力/每日活跃度（dayvalue）等。
+
+        数据源是塔吉多 H5 游戏名片页（webstatic.tajiduo.com/bbs/yh-game-record）
+        的同款接口，2026-10-24 从其前端 bundle 挖掘并实测可用：
+        GET /apihub/awapi/yh/roleHome?roleId=（H5 请求头，凭据同签到）。
+        返回 data 字典，失败返回空 dict。
+        """
+        _, j = self._h5_request("GET", "/apihub/awapi/yh/roleHome",
+                                query={"roleId": str(role_id)})
+        if _is_ok(j):
+            return j.get("data") or {}
+        return {}
+
     # ------------------------------------------------------------------
     # 单个任务
     # ------------------------------------------------------------------
@@ -394,6 +408,43 @@ class TajiduoClient:
         if _is_ok(j):
             return j.get("data", {})
         return {}
+
+    def game_signin_states(self) -> List[Dict[str, Any]]:
+        """只读查询各游戏的签到状态（不执行签到）。
+
+        返回 [{game, game_id, signed, days, role_name, level, server_name}]。
+        角色信息来自 getGameRecordCard，签到状态来自 /apihub/awapi/signin/state。
+        """
+        states: List[Dict[str, Any]] = []
+        for card in (self.fetch_game_cards() or []):
+            if not isinstance(card, dict):
+                continue
+            gid = card.get("gameId")
+            gname = card.get("gameName") or f"gid={gid}"
+            role = card.get("bindRoleInfo") or {}
+            entry: Dict[str, Any] = {
+                "game": gname,
+                "game_id": gid,
+                "signed": False,
+                "days": 0,
+                "role_name": role.get("roleName", ""),
+                "level": role.get("lev", ""),
+                "server_name": role.get("serverName", ""),
+            }
+            if gid is None:
+                states.append(entry)
+                continue
+            try:
+                _, st = self._h5_request("GET", "/apihub/awapi/signin/state",
+                                         query={"gameId": str(gid)})
+                if _is_ok(st):
+                    d = st.get("data", {}) or {}
+                    entry["signed"] = bool(d.get("todaySign"))
+                    entry["days"] = int(d.get("days") or 0)
+            except Exception as exc:  # noqa: BLE001 - 单个游戏查不到不影响其他
+                LOGGER.debug("[塔吉多] %s 签到状态查询失败: %s", gname, exc)
+            states.append(entry)
+        return states
 
 
 # ---------------------------------------------------------------------------

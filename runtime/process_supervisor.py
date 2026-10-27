@@ -3,6 +3,7 @@ import logging
 import ctypes
 import time
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -179,7 +180,12 @@ class ProcessSupervisor:
         logger.info(f"{role}已终止: {name} (PID: {pid})")
 
     @staticmethod
-    def safe_kill_process(pid: int, timeout: int = 10):
+    def safe_kill_process(pid: int, timeout: int = 3):
+        """终止进程及其所有子进程。
+
+        子进程并行终止，避免进程树层级深时累计等待时间过长。
+        timeout 从 10 秒降到 3 秒——这是强制清理场景，不需要给脚本太多温和退出时间。
+        """
         logger = logging.getLogger("GameAutomation")
         try:
             proc = psutil.Process(pid)
@@ -194,7 +200,12 @@ class ProcessSupervisor:
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             children = []
 
-        for child in children:
-            ProcessSupervisor._terminate_process(child, timeout, logger, role="子进程")
+        # 并行终止所有子进程，避免串行累计超时
+        if children:
+            with ThreadPoolExecutor(max_workers=min(8, len(children))) as executor:
+                list(executor.map(
+                    lambda child: ProcessSupervisor._terminate_process(child, timeout, logger, role="子进程"),
+                    children,
+                ))
 
         ProcessSupervisor._terminate_process(proc, timeout, logger)

@@ -22,8 +22,15 @@ WORKFLOW_DB_PATH = str(PROJECT_WORKFLOW_DB_PATH)
 
 MIN_RUN_TIME = 300
 CHECK_INTERVAL = 10
+# 游戏收到关闭指令后，进程仍在优雅关闭（存盘/清理）的宽限秒数。
+# 超过该宽限仍无可见窗口，则强制结束游戏与脚本进程树，避免进程在后台残留过久。
+GAME_CLOSE_GRACE_SEC = 20
+# 游戏关闭后某些游戏会重新弹出原生启动器/更新窗，该进程不在游戏进程树内，
+# 若残留会抢焦点/挡点击干扰下一个脚本。收尾阶段扫杀它的轮询等待秒数。
+POST_CLOSE_LAUNCHER_WAIT = 4
 DEBUG_MODE = True
-BACKUP_COUNT = 5
+# 0 = 永久保留历史日志（TimedRotatingFileHandler 在 backupCount<=0 时不删除旧文件）
+BACKUP_COUNT = 0
 
 APP_ORDER = list(DEFAULT_APP_ORDER)
 QBITTORRENT: Dict[str, str] = copy.deepcopy(DEFAULT_QBITTORRENT)
@@ -33,10 +40,20 @@ APPS: Dict[str, Dict] = copy.deepcopy(DEFAULT_APPS)
 def apply_runtime_config(config: Optional[Dict] = None) -> Dict:
     runtime_config = copy.deepcopy(config or cm.load())
     runtime_config = apply_runtime_discovery(runtime_config)
-    app_order, apps = merge_launch_apps(
-        runtime_config.get("app_order") or DEFAULT_APP_ORDER,
-        runtime_config.get("apps") or DEFAULT_APPS,
-    )
+    cfg_order = list(runtime_config.get("app_order") or DEFAULT_APP_ORDER)
+    cfg_apps = copy.deepcopy(runtime_config.get("apps") or DEFAULT_APPS)
+    # 补入 DEFAULT_APPS 中存在但 app_config.json 中缺失的新游戏，
+    # 这样新增游戏无需手动修改 app_config.json 即可出现在 GUI 列表
+    for app_key, app_cfg in DEFAULT_APPS.items():
+        if app_key not in cfg_apps:
+            cfg_apps[app_key] = copy.deepcopy(app_cfg)
+        if app_key not in cfg_order:
+            cfg_order.append(app_key)
+    app_order, apps = merge_launch_apps(cfg_order, cfg_apps)
+    # 已下线任务：彻底移除归龙潮，避免旧配置残留仍显示
+    apps.pop("GuiLongChao", None)
+    if "GuiLongChao" in app_order:
+        app_order = [k for k in app_order if k != "GuiLongChao"]
     qbittorrent = runtime_config.get("qbittorrent") or DEFAULT_QBITTORRENT
 
     runtime_config["app_order"] = list(app_order)

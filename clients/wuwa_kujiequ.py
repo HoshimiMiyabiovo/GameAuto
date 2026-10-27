@@ -274,6 +274,7 @@ def fetch_daily_data(profile: WuwaKujiequProfile) -> Dict[str, Any]:
         "daily_tasks": daily_tasks,
         "store_energy": _normalize_detail(data.get("storeEnergyData")),
         "weekly": _normalize_detail(data.get("weeklyData")),
+        "weekly_rouge": _normalize_detail(data.get("weeklyRougeData")),
         "tower": _normalize_detail(data.get("towerData")),
         "slash_tower": _normalize_detail(data.get("slashTowerData")),
         "battle_pass": battle_pass,

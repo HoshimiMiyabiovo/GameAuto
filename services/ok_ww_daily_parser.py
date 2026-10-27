@@ -44,6 +44,7 @@ CANNOT_RE = re.compile(r"DailyTask:can not (.+), maybe ended")
 
 
 def _today_key() -> str:
+    """今天的日期键（按 RESET_HOUR=4 分界，凌晨 4 点前算前一天）。"""
     from datetime import datetime
     now = datetime.now()
     if now.hour < RESET_HOUR:

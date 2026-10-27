@@ -1,3 +1,31 @@
+"""路径自动发现与缓存（"配置自动填空"器）。
+
+解决的核心问题：项目要启动多款游戏与第三方自动化脚本（BetterGI/ok-ww/ok-ef/
+whimbox/March7th…），每个都有启动器路径、游戏进程名、日志目录要配——本模块在
+任务启动前（prepare_app_for_runtime，由 automation_controller 调用）自动
+找出、验证、缓存这些路径，游戏搬家/更新导致路径失效时自愈。
+
+**四层解析瀑布**（_discover_launcher_path，按可靠性递减）：
+  1. 配置里已有且文件存在的路径 → 直接用；
+  2. `_discovery` 缓存（app_config.json 每个应用下的隐藏键）命中 → 用缓存；
+  3. 目标进程正在运行 → 从运行进程抓真实 exe 路径（最准，比扫盘优先）；
+  4. 全盘文件搜索（_search_file_by_names）：候选名 × 搜索根（_search_roots），
+     限深 FILE_SEARCH_DEPTH 层、跳过 .git/.venv/node_modules。
+
+**进程快照回写**：任务实际跑起来后 remember_process_snapshot 把真实进程名与
+exe 路径写回缓存，越用越准。**包装器识别**：第三方脚本常用 bat/python 外壳
+拉起真身，WRAPPER_PROCESS_NAMES 列出必须忽略的外壳名——否则 python.exe
+会被缓存成"脚本进程"，后续进程匹配/清理全部错位（日志里的
+"脚本入口进程为包装器"警告即来源于此）。
+
+**缓存位置与回读**：全部结果存 app_config.json 各应用配置的 `_discovery` 键
+（对 UI 不可见的下划线开头键），apply_runtime_discovery 在配置加载时把缓存
+回填到正式字段（launcher/game.process_name/log_dir 等）。
+
+**安全边界**：全盘搜索只读（os.walk，不打开文件内容）；写回的路径会被
+当作可执行文件启动——因此不要导入来路不明的 app_config.json 覆盖这些字段。
+"""
+
 from __future__ import annotations
 
 import os
@@ -10,12 +38,15 @@ from ..runtime.process_supervisor import ProcessSnapshot, ProcessSupervisor
 
 
 DISCOVERY_KEY = "_discovery"
+# 日志监控器配置键：_ensure_monitor_log_dirs 只为这些键自动找 log_dir
 MONITOR_CONFIG_KEYS = (
     "bettergi_log_monitor",
     "ok_script_log_monitor",
     "ok_ww_log_monitor",
     "whimbox_log_monitor",
 )
+# 已知"外壳"进程：第三方脚本用它们拉起真身（bat→cmd、py→python），
+# 缓存进程名/路径时必须跳过，否则真进程定位与清理全部错位
 WRAPPER_PROCESS_NAMES = {
     "cmd.exe",
     "conhost.exe",
@@ -26,8 +57,8 @@ WRAPPER_PROCESS_NAMES = {
     "pythonw.exe",
 }
 LOG_DIR_NAMES = ("log", "logs")
-FILE_SEARCH_DEPTH = 4
-DIR_SEARCH_DEPTH = 3
+FILE_SEARCH_DEPTH = 4   # 全盘找 exe 的最大深度（相对搜索根）
+DIR_SEARCH_DEPTH = 3    # 找日志目录的最大深度（相对基准目录）
 
 
 def _as_str(value: object) -> str:
@@ -35,6 +66,7 @@ def _as_str(value: object) -> str:
 
 
 def _existing_file(path_value: object) -> str:
+    """路径存在且是文件则原样返回，否则空串（空/失效路径统一归零）。"""
     path_str = _as_str(path_value)
     if not path_str:
         return ""
@@ -43,6 +75,7 @@ def _existing_file(path_value: object) -> str:
 
 
 def _existing_dir(path_value: object) -> str:
+    """路径存在且是目录则原样返回，否则空串。"""
     path_str = _as_str(path_value)
     if not path_str:
         return ""
@@ -55,6 +88,7 @@ def _is_wrapper_process_name(name_value: object) -> bool:
 
 
 def _is_wrapper_process_path(path_value: object) -> bool:
+    """路径的文件名部分是否属于已知外壳进程。"""
     path_str = _as_str(path_value)
     if not path_str:
         return False
@@ -62,6 +96,7 @@ def _is_wrapper_process_path(path_value: object) -> bool:
 
 
 def _sanitize_process_cache(cache: Dict, *, include_game: bool = True):
+    """从一份 _discovery 缓存里剔除外壳进程的 script/game 名与路径（缓存自净）。"""
     if _is_wrapper_process_name(cache.get("script_process_name")):
         cache.pop("script_process_name", None)
     if _is_wrapper_process_path(cache.get("script_exe_path")):
@@ -77,6 +112,10 @@ def _sanitize_process_cache(cache: Dict, *, include_game: bool = True):
 
 
 def _sanitize_runtime_process_overrides(app_cfg: Dict):
+    """应用正式字段（script_process_name/game.process_name/exe_path）中的外壳覆盖同样剔除。
+
+    用户手填了 python.exe 之类的值时，这里会在配置加载阶段静默清掉并依赖缓存重建。
+    """
     if _is_wrapper_process_name(app_cfg.get("script_process_name")):
         app_cfg.pop("script_process_name", None)
 
@@ -99,6 +138,7 @@ def _sanitize_runtime_process_overrides(app_cfg: Dict):
 
 
 def _set_if_changed(parent: Dict, key: str, value: object) -> bool:
+    """赋值并返回是否真的发生变化（无变化不触发配置落盘）。"""
     if parent.get(key) == value:
         return False
     parent[key] = value
@@ -106,6 +146,7 @@ def _set_if_changed(parent: Dict, key: str, value: object) -> bool:
 
 
 def _log(logger, level: str, message: str):
+    """logger 可能为 None（调用方未传），按级别字符串安全转发。"""
     if logger is None:
         return
     log_func = getattr(logger, level, None)
@@ -114,6 +155,12 @@ def _log(logger, level: str, message: str):
 
 
 def _search_roots(hints: Iterable[object]) -> List[Path]:
+    """构建全盘搜索根（去重、必须真实存在）。
+
+    覆盖范围是刻意选的：项目自身及上级 → 系统程序目录 → 用户目录
+    （桌面/下载/文档是游戏压缩包最常落的地方）→ 四个盘根 → 最后是调用方
+    提示路径（已配置/已缓存的路径及其盘符，优先级最高放末尾但命中最快）。
+    """
     roots: List[Path] = []
     seen: set[str] = set()
 
@@ -151,6 +198,11 @@ def _search_roots(hints: Iterable[object]) -> List[Path]:
 
 
 def _search_file_by_names(file_names: Iterable[str], hints: Iterable[object]) -> str:
+    """按候选文件名全盘搜索，返回第一个命中的完整路径（无则空串）。
+
+    只匹配文件名（大小写不敏感），不读内容；os.walk 限深 FILE_SEARCH_DEPTH，
+    跳过隐藏目录与 .git/.venv/node_modules。搜索根顺序即命中优先级。
+    """
     targets = {name.lower() for name in file_names if _as_str(name)}
     if not targets:
         return ""
@@ -179,6 +231,7 @@ def _search_file_by_names(file_names: Iterable[str], hints: Iterable[object]) ->
 
 
 def _resolve_launcher_option(app_cfg: Dict, script_choice: Optional[str]) -> Optional[Dict]:
+    """按名字选 launcher_options 中的一项；未指定名字时退回第一项，无选项返回 None。"""
     options = app_cfg.get("launcher_options") or []
     if not isinstance(options, list) or not options:
         return None
@@ -196,6 +249,7 @@ def _resolve_launcher_option(app_cfg: Dict, script_choice: Optional[str]) -> Opt
 
 
 def _target_discovery_cache(app_cfg: Dict, option_name: Optional[str], *, create: bool = False) -> Dict:
+    """定位/创建 _discovery 缓存字典；option_name 非空时按启动器选项分桶（多脚本互不污染）。"""
     discovery = app_cfg.get(DISCOVERY_KEY)
     if not isinstance(discovery, dict):
         if not create:
@@ -223,6 +277,7 @@ def _target_discovery_cache(app_cfg: Dict, option_name: Optional[str], *, create
 
 
 def _monitor_cache(app_cfg: Dict, monitor_key: str, *, create: bool = False) -> Dict:
+    """定位/创建 _discovery.monitors 下某个监控器的缓存子字典。"""
     discovery = _target_discovery_cache(app_cfg, None, create=create)
     if not discovery and not create:
         return {}
@@ -243,6 +298,7 @@ def _monitor_cache(app_cfg: Dict, monitor_key: str, *, create: bool = False) -> 
 
 
 def _candidate_launcher_names(app_cfg: Dict, target_cfg: Dict, target_cache: Dict) -> List[str]:
+    """汇总启动器的候选文件名：配置路径文件名、缓存、脚本名加 .exe/.bat/.cmd 扩展。"""
     names: List[str] = []
 
     def add(name_value: object):
@@ -273,6 +329,7 @@ def _candidate_launcher_names(app_cfg: Dict, target_cfg: Dict, target_cache: Dic
 
 
 def _search_running_launcher(target_cfg: Dict, target_cache: Dict) -> Optional[ProcessSnapshot]:
+    """瀑布第 3 层：目标进程正在运行时直接抓其 exe 路径（比扫盘准）。"""
     candidate_names: List[str] = []
     for value in (
         target_cfg.get("script_process_name"),
@@ -292,6 +349,7 @@ def _search_running_launcher(target_cfg: Dict, target_cache: Dict) -> Optional[P
 
 
 def _remember_launcher(target_cfg: Dict, target_cache: Dict, launcher_path: str) -> bool:
+    """把发现的启动器路径回写正式配置与缓存，返回是否有变更。"""
     changed = False
     if launcher_path:
         target_cfg["launcher"] = launcher_path
@@ -300,9 +358,16 @@ def _remember_launcher(target_cfg: Dict, target_cache: Dict, launcher_path: str)
 
 
 def _discover_launcher_path(app_key: str, app_cfg: Dict, target_cfg: Dict, option_name: Optional[str], logger) -> Tuple[str, bool]:
+    """解析启动器路径——四层瀑布（见模块 docstring），返回 (路径, 是否有变更)。
+
+    target_cfg 是"本次要启动的目标"：选择了 launcher_option（如崩铁的
+    March7th/StarRailOneDragon 双脚本）时是选项自身的配置，否则是应用配置。
+    缓存键随 option_name 分桶，两个脚本的发现结果互不污染。
+    """
     target_cache = _target_discovery_cache(app_cfg, option_name, create=True)
     changed = False
 
+    # 第 1 层：配置路径已是有效文件（权威来源，用户手填或上次回写）
     current_launcher = _existing_file(target_cfg.get("launcher"))
     if current_launcher:
         changed |= _remember_launcher(target_cfg, target_cache, current_launcher)
@@ -354,6 +419,7 @@ def _discover_launcher_path(app_key: str, app_cfg: Dict, target_cfg: Dict, optio
 
 
 def _monitor_base_directories(path_values: Iterable[object]) -> List[Path]:
+    """从已知路径推导日志搜索基准：路径自身（或父目录）+ 父 + 祖父，去重。"""
     bases: List[Path] = []
     seen: set[str] = set()
 
@@ -384,6 +450,11 @@ def _monitor_base_directories(path_values: Iterable[object]) -> List[Path]:
 
 
 def _discover_log_dir_near_paths(file_pattern: str, path_values: Iterable[object]) -> str:
+    """在启动器/脚本路径附近找日志目录（log/ 或 logs/，限深 DIR_SEARCH_DEPTH）。
+
+    判定标准：目录里能 glob 到 file_pattern 的才算命中；有兜底 fallback
+    （目录存在但还没产出日志时先用着，等日志出现监控器自然开始读）。
+    """
     fallback = ""
     ignored_dirs = {".git", ".venv", "node_modules"}
 
@@ -425,6 +496,7 @@ def _discover_log_dir_near_paths(file_pattern: str, path_values: Iterable[object
 
 
 def _ensure_monitor_log_dirs(app_key: str, app_cfg: Dict, launcher_paths: Iterable[object], logger) -> bool:
+    """为 MONITOR_CONFIG_KEYS 里的监控器补齐 log_dir：现有配置 > 缓存 > 按启动器路径自动发现。"""
     changed = False
     discovery = _target_discovery_cache(app_cfg, None, create=True)
     extra_paths = [
@@ -465,6 +537,7 @@ def _ensure_monitor_log_dirs(app_key: str, app_cfg: Dict, launcher_paths: Iterab
 
 
 def _apply_cached_discovery(app_cfg: Dict):
+    """配置加载时把 _discovery 缓存回填到正式字段（launcher/进程名/log_dir），不落盘。"""
     discovery = _target_discovery_cache(app_cfg, None, create=False)
     if discovery:
         cached_launcher = _existing_file(discovery.get("launcher"))
@@ -518,6 +591,7 @@ def _apply_cached_discovery(app_cfg: Dict):
 
 
 def apply_runtime_discovery(runtime_config: Dict) -> Dict:
+    """对 runtime_config 里全部应用批量执行缓存回填（settings/manager 加载后调用）。"""
     apps = runtime_config.get("apps")
     if not isinstance(apps, dict):
         return runtime_config
@@ -529,6 +603,11 @@ def apply_runtime_discovery(runtime_config: Dict) -> Dict:
 
 
 def prepare_app_for_runtime(app_key: str, script_choice: Optional[str] = None, logger=None) -> bool:
+    """任务启动前的总入口：解析启动器路径 + 补齐日志目录（automation_controller 调用）。
+
+    返回是否有任何配置变更（有则已顺手 cm.save 落盘）。
+    抛异常或 app 不存在返回 False——调用方按"路径未变"继续，不应因此中断任务。
+    """
     config = cm.load(force=True)
     apps = config.get("apps")
     if not isinstance(apps, dict):
@@ -561,6 +640,12 @@ def remember_process_snapshot(
     script_choice: Optional[str] = None,
     logger=None,
 ) -> bool:
+    """把任务实际运行时的进程快照写回 _discovery 缓存（automation_controller 调用）。
+
+    role="game" 记游戏进程（Endfield.exe/YuanShen.exe…），否则记脚本进程。
+    返回是否有变更（有变更才会触发配置落盘）。包装器进程（python/cmd 外壳）
+    直接忽略——剥洋葱找到真身后这里拿到的就是真身。
+    """
     if snapshot is None:
         return False
 
