@@ -233,17 +233,6 @@ Item {
                                 Layout.fillWidth: true
                             }
 
-                            HusText {
-                                visible: !!(gameCard.gameData && gameCard.gameData.notes
-                                            && gameCard.gameData.notes.length > 0)
-                                text: (gameCard.gameData && gameCard.gameData.notes)
-                                      ? gameCard.gameData.notes.join(" ｜ ") : ""
-                                color: "#b66f1f"
-                                font.pixelSize: Math.round(11 * root.fs)
-                                wrapMode: Text.Wrap
-                                Layout.fillWidth: true
-                            }
-
                             GridLayout {
                                 id: fieldsGrid
                                 Layout.fillWidth: true

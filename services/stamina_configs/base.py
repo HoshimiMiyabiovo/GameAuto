@@ -262,10 +262,6 @@ class JsonConfigAdapter:
         """默认按 path 读取；特殊字段由子类覆盖。"""
         return _get_path(data[spec.file], spec.path)
 
-    def _notes(self, data: Dict[str, Any]) -> List[str]:
-        """给 UI 的提示（例如检测到另一份脚本配置副本）。"""
-        return []
-
     def read(self) -> Dict[str, Any]:
         data = self._read_files()
         specs = self._fields(data)
@@ -283,7 +279,6 @@ class JsonConfigAdapter:
             "primary_file": str(self._files.get(self.primary_file, "")),
             "fields": [spec.to_dict() for spec in specs],
             "values": values,
-            "notes": self._notes(data),
             "running": self.running_reason(),
         }
 
