@@ -1211,6 +1211,12 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
   异环 ok-nte（`DailyRoutineTaskConfigs.json` daily_anomaly）、暖暖 whimbox
   （`configs/config.json` OneDragon）。配置路径从 `app_config.json` 的脚本安装路径
   推导，不写死盘符。
+- **下拉来源**：`FieldSpec.options` 有值且非 list 时页面用 `HusSelect`；选项分别来自
+  ok-ww 源码 support_tasks/material_option_list、ok-ef 的 `world_map.json`
+  stages_dict、ok-nte AnomalyTask 常量、whimbox `setting_options.json`、
+  BetterGI `tp.json` MasteryDomain + AutoBoss Pathing 文件名。没有稳定枚举行的
+  （如 BetterGI BOSS 队伍名、whimbox 激化材料、周本多选列表）保留输入框；
+  可选字段为空时下拉带「(空/保持当前)」。
 - **安全规则**：只改白名单字段；写前复制到
   `storage/cache/config_backups/<game>/<file>.<时间>.bak`；同目录临时文件 +
   `os.replace` 原子替换；脚本/游戏进程运行中拒绝写入；未知字段/越界值拒绝。

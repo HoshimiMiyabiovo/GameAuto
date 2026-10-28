@@ -159,6 +159,8 @@ Item {
                                         label: f.label,
                                         kind: f.kind,
                                         help: f.help || "",
+                                        optionsJson: JSON.stringify(f.options || []),
+                                        allowEmpty: f.allow_empty !== false,
                                         value: (v === null || v === undefined) ? "" : v
                                     })
                                 }
@@ -195,6 +197,9 @@ Item {
                                 model: fieldModel
 
                                 delegate: RowLayout {
+                                    id: fieldRow
+                                    property int fieldIndex: index
+                                    property var fieldOptions: JSON.parse(model.optionsJson || "[]")
                                     Layout.fillWidth: true
                                     spacing: 10
 
@@ -222,16 +227,58 @@ Item {
                                         visible: model.kind === "bool"
                                         checked: model.value === true
                                         enabled: !gameCard.locked
-                                        onClicked: fieldModel.setProperty(index, "value", checked)
+                                        onClicked: fieldModel.setProperty(fieldRow.fieldIndex, "value", checked)
+                                    }
+
+                                    HusSelect {
+                                        id: fieldSelect
+                                        visible: model.kind !== "bool" && model.kind !== "list" && fieldRow.fieldOptions.length > 0
+                                        Layout.fillWidth: true
+                                        enabled: !gameCard.locked
+                                        clearEnabled: false
+                                        textRole: "label"
+                                        model: ListModel { id: optionModel }
+                                        Component.onCompleted: {
+                                            for (var i = 0; i < fieldRow.fieldOptions.length; i++) {
+                                                optionModel.append({ label: fieldRow.fieldOptions[i] })
+                                            }
+                                            var cur = String(model.value === null || model.value === undefined ? "" : model.value)
+                                            var idx = -1
+                                            for (var j = 0; j < optionModel.count; j++) {
+                                                if (optionModel.get(j).label === cur) {
+                                                    idx = j
+                                                    break
+                                                }
+                                            }
+                                            if (idx < 0 && cur.length > 0) {
+                                                optionModel.append({ label: cur })
+                                                idx = optionModel.count - 1
+                                            } else if (idx < 0 && model.allowEmpty === true) {
+                                                optionModel.append({ label: "(空/保持当前)" })
+                                                idx = optionModel.count - 1
+                                            }
+                                            currentIndex = idx >= 0 ? idx : (optionModel.count > 0 ? 0 : -1)
+                                        }
+                                        onActivated: function (index) {
+                                            var label = optionModel.get(index).label
+                                            fieldModel.setProperty(fieldRow.fieldIndex, "value",
+                                                                   label === "(空/保持当前)" ? "" : label)
+                                        }
                                     }
 
                                     HusInput {
-                                        visible: model.kind !== "bool"
+                                        visible: model.kind !== "bool" && (model.kind === "list" || fieldRow.fieldOptions.length === 0)
                                         Layout.fillWidth: true
                                         enabled: !gameCard.locked
-                                        placeholderText: model.kind === "int" ? "整数" : (model.kind === "list" ? "逗号分隔" : "")
+                                        placeholderText: model.kind === "int"
+                                                         ? "整数"
+                                                         : (model.kind === "list"
+                                                            ? (fieldRow.fieldOptions.length > 0
+                                                               ? "逗号分隔；可选: " + fieldRow.fieldOptions.join(" / ")
+                                                               : "逗号分隔")
+                                                            : "")
                                         Component.onCompleted: text = String(model.value === null || model.value === undefined ? "" : model.value)
-                                        onTextChanged: fieldModel.setProperty(index, "value", text)
+                                        onTextChanged: fieldModel.setProperty(fieldRow.fieldIndex, "value", text)
                                     }
                                 }
                             }

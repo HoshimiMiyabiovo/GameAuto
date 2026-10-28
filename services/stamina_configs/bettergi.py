@@ -7,10 +7,11 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
-from .base import ConfigError, FieldSpec, JsonConfigAdapter, script_root
+from .base import FieldSpec, JsonConfigAdapter, script_root
 
 # 与体力/刷本直接相关的一条龙任务
 STAMINA_TASKS = ("每日地脉花", "自动地脉花", "自动秘境", "自动幽境危战")
@@ -26,6 +27,56 @@ class BetterGIConfigAdapter(JsonConfigAdapter):
     def _resolve_files(self) -> Dict[str, Path]:
         root = script_root(self.app_config, self.app_key)
         return {"onedragon": root / "User" / "OneDragon" / "默认配置.json"}
+
+    def _boss_options(self) -> Tuple[str, ...]:
+        """从 BetterGI 的 AutoBoss 寻路资源文件名提取 BOSS 名；缺失时用已知列表。"""
+        root = self._files["onedragon"].parent.parent.parent
+        path = root / "GameTask" / "AutoBoss" / "Assets" / "Pathing"
+        names: List[str] = []
+        try:
+            for file in sorted(path.glob("*.json")):
+                name = file.stem
+                for suffix in ("战斗后快速前往", "强制传送", "键鼠前往", "前往"):
+                    if name.endswith(suffix):
+                        name = name[: -len(suffix)]
+                        break
+                if name and name not in names:
+                    names.append(name)
+        except Exception:
+            pass
+        if names:
+            return tuple(names)
+        return (
+            "无相之雷", "无相之火", "无相之水", "无相之草", "无相之岩",
+            "急冻树", "爆炎树", "掣电树", "纯水精灵", "魔偶剑鬼",
+            "古岩龙蜥", "遗迹巨蛇", "雷音权现", "风蚀沙虫", "深罪浸礼者",
+        )
+
+    def _domain_options(self) -> Tuple[str, ...]:
+        """从 BetterGI tp.json 的 MasteryDomain 提取秘境名。"""
+        root = self._files["onedragon"].parent.parent.parent
+        path = root / "GameTask" / "AutoTrackPath" / "Assets" / "tp.json"
+        names: List[str] = []
+
+        def walk(node: Any) -> None:
+            if isinstance(node, dict):
+                if node.get("type") == "MasteryDomain" and node.get("name"):
+                    name = str(node["name"])
+                    if name not in names:
+                        names.append(name)
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value)
+
+        try:
+            walk(json.loads(path.read_text(encoding="utf-8-sig")))
+        except Exception:
+            pass
+        if names:
+            return tuple(sorted(names))
+        return ("荒坠的圣迹", "无光的深都", "山风的荆冕")
 
     def _fields(self, data: Dict[str, Any]) -> List[FieldSpec]:
         onedragon = data.get("onedragon") or {}
@@ -49,7 +100,8 @@ class BetterGIConfigAdapter(JsonConfigAdapter):
         fields += [
             FieldSpec(
                 "domain_name", "秘境名称", "str", "onedragon", ("DomainName",),
-                help="自动秘境 / 每日秘境使用的副本名（必须是 BetterGI 里的原文）",
+                help="自动秘境 / 每日秘境使用的副本名",
+                options=self._domain_options(),
             ),
             FieldSpec(
                 "weekly_domain_enabled", "启用每周秘境", "bool", "onedragon",
@@ -70,7 +122,8 @@ class BetterGIConfigAdapter(JsonConfigAdapter):
             ),
             FieldSpec(
                 "auto_boss_name", "自动 BOSS 名称", "str", "onedragon",
-                ("AutoBossName",), help="留空表示使用脚本当前配置",
+                ("AutoBossName",), help="BetterGI AutoBoss 支持的 BOSS 名",
+                options=self._boss_options(),
             ),
             FieldSpec(
                 "auto_boss_team", "自动 BOSS 队伍", "str", "onedragon",

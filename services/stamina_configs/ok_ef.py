@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -30,6 +31,27 @@ class OkEfConfigAdapter(JsonConfigAdapter):
             "daily": base / "DailyTask.json",
         }
 
+    def _stage_options(self) -> tuple:
+        """从 ok-ef 自己的 world_map.json 读副本名，避免硬编码落后于脚本版本。"""
+        world = self._files["battle"].parent.parent / "assets" / "data" / "world_map.json"
+        try:
+            data = json.loads(world.read_text(encoding="utf-8-sig"))
+            stages = data.get("stages_dict") or {}
+            names: List[str] = []
+            for value in stages.values():
+                if isinstance(value, list):
+                    names.extend(str(x) for x in value)
+                elif isinstance(value, dict):
+                    names.extend(str(x) for x in value)
+            if names:
+                return tuple(dict.fromkeys(names))
+        except Exception:
+            pass
+        return (
+            "D96钢", "超距辉映管", "快子遴捡晶格", "象限拟合液", "三相纳米片",
+            "枢纽区", "源石研究园", "试验园区", "矿脉源区", "供能高地",
+        )
+
     def _fields(self, data: Dict[str, Any]) -> List[FieldSpec]:
         return [
             FieldSpec(
@@ -38,11 +60,14 @@ class OkEfConfigAdapter(JsonConfigAdapter):
             ),
             FieldSpec(
                 "stamina_instance", "体力本", "str", "battle", ("体力本",),
-                help="必须是 ok-ef 里的副本名原文", allow_empty=False,
+                help="来自 ok-ef 的 world_map 副本表", allow_empty=False,
+                options=self._stage_options(),
             ),
             FieldSpec(
                 "stamina_tier", "奖励档位", "str", "battle",
-                ("体力本奖励档位",), help="如 高阶", allow_empty=False,
+                ("体力本奖励档位",), help="保持当前 / 低阶 / 高阶",
+                allow_empty=False,
+                options=("保持当前", "低阶", "高阶"),
             ),
             FieldSpec(
                 "use_limited_stamina", "消耗限时体力药", "bool", "battle",
@@ -54,7 +79,9 @@ class OkEfConfigAdapter(JsonConfigAdapter):
             ),
             FieldSpec(
                 "team", "指定队伍编号", "str", "battle",
-                ("指定的队伍编号",), help="如 不换队伍 / 1 / 2", allow_empty=False,
+                ("指定的队伍编号",), help="不换队伍 / 1-5",
+                allow_empty=False,
+                options=("不换队伍", "1", "2", "3", "4", "5"),
             ),
         ]
 

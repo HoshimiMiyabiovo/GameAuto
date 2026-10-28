@@ -40,22 +40,28 @@ class OkNteConfigAdapter(JsonConfigAdapter):
             ),
             FieldSpec(
                 "task_type", "任务类型", "str", "routine",
-                prefix + ("任务类型",), help="如 经验与甲硬币", allow_empty=False,
+                prefix + ("任务类型",), allow_empty=False,
+                options=("经验与甲硬币", "异能升级材料", "弧盘突破材料", "空幕"),
             ),
             FieldSpec(
                 "reward_target", "具体奖励目标", "str", "routine",
-                prefix + ("具体奖励目标",), help="如 角色经验", allow_empty=False,
+                prefix + ("具体奖励目标",), allow_empty=False,
+                help="仅「经验与甲硬币」任务使用",
+                options=("角色经验", "弧盘经验", "甲硬币"),
             ),
             FieldSpec(
                 "material_index", "异能材料序号", "int", "routine",
-                prefix + ("异能材料序号",), min_value=0, max_value=99,
+                prefix + ("异能材料序号",), min_value=1, max_value=5,
+                options=tuple(str(i) for i in range(1, 6)),
             ),
             FieldSpec(
                 "disc_index", "弧盘材料序号", "int", "routine",
-                prefix + ("弧盘材料序号",), min_value=0, max_value=99,
+                prefix + ("弧盘材料序号",), min_value=1, max_value=5,
+                options=tuple(str(i) for i in range(1, 6)),
             ),
             FieldSpec(
                 "hollow_index", "空幕序号", "int", "routine",
-                prefix + ("空幕序号",), min_value=0, max_value=99,
+                prefix + ("空幕序号",), min_value=1, max_value=6,
+                options=tuple(str(i) for i in range(1, 7)),
             ),
         ]

@@ -69,6 +69,7 @@ class FieldSpec:
     min_value: Optional[int] = None
     max_value: Optional[int] = None
     allow_empty: bool = True
+    options: Tuple[str, ...] = ()
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -80,6 +81,7 @@ class FieldSpec:
             "min": self.min_value,
             "max": self.max_value,
             "allow_empty": self.allow_empty,
+            "options": list(self.options),
         }
 
 
