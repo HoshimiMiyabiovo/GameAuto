@@ -2433,7 +2433,9 @@ class UiBridge(QObject):
                     img = item.get("image_path") or ""
                     if img:
                         fp = FLOW_FAILURE_DIR / img
-                        item["image_url"] = f"artifacts/flow_failures/{img}" if fp.exists() else ""
+                        # QML Image.source 的相对路径会按 .qml 文件目录解析
+                        # （曾拼成 ui/qml/views/artifacts/...），必须回绝对 file:/// URL。
+                        item["image_url"] = fp.resolve().as_uri() if fp.exists() else ""
                     else:
                         item["image_url"] = ""
                     item["time_text"] = time.strftime(
@@ -2459,17 +2461,35 @@ class UiBridge(QObject):
 
     @Slot(str)
     def openFlowFailureImage(self, image_url: str):
-        """打开失败当刻截图（相对 artifacts/flow_failures/ 的文件名）。"""
+        """打开失败当刻截图（兼容 file:/// URL、裸文件名和旧的相对路径）。"""
         try:
             from pathlib import Path as _P
+            from urllib.parse import unquote, urlparse
             from ..settings.paths import FLOW_FAILURE_DIR
 
-            name = str(image_url or "").strip().replace("/", "").replace("\\", "")
-            p = FLOW_FAILURE_DIR / name if name and ".." not in name else FLOW_FAILURE_DIR
-            if p.is_dir() or not p.is_file():
-                p = FLOW_FAILURE_DIR
-            p.parent.mkdir(parents=True, exist_ok=True)
-            os.startfile(str(p))
+            base = FLOW_FAILURE_DIR.resolve()
+            raw = str(image_url or "").strip()
+            candidate = base
+            if raw.startswith("file:"):
+                parsed = urlparse(raw)
+                local = unquote(parsed.path or "")
+                # Windows: file:///E:/... 的 path 是 /E:/...，去掉前导斜杠
+                if local.startswith("/") and len(local) >= 3 and local[2] == ":":
+                    local = local[1:]
+                candidate = _P(local)
+            elif raw:
+                # 旧调用可能传 artifacts/flow_failures/xxx.jpg；只取文件名
+                candidate = base / _P(raw).name
+            try:
+                resolved = candidate.resolve()
+                if resolved.is_file() and resolved.is_relative_to(base):
+                    candidate = resolved
+                else:
+                    candidate = base
+            except Exception:
+                candidate = base
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(candidate))
         except Exception as exc:
             logger.error("[Bridge] 打开失败截图失败: %s", exc)
             self._request_toast(f"打开失败: {exc}", "#b04b44")

@@ -821,7 +821,7 @@ Item {
                         }
                         HusButton {
                             text: "打开证据目录"
-                            type: HusButton.Type_Ghost
+                            type: HusButton.Type_Outlined
                             onClicked: bridge.openFlowFailureDir()
                         }
                         Item { Layout.fillWidth: true }
@@ -976,7 +976,7 @@ Item {
                                 HusButton {
                                     visible: !modelData.image_url
                                     text: "打开证据目录"
-                                    type: HusButton.Type_Ghost
+                                    type: HusButton.Type_Outlined
                                     onClicked: bridge.openFlowFailureDir()
                                 }
                             }
