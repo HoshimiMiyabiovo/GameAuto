@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 
@@ -20,6 +21,22 @@ TEMPLATES_DIR = BASE_DIR / "模板"
 ARTIFACTS_DIR = BASE_DIR / "artifacts"
 OCR_DEBUG_DIR = ARTIFACTS_DIR / "ocr_debug"
 FLOW_CONFIG_PATH = BASE_DIR / "flow_configs.json"
+# 仓库里只提交默认流程定义；flow_configs.json 是每台机器的本地配置（GUI 会写
+# 薅羊毛开关/完成后关闭等个人字段），已加入 .gitignore。首次运行没有本地文件时
+# 由 ensure_flow_config_path() 从 example 复制一份。
+FLOW_CONFIG_EXAMPLE_PATH = BASE_DIR / "flow_configs.example.json"
+
+
+def ensure_flow_config_path() -> Path:
+    """返回本地 flow_configs.json 路径；缺失时从 example 复制，不覆盖已有文件。"""
+    if FLOW_CONFIG_PATH.is_file():
+        return FLOW_CONFIG_PATH
+    if FLOW_CONFIG_EXAMPLE_PATH.is_file():
+        try:
+            shutil.copy2(FLOW_CONFIG_EXAMPLE_PATH, FLOW_CONFIG_PATH)
+        except Exception:
+            pass
+    return FLOW_CONFIG_PATH
 WORKFLOW_DB_PATH = BASE_DIR / "workflow.sqlite3"
 # 固定点击序列（录制/回放）存储目录
 CLICK_SEQUENCES_DIR = BASE_DIR / "click_sequences"

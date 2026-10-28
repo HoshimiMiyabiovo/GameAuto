@@ -2231,18 +2231,19 @@ class UiBridge(QObject):
         return json.dumps(flows, ensure_ascii=False)
 
     def _save_wool_flow_field(self, flow_key: str, field: str, value: bool, log_label: str):
-        """写 flow_configs.json 中薅羊毛子流程的布尔字段。"""
+        """写本地 flow_configs.json 中薅羊毛子流程的布尔字段。"""
         try:
-            from ..settings.paths import FLOW_CONFIG_PATH
+            from ..settings.paths import ensure_flow_config_path
             from ..settings.manager import atomic_write_json
-            with open(FLOW_CONFIG_PATH, encoding="utf-8") as f:
+            path = ensure_flow_config_path()
+            with open(path, encoding="utf-8") as f:
                 all_cfg = json.load(f)
             section = all_cfg.get(flow_key)
             if not isinstance(section, dict):
                 self.emit_event("toast", message=f"未知流程: {flow_key}", color="#b04b44")
                 return
             section[field] = bool(value)
-            atomic_write_json(FLOW_CONFIG_PATH, all_cfg)
+            atomic_write_json(path, all_cfg)
             logger.info("[Bridge] 薅羊毛流程 %s %s: %s", flow_key, log_label, value)
         except Exception as exc:
             logger.exception("[Bridge] 保存薅羊毛流程%s失败", log_label)

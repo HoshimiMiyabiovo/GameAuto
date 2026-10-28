@@ -49,14 +49,15 @@ def run():
 def toggle(key: str, payload: dict):
     enabled = bool(payload.get("enabled"))
     field = payload.get("field") or "enabled"
-    from game_auto.settings.paths import FLOW_CONFIG_PATH
+    from game_auto.settings.paths import ensure_flow_config_path
     from game_auto.settings.manager import atomic_write_json
     import json
-    with open(FLOW_CONFIG_PATH, encoding="utf-8") as f:
+    path = ensure_flow_config_path()
+    with open(path, encoding="utf-8") as f:
         all_cfg = json.load(f)
     sec = all_cfg.get(key)
     if not isinstance(sec, dict):
         return {"ok": False, "error": "unknown flow"}
     sec[field] = bool(enabled)
-    atomic_write_json(FLOW_CONFIG_PATH, all_cfg)
+    atomic_write_json(path, all_cfg)
     return {"ok": True}

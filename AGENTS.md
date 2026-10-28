@@ -1228,3 +1228,19 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
 - **回归**：`artifacts/test_stamina_configs_20261028.py`（5 个真实配置临时副本读写、
   备份、非法值/未知字段拒绝、运行中拒绝、bridge 槽接线、Main/QML 接线）；
   `StaminaConfigView.qml` 已用 offscreen + stub bridge 实例化验证。
+
+## flow_configs 本地/示例拆分（2026-10-28）
+
+- **背景**：`flow_configs.json` 同时含共享流程定义和 GUI 写入的个人开关
+  （`enabled` / `close_process_on_finish`），之前提交个人设置会污染仓库。
+- **拆分**：仓库只跟踪 `flow_configs.example.json`（默认流程定义 + 安全默认值，
+  WorkBuddy/Qoder 关闭开关为 false）；`flow_configs.json` 加入 `.gitignore`，
+  作为每台机器的本地文件，GUI/WebUI 只写它。
+- **首次运行**：`settings.paths.ensure_flow_config_path()` 在本地文件缺失时从
+  example 复制；调用点：`foreground_flow_runner._load_flow_config`、
+  `ui/bridge._save_wool_flow_field`、`webui/api/wool.toggle`。
+- **升级注意**：共享流程定义更新只进 example；已有本地 `flow_configs.json` 不会
+  自动合并，需要手动把新流程/字段补进本地文件（或删本地让 example 重新复制，
+  会丢个人开关）。这是拆分换来的代价，别再把个人开关提交回仓库。
+- **回归**：`artifacts/test_flow_config_split_20261028.py`（缺失复制/已有不覆盖/
+  加载器回退/GUI 只写本地/example 安全默认/接线）。

@@ -14,7 +14,7 @@ import win32api
 import win32con
 import win32process
 from PIL import Image
-from ..settings.paths import BASE_DIR, FLOW_CONFIG_PATH as PROJECT_FLOW_CONFIG_PATH
+from ..settings.paths import BASE_DIR, ensure_flow_config_path
 
 try:
     import pytesseract
@@ -24,7 +24,6 @@ except ImportError:
 
 
 Rect = Tuple[int, int, int, int]
-FLOW_CONFIG_PATH = str(PROJECT_FLOW_CONFIG_PATH)
 
 # ── 模板图缓存：避免每次匹配都 Image.open 读盘（抄 ok-script FeatureSet 预加载思路）──
 _TEMPLATE_IMAGE_CACHE: Dict[str, Any] = {}
@@ -272,10 +271,11 @@ def _coerce_list_flow_fields(cfg: Dict[str, Any], flow_key: str = "") -> Dict[st
 
 
 def _load_flow_config(flow_key: str) -> Optional[Dict[str, Any]]:
-    if not os.path.exists(FLOW_CONFIG_PATH):
-        logging.getLogger(__name__).warning(f"配置文件不存在: {FLOW_CONFIG_PATH}")
+    path = ensure_flow_config_path()
+    if not os.path.exists(path):
+        logging.getLogger(__name__).warning(f"配置文件不存在: {path}")
         return None
-    with open(FLOW_CONFIG_PATH, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8") as f:
         all_cfg = json.load(f)
     cfg = all_cfg.get(flow_key)
     if cfg is None:

@@ -18,6 +18,10 @@ app_config.json
 app_config.json.bak*
 *.tmp_*
 
+# Local flow config: GUI 会写个人开关（close_process_on_finish/enabled），不提交；
+# 共享默认流程定义在 flow_configs.example.json，首次运行自动复制。
+flow_configs.json
+
 # Logs and artifacts
 logs/
 artifacts/
