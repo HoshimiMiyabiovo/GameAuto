@@ -46,6 +46,25 @@ class WhimboxConfigAdapter(JsonConfigAdapter):
         except Exception:
             return {}
 
+    def _notes(self, data: Dict[str, Any]) -> List[str]:
+        """whimbox 经常有两份安装（whimbox_app / whimbox_launcher），提示用户别改错。"""
+        cfg = self._files["config"]
+        if len(cfg.parents) < 3:
+            return []
+        sibling = cfg.parents[2] / "whimbox_launcher" / "configs" / "config.json"
+        if sibling == cfg or not sibling.is_file():
+            return []
+        try:
+            other = json.loads(sibling.read_text(encoding="utf-8-sig"))
+        except Exception:
+            return []
+        mine = data.get("config") or {}
+        if (other.get("OneDragon") or {}) != (mine.get("OneDragon") or {}):
+            return [
+                f"检测到另一份 whibox 配置: {sibling}；本页编辑的是 {cfg}，两边不会自动同步。"
+            ]
+        return []
+
     def _fields(self, data: Dict[str, Any]) -> List[FieldSpec]:
         base = ("OneDragon",)
         opts = self._setting_options()

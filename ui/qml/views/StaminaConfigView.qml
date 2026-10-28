@@ -30,8 +30,10 @@ Item {
     function saveGame(card, fieldModel) {
         if (!card || card.locked || saving) return
         var values = {}
+        var changed = 0
         for (var i = 0; i < fieldModel.count; i++) {
             var it = fieldModel.get(i)
+            if (!it.dirty) continue
             var v = it.boolValue
             if (it.kind !== "bool") v = it.valueText
             if (it.kind === "bool") {
@@ -53,6 +55,11 @@ Item {
                 v = String(v || "")
             }
             values[it.fieldKey] = v
+            changed++
+        }
+        if (changed === 0) {
+            statusText = "没有修改需要保存"
+            return
         }
         saving = true
         var raw = bridge.saveStaminaConfig(card.gameKey, JSON.stringify(values))
@@ -60,7 +67,11 @@ Item {
         try {
             var res = JSON.parse(raw || "{}")
             if (res.ok) {
-                statusText = (card.title || "配置") + " 已保存（旧文件已备份）"
+                for (var j = 0; j < fieldModel.count; j++) {
+                    fieldModel.setProperty(j, "dirty", false)
+                }
+                card.refreshDirty()
+                statusText = (card.title || "配置") + " 已保存 " + changed + " 项（旧文件已备份）"
             } else {
                 statusText = res.error || "保存失败"
             }
@@ -89,7 +100,7 @@ Item {
                     color: "#2c241d"
                 }
                 HusText {
-                    text: "第一期：原神 / 鸣潮 / 终末地 / 异环 / 暖暖。只改白名单字段，保存前自动备份；脚本或游戏运行中禁止写入。"
+                    text: "第一期：原神 / 鸣潮 / 终末地 / 异环 / 暖暖。只改白名单字段，保存前自动备份；脚本或游戏运行中禁止写入。脚本自己的 UI 改了配置后请点「刷新」同步；保存只提交本页改过的字段。"
                     font.pixelSize: Math.round(12 * root.fs)
                     color: "#6d6257"
                     wrapMode: Text.Wrap
@@ -135,9 +146,18 @@ Item {
                         property var gameData: modelData
                         property bool locked: !!(modelData && modelData.running)
                         property string gameKey: (modelData && modelData.game_key) || ""
+                        property int dirtyCount: 0
                         Layout.fillWidth: true
                         padding: 14
                         title: (modelData && modelData.display_name) ? modelData.display_name : "未知脚本"
+
+                        function refreshDirty() {
+                            var n = 0
+                            for (var i = 0; i < fieldModel.count; i++) {
+                                if (fieldModel.get(i).dirty) n++
+                            }
+                            dirtyCount = n
+                        }
 
                         ListModel { id: fieldModel }
 
@@ -170,9 +190,11 @@ Item {
                                         optionsJson: JSON.stringify(f.options || []),
                                         allowEmpty: f.allow_empty !== false,
                                         valueText: (v === null || v === undefined) ? "" : String(v),
-                                        boolValue: boolValue
+                                        boolValue: boolValue,
+                                        dirty: false
                                     })
                                 }
+                                gameCard.refreshDirty()
                             }
 
                             HusText {
@@ -197,6 +219,26 @@ Item {
                                 visible: !!(gameCard.gameData && gameCard.gameData.primary_file)
                                 text: "配置: " + (gameCard.gameData ? gameCard.gameData.primary_file : "")
                                 color: "#8a7d70"
+                                font.pixelSize: Math.round(11 * root.fs)
+                                wrapMode: Text.Wrap
+                                Layout.fillWidth: true
+                            }
+
+                            HusText {
+                                visible: gameCard.dirtyCount > 0
+                                text: "有 " + gameCard.dirtyCount + " 项未保存（仅保存本页改过的字段）"
+                                color: "#b66f1f"
+                                font.pixelSize: Math.round(11 * root.fs)
+                                wrapMode: Text.Wrap
+                                Layout.fillWidth: true
+                            }
+
+                            HusText {
+                                visible: !!(gameCard.gameData && gameCard.gameData.notes
+                                            && gameCard.gameData.notes.length > 0)
+                                text: (gameCard.gameData && gameCard.gameData.notes)
+                                      ? gameCard.gameData.notes.join(" ｜ ") : ""
+                                color: "#b66f1f"
                                 font.pixelSize: Math.round(11 * root.fs)
                                 wrapMode: Text.Wrap
                                 Layout.fillWidth: true
@@ -248,7 +290,11 @@ Item {
                                             HusCheckBox {
                                                 checked: model.boolValue === true
                                                 enabled: !gameCard.locked
-                                                onClicked: fieldModel.setProperty(fieldCell.fieldIndex, "boolValue", checked)
+                                                onClicked: {
+                                                    fieldModel.setProperty(fieldCell.fieldIndex, "boolValue", checked)
+                                                    fieldModel.setProperty(fieldCell.fieldIndex, "dirty", true)
+                                                    gameCard.refreshDirty()
+                                                }
                                             }
                                         }
 
@@ -306,6 +352,8 @@ Item {
                                                     var label = optionModel.get(index).label
                                                     fieldModel.setProperty(fieldCell.fieldIndex, "valueText",
                                                                            label === "(空/保持当前)" ? "" : label)
+                                                    fieldModel.setProperty(fieldCell.fieldIndex, "dirty", true)
+                                                    gameCard.refreshDirty()
                                                 }
                                             }
 
@@ -321,7 +369,11 @@ Item {
                                                                        : "逗号分隔")
                                                                     : "")
                                                 Component.onCompleted: text = String(model.valueText === null || model.valueText === undefined ? "" : model.valueText)
-                                                onTextChanged: fieldModel.setProperty(fieldCell.fieldIndex, "valueText", text)
+                                                onTextEdited: {
+                                                    fieldModel.setProperty(fieldCell.fieldIndex, "valueText", text)
+                                                    fieldModel.setProperty(fieldCell.fieldIndex, "dirty", true)
+                                                    gameCard.refreshDirty()
+                                                }
                                             }
                                         }
                                     }
@@ -339,9 +391,13 @@ Item {
                                     onClicked: bridge.openStaminaConfigFile(gameCard.gameKey)
                                 }
                                 HusButton {
-                                    text: root.saving ? "保存中..." : "保存"
+                                    text: root.saving
+                                          ? "保存中..."
+                                          : (gameCard.dirtyCount > 0 ? "保存 (" + gameCard.dirtyCount + ")" : "保存")
                                     type: HusButton.Type_Primary
-                                    enabled: !gameCard.locked && !root.saving && !(gameCard.gameData && gameCard.gameData.error)
+                                    enabled: !gameCard.locked && !root.saving
+                                             && !(gameCard.gameData && gameCard.gameData.error)
+                                             && gameCard.dirtyCount > 0
                                     onClicked: root.saveGame(gameCard, fieldModel)
                                 }
                             }

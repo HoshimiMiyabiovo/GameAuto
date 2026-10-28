@@ -1234,6 +1234,11 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
   + `boolValue`(bool) 两个角色，保存时按 kind 取对应角色。
 - **字段布局**：字段区用 `GridLayout` 双列（窗口 <1000px 自动单列），布尔开关与
   标签同一行、非布尔字段标签在控件上方，避免整行横跨导致“串行”观感。
+- **快照 / 双副本坑（2026-10-28 用户截图）**：页面只在打开或点「刷新」时读文件，
+  脚本自己的 UI 改配置后不会自动同步；保存只提交 `dirty` 字段，未触碰字段不会
+  被旧快照覆盖；卡片显示「有 N 项未保存」。whimbox 有两份 `config.json`
+  （`whimbox_app` 与 `whimbox_launcher`），本页编辑 `app_config` 实际启动的
+  `whimbox_app`，检测到另一份且 OneDragon 内容不同会在卡片提示另一份路径。
 
 ## flow_configs 本地/示例拆分（2026-10-28）
 
