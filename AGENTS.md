@@ -1232,6 +1232,12 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
   `value` 角色——第一行是 bool 时 ListModel 会把后续 int/string 全部强转成 bool，
   界面出现「地脉花次数 = false」「BOSS 队伍 = false」。必须显式 `valueText`(string)
   + `boolValue`(bool) 两个角色，保存时按 kind 取对应角色。
+- **HusSelect 的 model 会遮蔽外层 delegate 的 model（同日实锤）**：在
+  `HusSelect` 内部写 `model.valueText` / `model.allowEmpty` 读到的是它自己的
+  选项 ListModel（恒为空），导致当前值匹配不到、回显永远落到第一项「不做…」。
+  正确做法：在外层 delegate 定义 `currentValue` / `allowEmpty` 属性，select 用
+  `property string sourceValue: fieldCell.currentValue` 读取，`onSourceValueChanged`
+  + `Qt.callLater(syncSelection)` 同步 currentIndex。文件里的值本身没坏，是纯回显坑。
 - **字段布局**：字段区用 `GridLayout` 双列（窗口 <1000px 自动单列），布尔开关与
   标签同一行、非布尔字段标签在控件上方，避免整行横跨导致“串行”观感。
 - **快照 / 双副本坑（2026-10-28 用户截图）**：页面只在打开或点「刷新」时读文件，

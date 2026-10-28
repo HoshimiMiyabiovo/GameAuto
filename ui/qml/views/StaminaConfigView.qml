@@ -247,6 +247,9 @@ Item {
                                         id: fieldCell
                                         property int fieldIndex: index
                                         property var fieldOptions: JSON.parse(model.optionsJson || "[]")
+                                        property string currentValue: (model.valueText === null || model.valueText === undefined)
+                                                                      ? "" : String(model.valueText)
+                                        property bool allowEmpty: model.allowEmpty !== false
                                         Layout.fillWidth: true
                                         Layout.minimumWidth: Math.round(280 * root.fs)
                                         spacing: 3
@@ -316,11 +319,12 @@ Item {
                                                 clearEnabled: false
                                                 textRole: "label"
                                                 model: ListModel { id: optionModel }
-                                                Component.onCompleted: {
-                                                    for (var i = 0; i < fieldCell.fieldOptions.length; i++) {
-                                                        optionModel.append({ label: fieldCell.fieldOptions[i] })
-                                                    }
-                                                    var cur = String(model.valueText === null || model.valueText === undefined ? "" : model.valueText)
+                                                property bool optionsReady: false
+                                                property string sourceValue: fieldCell.currentValue
+
+                                                function syncSelection() {
+                                                    if (!optionsReady) return
+                                                    var cur = String(sourceValue === null || sourceValue === undefined ? "" : sourceValue)
                                                     var idx = -1
                                                     for (var j = 0; j < optionModel.count; j++) {
                                                         if (optionModel.get(j).label === cur) {
@@ -331,11 +335,26 @@ Item {
                                                     if (idx < 0 && cur.length > 0) {
                                                         optionModel.append({ label: cur })
                                                         idx = optionModel.count - 1
-                                                    } else if (idx < 0 && model.allowEmpty === true) {
+                                                    } else if (idx < 0 && fieldCell.allowEmpty === true) {
                                                         optionModel.append({ label: "(空/保持当前)" })
                                                         idx = optionModel.count - 1
                                                     }
                                                     currentIndex = idx >= 0 ? idx : (optionModel.count > 0 ? 0 : -1)
+                                                }
+
+                                                onSourceValueChanged: {
+                                                    if (optionsReady) syncSelection()
+                                                }
+
+                                                Component.onCompleted: {
+                                                    for (var i = 0; i < fieldCell.fieldOptions.length; i++) {
+                                                        optionModel.append({ label: fieldCell.fieldOptions[i] })
+                                                    }
+                                                    optionsReady = true
+                                                    syncSelection()
+                                                    // delegate 的 model 角色在部分时机比 onCompleted 晚就绪，
+                                                    // 延迟再同步一次，避免回显落到第一项。
+                                                    Qt.callLater(syncSelection)
                                                 }
                                                 onActivated: function (index) {
                                                     var label = optionModel.get(index).label
