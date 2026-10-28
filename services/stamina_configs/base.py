@@ -70,6 +70,8 @@ class FieldSpec:
     max_value: Optional[int] = None
     allow_empty: bool = True
     options: Tuple[str, ...] = ()
+    option_labels: Tuple[str, ...] = ()
+    depends_on: Optional[Tuple[str, Tuple[str, ...]]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -82,6 +84,11 @@ class FieldSpec:
             "max": self.max_value,
             "allow_empty": self.allow_empty,
             "options": list(self.options),
+            "option_labels": list(self.option_labels),
+            "depends_on": (
+                {"key": self.depends_on[0], "values": list(self.depends_on[1])}
+                if self.depends_on else None
+            ),
         }
 
 

@@ -147,6 +147,7 @@ Item {
                         property bool locked: !!(modelData && modelData.running)
                         property string gameKey: (modelData && modelData.game_key) || ""
                         property int dirtyCount: 0
+                        property int visibilityVersion: 0
                         Layout.fillWidth: true
                         padding: 14
                         title: (modelData && modelData.display_name) ? modelData.display_name : "未知脚本"
@@ -157,6 +158,10 @@ Item {
                                 if (fieldModel.get(i).dirty) n++
                             }
                             dirtyCount = n
+                        }
+
+                        function refreshVisibility() {
+                            visibilityVersion++
                         }
 
                         ListModel { id: fieldModel }
@@ -182,12 +187,18 @@ Item {
                                                       || String(v).toLowerCase() === "true"
                                                       || String(v) === "1")
                                     }
+                                    var optLabels = f.option_labels || []
+                                    var options = (f.options || []).map(function (value, idx) {
+                                        return { value: value, label: optLabels[idx] || value }
+                                    })
                                     fieldModel.append({
                                         fieldKey: f.key,
                                         label: f.label,
                                         kind: f.kind,
                                         help: f.help || "",
-                                        optionsJson: JSON.stringify(f.options || []),
+                                        optionsJson: JSON.stringify(options),
+                                        dependsKey: (f.depends_on && f.depends_on.key) || "",
+                                        dependsValuesJson: JSON.stringify((f.depends_on && f.depends_on.values) || []),
                                         allowEmpty: f.allow_empty !== false,
                                         valueText: (v === null || v === undefined) ? "" : String(v),
                                         boolValue: boolValue,
@@ -195,6 +206,7 @@ Item {
                                     })
                                 }
                                 gameCard.refreshDirty()
+                                gameCard.refreshVisibility()
                             }
 
                             HusText {
@@ -250,9 +262,31 @@ Item {
                                         property string currentValue: (model.valueText === null || model.valueText === undefined)
                                                                       ? "" : String(model.valueText)
                                         property bool allowEmpty: model.allowEmpty !== false
+                                        property string dependsKey: model.dependsKey || ""
+                                        property var dependsValues: JSON.parse(model.dependsValuesJson || "[]")
                                         Layout.fillWidth: true
                                         Layout.minimumWidth: Math.round(280 * root.fs)
                                         spacing: 3
+                                        visible: gameCard.visibilityVersion >= 0 && dependencyMet()
+
+                                        function dependencyMet() {
+                                            if (!dependsKey) return true
+                                            for (var i = 0; i < fieldModel.count; i++) {
+                                                var f = fieldModel.get(i)
+                                                if (f.fieldKey === dependsKey) {
+                                                    return dependsValues.indexOf(String(f.valueText)) >= 0
+                                                }
+                                            }
+                                            return true
+                                        }
+
+                                        function optionLabelList() {
+                                            var out = []
+                                            for (var i = 0; i < fieldOptions.length; i++) {
+                                                out.push(fieldOptions[i].label || fieldOptions[i].value)
+                                            }
+                                            return out
+                                        }
 
                                         RowLayout {
                                             visible: model.kind === "bool"
@@ -286,6 +320,7 @@ Item {
                                                     fieldModel.setProperty(fieldCell.fieldIndex, "boolValue", checked)
                                                     fieldModel.setProperty(fieldCell.fieldIndex, "dirty", true)
                                                     gameCard.refreshDirty()
+                                                    gameCard.refreshVisibility()
                                                 }
                                             }
                                         }
@@ -327,16 +362,16 @@ Item {
                                                     var cur = String(sourceValue === null || sourceValue === undefined ? "" : sourceValue)
                                                     var idx = -1
                                                     for (var j = 0; j < optionModel.count; j++) {
-                                                        if (optionModel.get(j).label === cur) {
+                                                        if (String(optionModel.get(j).value) === cur) {
                                                             idx = j
                                                             break
                                                         }
                                                     }
                                                     if (idx < 0 && cur.length > 0) {
-                                                        optionModel.append({ label: cur })
+                                                        optionModel.append({ label: cur, value: cur })
                                                         idx = optionModel.count - 1
                                                     } else if (idx < 0 && fieldCell.allowEmpty === true) {
-                                                        optionModel.append({ label: "(空/保持当前)" })
+                                                        optionModel.append({ label: "(空/保持当前)", value: "" })
                                                         idx = optionModel.count - 1
                                                     }
                                                     currentIndex = idx >= 0 ? idx : (optionModel.count > 0 ? 0 : -1)
@@ -348,7 +383,10 @@ Item {
 
                                                 Component.onCompleted: {
                                                     for (var i = 0; i < fieldCell.fieldOptions.length; i++) {
-                                                        optionModel.append({ label: fieldCell.fieldOptions[i] })
+                                                        optionModel.append({
+                                                            label: fieldCell.fieldOptions[i].label || fieldCell.fieldOptions[i].value,
+                                                            value: fieldCell.fieldOptions[i].value
+                                                        })
                                                     }
                                                     optionsReady = true
                                                     syncSelection()
@@ -357,11 +395,12 @@ Item {
                                                     Qt.callLater(syncSelection)
                                                 }
                                                 onActivated: function (index) {
-                                                    var label = optionModel.get(index).label
-                                                    fieldModel.setProperty(fieldCell.fieldIndex, "valueText",
-                                                                           label === "(空/保持当前)" ? "" : label)
+                                                    var item = optionModel.get(index)
+                                                    var raw = (item.value === undefined ? item.label : item.value)
+                                                    fieldModel.setProperty(fieldCell.fieldIndex, "valueText", raw)
                                                     fieldModel.setProperty(fieldCell.fieldIndex, "dirty", true)
                                                     gameCard.refreshDirty()
+                                                    gameCard.refreshVisibility()
                                                 }
                                             }
 
@@ -373,7 +412,7 @@ Item {
                                                                  ? "整数"
                                                                  : (model.kind === "list"
                                                                     ? (fieldCell.fieldOptions.length > 0
-                                                                       ? "逗号分隔；可选: " + fieldCell.fieldOptions.join(" / ")
+                                                                       ? "逗号分隔；可选: " + fieldCell.optionLabelList().join(" / ")
                                                                        : "逗号分隔")
                                                                     : "")
                                                 Component.onCompleted: text = String(model.valueText === null || model.valueText === undefined ? "" : model.valueText)
@@ -381,6 +420,7 @@ Item {
                                                     fieldModel.setProperty(fieldCell.fieldIndex, "valueText", text)
                                                     fieldModel.setProperty(fieldCell.fieldIndex, "dirty", true)
                                                     gameCard.refreshDirty()
+                                                    gameCard.refreshVisibility()
                                                 }
                                             }
                                         }
