@@ -32,7 +32,8 @@ Item {
         var values = {}
         for (var i = 0; i < fieldModel.count; i++) {
             var it = fieldModel.get(i)
-            var v = it.value
+            var v = it.boolValue
+            if (it.kind !== "bool") v = it.valueText
             if (it.kind === "bool") {
                 v = !!v
             } else if (it.kind === "int") {
@@ -154,6 +155,13 @@ Item {
                                     if (f.kind === "list" && Array.isArray(v)) {
                                         v = v.join(", ")
                                     }
+                                    var isBool = f.kind === "bool"
+                                    var boolValue = false
+                                    if (isBool) {
+                                        boolValue = (v === true || v === 1
+                                                      || String(v).toLowerCase() === "true"
+                                                      || String(v) === "1")
+                                    }
                                     fieldModel.append({
                                         fieldKey: f.key,
                                         label: f.label,
@@ -161,7 +169,8 @@ Item {
                                         help: f.help || "",
                                         optionsJson: JSON.stringify(f.options || []),
                                         allowEmpty: f.allow_empty !== false,
-                                        value: (v === null || v === undefined) ? "" : v
+                                        valueText: (v === null || v === undefined) ? "" : String(v),
+                                        boolValue: boolValue
                                     })
                                 }
                             }
@@ -193,92 +202,128 @@ Item {
                                 Layout.fillWidth: true
                             }
 
-                            Repeater {
-                                model: fieldModel
+                            GridLayout {
+                                id: fieldsGrid
+                                Layout.fillWidth: true
+                                columns: root.width >= 1000 ? 2 : 1
+                                columnSpacing: 18
+                                rowSpacing: 10
 
-                                delegate: RowLayout {
-                                    id: fieldRow
-                                    property int fieldIndex: index
-                                    property var fieldOptions: JSON.parse(model.optionsJson || "[]")
-                                    Layout.fillWidth: true
-                                    spacing: 10
+                                Repeater {
+                                    model: fieldModel
 
-                                    ColumnLayout {
-                                        Layout.preferredWidth: Math.round(250 * root.fs)
-                                        spacing: 1
-                                        HusText {
-                                            text: model.label || ""
-                                            font.pixelSize: Math.round(13 * root.fs)
-                                            color: "#2c241d"
-                                            wrapMode: Text.Wrap
-                                            Layout.fillWidth: true
-                                        }
-                                        HusText {
-                                            visible: !!model.help
-                                            text: model.help || ""
-                                            font.pixelSize: Math.round(10 * root.fs)
-                                            color: "#8a7d70"
-                                            wrapMode: Text.Wrap
-                                            Layout.fillWidth: true
-                                        }
-                                    }
-
-                                    HusCheckBox {
-                                        visible: model.kind === "bool"
-                                        checked: model.value === true
-                                        enabled: !gameCard.locked
-                                        onClicked: fieldModel.setProperty(fieldRow.fieldIndex, "value", checked)
-                                    }
-
-                                    HusSelect {
-                                        id: fieldSelect
-                                        visible: model.kind !== "bool" && model.kind !== "list" && fieldRow.fieldOptions.length > 0
+                                    delegate: ColumnLayout {
+                                        id: fieldCell
+                                        property int fieldIndex: index
+                                        property var fieldOptions: JSON.parse(model.optionsJson || "[]")
                                         Layout.fillWidth: true
-                                        enabled: !gameCard.locked
-                                        clearEnabled: false
-                                        textRole: "label"
-                                        model: ListModel { id: optionModel }
-                                        Component.onCompleted: {
-                                            for (var i = 0; i < fieldRow.fieldOptions.length; i++) {
-                                                optionModel.append({ label: fieldRow.fieldOptions[i] })
-                                            }
-                                            var cur = String(model.value === null || model.value === undefined ? "" : model.value)
-                                            var idx = -1
-                                            for (var j = 0; j < optionModel.count; j++) {
-                                                if (optionModel.get(j).label === cur) {
-                                                    idx = j
-                                                    break
+                                        Layout.minimumWidth: Math.round(280 * root.fs)
+                                        spacing: 3
+
+                                        RowLayout {
+                                            visible: model.kind === "bool"
+                                            Layout.fillWidth: true
+                                            spacing: 8
+
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 1
+                                                HusText {
+                                                    text: model.label || ""
+                                                    font.pixelSize: Math.round(13 * root.fs)
+                                                    color: "#2c241d"
+                                                    wrapMode: Text.Wrap
+                                                    Layout.fillWidth: true
+                                                }
+                                                HusText {
+                                                    visible: !!model.help
+                                                    text: model.help || ""
+                                                    font.pixelSize: Math.round(10 * root.fs)
+                                                    color: "#8a7d70"
+                                                    wrapMode: Text.Wrap
+                                                    Layout.fillWidth: true
                                                 }
                                             }
-                                            if (idx < 0 && cur.length > 0) {
-                                                optionModel.append({ label: cur })
-                                                idx = optionModel.count - 1
-                                            } else if (idx < 0 && model.allowEmpty === true) {
-                                                optionModel.append({ label: "(空/保持当前)" })
-                                                idx = optionModel.count - 1
-                                            }
-                                            currentIndex = idx >= 0 ? idx : (optionModel.count > 0 ? 0 : -1)
-                                        }
-                                        onActivated: function (index) {
-                                            var label = optionModel.get(index).label
-                                            fieldModel.setProperty(fieldRow.fieldIndex, "value",
-                                                                   label === "(空/保持当前)" ? "" : label)
-                                        }
-                                    }
 
-                                    HusInput {
-                                        visible: model.kind !== "bool" && (model.kind === "list" || fieldRow.fieldOptions.length === 0)
-                                        Layout.fillWidth: true
-                                        enabled: !gameCard.locked
-                                        placeholderText: model.kind === "int"
-                                                         ? "整数"
-                                                         : (model.kind === "list"
-                                                            ? (fieldRow.fieldOptions.length > 0
-                                                               ? "逗号分隔；可选: " + fieldRow.fieldOptions.join(" / ")
-                                                               : "逗号分隔")
-                                                            : "")
-                                        Component.onCompleted: text = String(model.value === null || model.value === undefined ? "" : model.value)
-                                        onTextChanged: fieldModel.setProperty(fieldRow.fieldIndex, "value", text)
+                                            HusCheckBox {
+                                                checked: model.boolValue === true
+                                                enabled: !gameCard.locked
+                                                onClicked: fieldModel.setProperty(fieldCell.fieldIndex, "boolValue", checked)
+                                            }
+                                        }
+
+                                        ColumnLayout {
+                                            visible: model.kind !== "bool"
+                                            Layout.fillWidth: true
+                                            spacing: 3
+
+                                            HusText {
+                                                text: model.label || ""
+                                                font.pixelSize: Math.round(13 * root.fs)
+                                                color: "#2c241d"
+                                                wrapMode: Text.Wrap
+                                                Layout.fillWidth: true
+                                            }
+                                            HusText {
+                                                visible: !!model.help
+                                                text: model.help || ""
+                                                font.pixelSize: Math.round(10 * root.fs)
+                                                color: "#8a7d70"
+                                                wrapMode: Text.Wrap
+                                                Layout.fillWidth: true
+                                            }
+
+                                            HusSelect {
+                                                id: fieldSelect
+                                                visible: model.kind !== "list" && fieldCell.fieldOptions.length > 0
+                                                Layout.fillWidth: true
+                                                enabled: !gameCard.locked
+                                                clearEnabled: false
+                                                textRole: "label"
+                                                model: ListModel { id: optionModel }
+                                                Component.onCompleted: {
+                                                    for (var i = 0; i < fieldCell.fieldOptions.length; i++) {
+                                                        optionModel.append({ label: fieldCell.fieldOptions[i] })
+                                                    }
+                                                    var cur = String(model.valueText === null || model.valueText === undefined ? "" : model.valueText)
+                                                    var idx = -1
+                                                    for (var j = 0; j < optionModel.count; j++) {
+                                                        if (optionModel.get(j).label === cur) {
+                                                            idx = j
+                                                            break
+                                                        }
+                                                    }
+                                                    if (idx < 0 && cur.length > 0) {
+                                                        optionModel.append({ label: cur })
+                                                        idx = optionModel.count - 1
+                                                    } else if (idx < 0 && model.allowEmpty === true) {
+                                                        optionModel.append({ label: "(空/保持当前)" })
+                                                        idx = optionModel.count - 1
+                                                    }
+                                                    currentIndex = idx >= 0 ? idx : (optionModel.count > 0 ? 0 : -1)
+                                                }
+                                                onActivated: function (index) {
+                                                    var label = optionModel.get(index).label
+                                                    fieldModel.setProperty(fieldCell.fieldIndex, "valueText",
+                                                                           label === "(空/保持当前)" ? "" : label)
+                                                }
+                                            }
+
+                                            HusInput {
+                                                visible: model.kind === "list" || fieldCell.fieldOptions.length === 0
+                                                Layout.fillWidth: true
+                                                enabled: !gameCard.locked
+                                                placeholderText: model.kind === "int"
+                                                                 ? "整数"
+                                                                 : (model.kind === "list"
+                                                                    ? (fieldCell.fieldOptions.length > 0
+                                                                       ? "逗号分隔；可选: " + fieldCell.fieldOptions.join(" / ")
+                                                                       : "逗号分隔")
+                                                                    : "")
+                                                Component.onCompleted: text = String(model.valueText === null || model.valueText === undefined ? "" : model.valueText)
+                                                onTextChanged: fieldModel.setProperty(fieldCell.fieldIndex, "valueText", text)
+                                            }
+                                        }
                                     }
                                 }
                             }

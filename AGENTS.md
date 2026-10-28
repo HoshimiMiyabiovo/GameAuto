@@ -1228,6 +1228,12 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
 - **回归**：`artifacts/test_stamina_configs_20261028.py`（5 个真实配置临时副本读写、
   备份、非法值/未知字段拒绝、运行中拒绝、bridge 槽接线、Main/QML 接线）；
   `StaminaConfigView.qml` 已用 offscreen + stub bridge 实例化验证。
+- **QML 列表角色坑（2026-10-28 用户截图实锤）**：`fieldModel` 不能只用动态
+  `value` 角色——第一行是 bool 时 ListModel 会把后续 int/string 全部强转成 bool，
+  界面出现「地脉花次数 = false」「BOSS 队伍 = false」。必须显式 `valueText`(string)
+  + `boolValue`(bool) 两个角色，保存时按 kind 取对应角色。
+- **字段布局**：字段区用 `GridLayout` 双列（窗口 <1000px 自动单列），布尔开关与
+  标签同一行、非布尔字段标签在控件上方，避免整行横跨导致“串行”观感。
 
 ## flow_configs 本地/示例拆分（2026-10-28）
 
