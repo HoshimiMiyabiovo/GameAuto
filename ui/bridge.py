@@ -759,14 +759,17 @@ class UiBridge(QObject):
             )
             return
         try:
-            from ..settings.paths import CLICK_SEQUENCES_DIR
-            path = os.path.join(str(CLICK_SEQUENCES_DIR), f"{name}.json")
-            if os.path.exists(path):
-                os.remove(path)
+            from ..runtime.click_sequence import sequence_path
+            path = sequence_path(name)
+            if path.exists():
+                path.unlink()
                 logger.info("[Bridge] 已删除点击序列: %s", path)
                 self.emit_event("toast", message=f"已删除序列「{name}」", color="#2f7d4a")
             else:
                 self.emit_event("toast", message=f"序列不存在: {name}", color="#b66f1f")
+        except ValueError as exc:
+            logger.warning("[Bridge] 拒绝非法点击序列名: %s", name)
+            self.emit_event("toast", message=str(exc), color="#b04b44")
         except Exception as exc:
             logger.exception("[Bridge] 删除点击序列失败")
             self.emit_event("toast", message=f"删除失败: {exc}", color="#b04b44")
@@ -785,11 +788,12 @@ class UiBridge(QObject):
         try:
             import shutil
             from ..settings.paths import CLICK_SEQUENCES_DIR, PROTECTED_BACKUP_DIR
+            from ..runtime.click_sequence import sequence_path
             PROTECTED_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
             # 1) 有原文件 → 同步到备份（仅当备份不存在时创建，保留首次可恢复版本，不随覆盖更新）
             for name in PROTECTED_CLICK_SEQUENCES:
-                src = CLICK_SEQUENCES_DIR / f"{name}.json"
-                dst = PROTECTED_BACKUP_DIR / f"{name}.json"
+                src = sequence_path(name, str(CLICK_SEQUENCES_DIR))
+                dst = sequence_path(name, str(PROTECTED_BACKUP_DIR))
                 if src.exists() and not dst.exists():
                     try:
                         shutil.copy2(str(src), str(dst))
@@ -798,7 +802,7 @@ class UiBridge(QObject):
             # 2) 检测缺失（仅日志，不自动恢复，避免与用户有意清理冲突；恢复由 restoreProtectedSequences 手动触发）
             missing = []
             for name in PROTECTED_CLICK_SEQUENCES:
-                if not (CLICK_SEQUENCES_DIR / f"{name}.json").exists():
+                if not sequence_path(name).exists():
                     missing.append(name)
             if missing:
                 logger.warning("[Bridge] 检测到受保护序列缺失: %s（可点击“恢复内置序列”）", "、".join(missing))
@@ -861,11 +865,12 @@ class UiBridge(QObject):
         try:
             import shutil
             from ..settings.paths import CLICK_SEQUENCES_DIR, PROTECTED_BACKUP_DIR
+            from ..runtime.click_sequence import sequence_path
             restored = []
             missing = []
             for name in PROTECTED_CLICK_SEQUENCES:
-                src = PROTECTED_BACKUP_DIR / f"{name}.json"
-                dst = CLICK_SEQUENCES_DIR / f"{name}.json"
+                src = sequence_path(name, str(PROTECTED_BACKUP_DIR))
+                dst = sequence_path(name, str(CLICK_SEQUENCES_DIR))
                 if dst.exists():
                     continue
                 if src.exists():
@@ -2946,9 +2951,19 @@ class UiBridge(QObject):
         try:
             from ..webui.auth import set_account
             set_account(username, password)
-            logger.info("[Bridge] WebUI 账号已更新: %s", (username or "").strip())
+            started = False
+            try:
+                from ..webui.app import start_webui_background
+                started = start_webui_background()
+            except Exception as exc:
+                logger.warning("[Bridge] WebUI 账号已保存但服务启动失败: %s", exc)
+            logger.info("[Bridge] WebUI 账号已更新: %s (webui_started=%s)", (username or "").strip(), started)
             self.getWebUIStatus()
-            self.emit_event("toast", message="WebUI 账号已保存（已加密）", color="#2f7d4a")
+            if started:
+                # uvicorn 绑定端口需要几百毫秒，稍后再刷新一次状态供 QML 展示
+                QTimer.singleShot(800, self.getWebUIStatus)
+            message = "WebUI 账号已保存（已加密），WebUI 已启动" if started else "WebUI 账号已保存（已加密），重启 GUI 后启动 WebUI"
+            self.emit_event("toast", message=message, color="#2f7d4a")
         except Exception as exc:
             logger.warning("[Bridge] 保存 WebUI 账号失败: %s", exc)
             self.emit_event("toast", message=f"保存失败: {exc}", color="#b04b44")

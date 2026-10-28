@@ -49,6 +49,8 @@ def run():
 def toggle(key: str, payload: dict):
     enabled = bool(payload.get("enabled"))
     field = payload.get("field") or "enabled"
+    if field not in ("enabled", "close_process_on_finish"):
+        return {"ok": False, "error": "unsupported field"}
     from game_auto.settings.paths import ensure_flow_config_path
     from game_auto.settings.manager import atomic_write_json
     import json

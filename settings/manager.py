@@ -3,7 +3,6 @@
 import copy
 import json
 import os
-import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -326,10 +325,14 @@ def save(config: Dict) -> None:
     global _cache
     persisted = _normalize_for_save(config)
 
-    # 备份旧文件（失败不阻塞保存）
+    # 备份“当前将要落盘”的加密副本。不能直接复制旧文件：新增敏感字段后的
+    # 首次迁移会把迁移前的明文原样留在 .bak 里。
     if _CONFIG_FILE.exists():
         try:
-            shutil.copy2(_CONFIG_FILE, str(_CONFIG_FILE) + _BACKUP_SUFFIX)
+            atomic_write_json(
+                Path(str(_CONFIG_FILE) + _BACKUP_SUFFIX),
+                _encrypt_for_persist(persisted),
+            )
         except OSError:
             pass
 

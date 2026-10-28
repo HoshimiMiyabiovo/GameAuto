@@ -408,6 +408,15 @@ This file mirrors important repository-level development notes inside the projec
   维护补跑完全由动态队列驱动（`storage/cache/update_retries.json`）。
 - 改 bridge/QML 后必须重启 GUI 才生效。
 
+## WebUI 安全约定 (2026-10-28)
+
+- **未设置账号不启动**：`webui_auth` 没有账号时 `app/gui.py` 不启动 WebUI；在 GUI 的 WebUI 设置页保存账号后立即后台启动（`webui.app.start_webui_background`）。
+- **全接口鉴权**：除 `/api/auth/*` 与 `/api/health`，所有 `/api/*` 以及 `/ws/logs` 都必须校验 token；禁止恢复 `has_account()` 时绕过鉴权的写法。
+- **点击序列名**：统一走 `runtime/click_sequence.sequence_path()`（`Path(name).name == name`），禁止再用 `目录 / f"{name}.json"` 直接拼接。
+- **配置备份**：`settings/manager.save()` 的 `.bak` 必须写加密后的 persisted；禁止 `shutil.copy2` 旧文件，否则新增敏感字段迁移会把明文留在备份里。
+- **前端**：`webui/static/app.js` 所有 innerHTML 动态值必须经 `esc()`，URL 经 `safeUrl()`；禁止用名字拼 inline onclick。
+- **CORS**：只允许 `http://localhost:60171` / `http://127.0.0.1:60171`，不要再放开任意 localhost 端口。
+
 ## Scope Notes
 
 - Startup sign behavior should be shared through startup_sign_runner.py rather than duplicated separately in QML and CLI flows.

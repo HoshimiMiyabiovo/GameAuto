@@ -20,6 +20,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import pyautogui
@@ -35,6 +36,20 @@ except Exception:  # pragma: no cover - 录制功能依赖 pynput
     _HAS_PYNPUT = False
 
 from ..settings.paths import CLICK_SEQUENCES_DIR
+
+
+def sequence_path(name: str, directory: Optional[str] = None) -> Path:
+    """校验序列名并返回文件路径；拒绝路径分隔符、盘符与上级目录。"""
+    safe = str(name or "").strip()
+    if (
+        not safe
+        or safe in {".", ".."}
+        or "\0" in safe
+        or ":" in safe
+        or Path(safe).name != safe
+    ):
+        raise ValueError(f"非法序列名: {name!r}")
+    return Path(directory or CLICK_SEQUENCES_DIR) / f"{safe}.json"
 
 
 def _resolve_window(
@@ -423,14 +438,14 @@ class ClickRecorder:
         )
 
     def save(self, name: str, note: str = "", directory: Optional[str] = None) -> str:
-        seq = self.to_sequence(name, note)
-        directory = directory or str(CLICK_SEQUENCES_DIR)
-        os.makedirs(directory, exist_ok=True)
-        path = os.path.join(directory, f"{name}.json")
+        safe = str(name or "").strip()
+        path = sequence_path(safe, directory)
+        seq = self.to_sequence(safe, note)
+        path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(_seq_to_dict(seq), f, ensure_ascii=False, indent=2)
         self.logger.info(f"[录制] 已保存序列: {path}")
-        return path
+        return str(path)
 
 
 def _seq_to_dict(seq: ClickSequence) -> dict:
@@ -477,9 +492,8 @@ class ClickSequencePlayer:
         pyautogui.PAUSE = 0.05
 
     def load(self, name: str, directory: Optional[str] = None) -> ClickSequence:
-        directory = directory or str(CLICK_SEQUENCES_DIR)
-        path = os.path.join(directory, f"{name}.json")
-        if not os.path.exists(path):
+        path = sequence_path(name, directory)
+        if not path.exists():
             raise FileNotFoundError(f"序列不存在: {path}")
         with open(path, "r", encoding="utf-8") as f:
             return _dict_to_seq(json.load(f))

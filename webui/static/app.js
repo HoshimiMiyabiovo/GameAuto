@@ -1,6 +1,16 @@
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 
+// 所有 innerHTML 动态值必须先经 esc()，OCR 文本/文件名/错误信息都不可信
+function esc(v){
+  return String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+// 只允许后端生成的 /api/ 相对地址进入 href/src
+function safeUrl(v){
+  const s = String(v ?? "");
+  return s.startsWith("/api/") ? esc(s) : "";
+}
+
 function setTab(k){
   $$(".tab").forEach(el=>el.classList.remove("active"));
   $$(".tabs button").forEach(el=>el.classList.remove("active"));
@@ -50,16 +60,15 @@ async function api(path, opts={}){
 async function checkAuth(){
   try{
     const j = await api("/api/auth/status");
-    if(j.has_account && !j.logged_in){
+    if(!j.has_account || !j.logged_in){
       showLogin(false);
     } else {
       hideLogin();
-      if(j.logged_in) $("#authUser").textContent = j.username;
+      $("#authUser").textContent = j.username || "";
     }
     return j;
   }catch{
-    // 若 401 且未设置账号，后端会 401，但 has_account=false 时应放行；此处忽略
-    return {has_account:false};
+    return {error:true};
   }
 }
 function showLogin(force){
@@ -84,7 +93,7 @@ $("#btnLogin")?.addEventListener("click", async ()=>{
   // 重连 WS 带 token
   if(ws){ try{ws.close();}catch{} }
   connectWS();
-  refreshApps(); loadDaily(); loadWool(); loadSeq();
+  refreshApps(); loadDaily(); loadWool(); loadSeq(); pollLogs(); refreshStatus(); scheduleLogs();
 });
 $("#btnLogout")?.addEventListener("click", async ()=>{
   await fetch("/api/auth/logout",{method:"POST",headers:authHeaders()});
@@ -101,11 +110,11 @@ async function refreshApps(){
   c.innerHTML = appsCache.map((a,i)=>`
     <div class="item" draggable="true" data-idx="${i}">
       <label style="display:flex;gap:8px;align-items:center;flex:1">
-        <input type="checkbox" ${a.enabled?"checked":""} data-app="${a.app_key}"/>
-        <b>${a.display_name}</b><small class="muted">${a.app_key}</small>
-        ${a.launcher_values?.length?`<select data-choice="${a.app_key}">${a.launcher_values.map(v=>`<option value="${v}" ${v===a.script_choice?"selected":""}>${v}</option>`).join("")}</select>`:""}
+        <input type="checkbox" ${a.enabled?"checked":""} data-app="${esc(a.app_key)}"/>
+        <b>${esc(a.display_name)}</b><small class="muted">${esc(a.app_key)}</small>
+        ${a.launcher_values?.length?`<select data-choice="${esc(a.app_key)}">${a.launcher_values.map(v=>`<option value="${esc(v)}" ${v===a.script_choice?"selected":""}>${esc(v)}</option>`).join("")}</select>`:""}
       </label>
-      <small class="muted">#${a.order}</small>
+      <small class="muted">#${esc(a.order)}</small>
     </div>
   `).join("");
 }
@@ -138,16 +147,16 @@ async function loadDaily(){
   c.innerHTML = (j.games||[]).map(g=>`
     <div class="game ${g.is_all_success?"ok":g.has_failed?"fail":""}">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <b>${g.game_name} <small class="muted">${g.game_key}</small></b>
-        <span class="tag">${g.is_all_success?"全部完成":g.has_failed?"有失败":"进行中"} ${g.progress_percent}%</span>
+        <b>${esc(g.game_name)} <small class="muted">${esc(g.game_key)}</small></b>
+        <span class="tag">${g.is_all_success?"全部完成":g.has_failed?"有失败":"进行中"} ${esc(g.progress_percent)}%</span>
       </div>
       <div style="margin-top:8px">
         ${(g.tasks||[]).map(t=>`
           <div class="task">
-            <span>${t.task_name} <small class="muted">${t.status}</small></span>
-            <span>${t.message||""}${t.verify_image_url?` <a href="${t.verify_image_url}" target="_blank">查看截图</a>`:""}</span>
+            <span>${esc(t.task_name)} <small class="muted">${esc(t.status)}</small></span>
+            <span>${esc(t.message||"")}${t.verify_image_url?` <a href="${safeUrl(t.verify_image_url)}" target="_blank" rel="noopener">查看截图</a>`:""}</span>
           </div>
-          ${t.verify_image_url?`<div style="margin:6px 0"><img src="${t.verify_image_url}" style="max-width:100%;max-height:170px;object-fit:contain;border:1px solid #dbcdbd;border-radius:8px;background:#f4ece0"/></div>`:""}
+          ${t.verify_image_url?`<div style="margin:6px 0"><img src="${safeUrl(t.verify_image_url)}" style="max-width:100%;max-height:170px;object-fit:contain;border:1px solid #dbcdbd;border-radius:8px;background:#f4ece0"/></div>`:""}
         `).join("")}
       </div>
     </div>
@@ -175,20 +184,20 @@ async function loadFailures(){
   sum.innerHTML = (j.summary||[]).slice(0,5).map(s=>`
     <div class="item">
       <div style="display:flex;justify-content:space-between">
-        <span><b>${s.flow_key||"?"} / ${s.step||"?"}</b> <small class="muted">${s.has_image?"有截图":"无截图"}</small></span>
-        <span class="tag">${s.fail_count} 次</span>
+        <span><b>${esc(s.flow_key||"?")} / ${esc(s.step||"?")}</b> <small class="muted">${s.has_image?"有截图":"无截图"}</small></span>
+        <span class="tag">${esc(s.fail_count)} 次</span>
       </div>
-      <small class="muted">${String(s.sample_error||"").slice(0,120)}</small>
+      <small class="muted">${esc(String(s.sample_error||"").slice(0,120))}</small>
     </div>`).join("");
   list.innerHTML = items.map(f=>`
     <div class="item">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <span><b>${f.flow_key||"?"} / ${f.step||"?"}</b> <small class="muted">${f.game_key||"-"}</small></span>
-        <small class="muted">${f.time_text||""}</small>
+        <span><b>${esc(f.flow_key||"?")} / ${esc(f.step||"?")}</b> <small class="muted">${esc(f.game_key||"-")}</small></span>
+        <small class="muted">${esc(f.time_text||"")}</small>
       </div>
-      <div style="color:#b04b44">${String(f.error||"").slice(0,160)}</div>
-      ${(f.ocr_texts||[]).length?`<small class="muted">当帧文字: ${(f.ocr_texts||[]).slice(0,6).join(" ｜ ")}</small>`:""}
-      ${f.image_url?`<div style="margin:6px 0"><img src="${f.image_url}" style="max-width:100%;max-height:170px;object-fit:contain;border:1px solid #dbcdbd;border-radius:8px;background:#f4ece0"/></div>`:""}
+      <div style="color:#b04b44">${esc(String(f.error||"").slice(0,160))}</div>
+      ${(f.ocr_texts||[]).length?`<small class="muted">当帧文字: ${esc((f.ocr_texts||[]).slice(0,6).join(" ｜ "))}</small>`:""}
+      ${f.image_url?`<div style="margin:6px 0"><img src="${safeUrl(f.image_url)}" style="max-width:100%;max-height:170px;object-fit:contain;border:1px solid #dbcdbd;border-radius:8px;background:#f4ece0"/></div>`:""}
     </div>`).join("");
 }
 $("#btnFailLoad").onclick = loadFailures;
@@ -200,13 +209,13 @@ async function loadWool(){
   const c = $("#woolList");
   c.innerHTML = (j.flows||[]).map(f=>`
     <div class="item">
-      <div><b>${f.name}</b> <small class="muted">${f.key}</small> ${f.exe_ready?"✅":"⚠ 路径未就绪"}</div>
-      <label class="chk"><input type="checkbox" ${f.enabled?"checked":""} data-wool="${f.key}"/> 启用</label>
+      <div><b>${esc(f.name)}</b> <small class="muted">${esc(f.key)}</small> ${f.exe_ready?"✅":"⚠ 路径未就绪"}</div>
+      <label class="chk"><input type="checkbox" ${f.enabled?"checked":""} data-wool="${esc(f.key)}"/> 启用</label>
     </div>
   `).join("");
   c.querySelectorAll("input[data-wool]").forEach(ch=>{
     ch.addEventListener("change", async ()=>{
-      await api(`/api/wool/flows/${ch.dataset.wool}/toggle`,{method:"POST",body:JSON.stringify({enabled:ch.checked, field:"enabled"})});
+      await api(`/api/wool/flows/${encodeURIComponent(ch.dataset.wool)}/toggle`,{method:"POST",body:JSON.stringify({enabled:ch.checked, field:"enabled"})});
     });
   });
 }
@@ -222,16 +231,22 @@ async function loadSeq(){
   c.innerHTML = (j.sequences||[]).map(s=>`
     <div class="item ${s.protected?"protected":""}">
       <div style="flex:1">
-        <div><b>${s.name}</b> ${s.protected?'<span class="tag">🔒 一条龙</span>':''} <small class="muted">${s.steps}步 ${s.created_at||""}</small></div>
-        <small class="muted">${s.window||""} ${s.missing?"（缺失可恢复）":""}</small>
+        <div><b>${esc(s.name)}</b> ${s.protected?'<span class="tag">🔒 一条龙</span>':''} <small class="muted">${esc(s.steps)}步 ${esc(s.created_at||"")}</small></div>
+        <small class="muted">${esc(s.window||"")} ${s.missing?"（缺失可恢复）":""}</small>
       </div>
       <div style="display:flex;gap:6px">
-        <button class="btn" onclick="playSeq('${s.name}',false)">回放</button>
-        <button class="btn" onclick="playSeq('${s.name}',true)">试跑</button>
-        ${s.protected?'<button class="btn" disabled>受保护</button>':`<button class="btn" onclick="delSeq('${s.name}')">删除</button>`}
+        <button class="btn" data-seq="${esc(s.name)}" data-dry="0">回放</button>
+        <button class="btn" data-seq="${esc(s.name)}" data-dry="1">试跑</button>
+        ${s.protected?'<button class="btn" disabled>受保护</button>':`<button class="btn" data-del="${esc(s.name)}">删除</button>`}
       </div>
     </div>
   `).join("");
+  c.querySelectorAll("button[data-seq]").forEach(btn=>{
+    btn.addEventListener("click", ()=>playSeq(btn.dataset.seq, btn.dataset.dry==="1"));
+  });
+  c.querySelectorAll("button[data-del]").forEach(btn=>{
+    btn.addEventListener("click", ()=>delSeq(btn.dataset.del));
+  });
 }
 window.playSeq = async (name,dry)=>{ await api(`/api/click-sequences/${encodeURIComponent(name)}/play`,{method:"POST",body:JSON.stringify({loop:1,dry})}); alert("已开始 "+name); };
 window.delSeq = async (name)=>{
@@ -351,7 +366,7 @@ async function refreshStatus(){
       if(hasQueue){
         qEl.innerHTML = j.queue.map(it=>{
           const st = it.state||"pending";
-          return `<div class="item" style="padding:6px 8px"><span>${stateIcon(st)} <b>${it.display_name||it.app_key}</b> <small class="muted">${it.app_key}</small> ${it.script_choice?`<small class="muted">(${it.script_choice})</small>`:""}</span><span class="tag">${st}</span></div>`;
+          return `<div class="item" style="padding:6px 8px"><span>${stateIcon(st)} <b>${esc(it.display_name||it.app_key)}</b> <small class="muted">${esc(it.app_key)}</small> ${it.script_choice?`<small class="muted">(${esc(it.script_choice)})</small>`:""}</span><span class="tag">${esc(st)}</span></div>`;
         }).join("");
       } else {
         qEl.innerHTML = `<small class="muted">暂无队列</small>`;
@@ -383,10 +398,22 @@ function scheduleLogs(){
 // init with auth gate
 (async ()=>{
   const st = await checkAuth();
-  if(!st.has_account){
-    hideLogin();
-    $("#loginHint").textContent = "尚未设置账号，WebUI 暂无需登录（请在桌面 GUI 设置账号密码后启用保护）";
+  if(st.error){
+    showLogin(false);
+    $("#loginHint").textContent = "无法连接 WebUI 后端";
+    return;
   }
+  if(!st.has_account){
+    showLogin(false);
+    $("#loginHint").textContent = "尚未设置账号：请先在桌面 GUI → WebUI 远程设置账号密码";
+    $("#loginUser").disabled = true;
+    $("#loginPass").disabled = true;
+    $("#btnLogin").disabled = true;
+    return;
+  }
+  if(!st.logged_in){ showLogin(false); return; }
+  hideLogin();
+  $("#authUser").textContent = st.username || "";
   refreshApps(); loadDaily(); loadWool(); loadSeq(); pollLogs(); connectWS(); refreshStatus(); scheduleLogs();
   if(authToken) $("#btnLogout").style.display="inline-block";
   document.addEventListener("visibilitychange", ()=>{
@@ -397,7 +424,7 @@ function scheduleLogs(){
     try{
       const s = await fetch("/api/auth/status",{headers:authHeaders()}).then(r=>r.json());
       $("#btnLogout").style.display = s.logged_in ? "inline-block":"none";
-      if(s.logged_in) $("#authUser").textContent = s.username;
+      if(s.logged_in) $("#authUser").textContent = s.username || "";
     }catch{}
   }, 10000);
 })();

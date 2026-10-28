@@ -88,6 +88,8 @@ def set_account(username: str, password: str):
         "updated_at": int(time.time()),
     }
     _save_section(sec)
+    # 改密/重设账号后让已有 WebUI 会话立即失效
+    _sessions.clear()
 
 def verify_password(password: str) -> bool:
     sec = _load_section()
@@ -150,9 +152,6 @@ def get_token_from_request(request: Request) -> str:
     return ""
 
 def require_auth(request: Request) -> str:
-    # 若未设置账号，视为无需登录（首次引导阶段）
-    if not has_account():
-        return "guest"
     token = get_token_from_request(request)
     user = verify_token(token)
     if not user:

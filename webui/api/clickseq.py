@@ -36,6 +36,8 @@ def play(name: str, payload: dict = None):
         seq = player.load(name)
     except FileNotFoundError as e:
         return {"ok": False, "error": str(e)}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     # 同步回放会阻塞请求，改 daemon 线程
     import threading
     def _bg():
@@ -50,9 +52,11 @@ def play(name: str, payload: dict = None):
 def delete_seq(name: str):
     if name in PROTECTED_CLICK_SEQUENCES:
         return {"ok": False, "error": f"「{name}」为一条龙内置序列，已做防误删保护，禁止删除"}
-    import os
-    from game_auto.settings.paths import CLICK_SEQUENCES_DIR
-    p = CLICK_SEQUENCES_DIR / f"{name}.json"
+    from game_auto.runtime.click_sequence import sequence_path
+    try:
+        p = sequence_path(name)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
     if not p.exists():
         return {"ok": False, "error": "序列不存在"}
     try:
@@ -65,11 +69,12 @@ def delete_seq(name: str):
 def restore():
     import shutil
     from game_auto.settings.paths import CLICK_SEQUENCES_DIR, PROTECTED_BACKUP_DIR
+    from game_auto.runtime.click_sequence import sequence_path
     restored=[]
     missing=[]
     for name in PROTECTED_CLICK_SEQUENCES:
-        src = PROTECTED_BACKUP_DIR / f"{name}.json"
-        dst = CLICK_SEQUENCES_DIR / f"{name}.json"
+        src = sequence_path(name, str(PROTECTED_BACKUP_DIR))
+        dst = sequence_path(name, str(CLICK_SEQUENCES_DIR))
         if dst.exists():
             continue
         if src.exists():

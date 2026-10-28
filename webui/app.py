@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -34,33 +35,34 @@ app.include_router(click_router)
 
 # GZip 压缩 JSON/日志（500B 以上自动压缩，降低 60-80% 传输）
 app.add_middleware(GZipMiddleware, minimum_size=500)
-# CORS 仅放行本地（Electron/QML 内嵌访问亦为同源）
+# CORS 只放行 WebUI 自己的精确 origin，避免本机任意端口的页面读取接口
+_WEBUI_ORIGINS = [
+    f"http://localhost:{WEBUI_DEFAULT_PORT}",
+    f"http://127.0.0.1:{WEBUI_DEFAULT_PORT}",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:60171", "http://127.0.0.1:60171"],
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origins=_WEBUI_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 鉴权中间件：未登录时保护 /api/*（白名单 /api/auth/* 与 /api/health）
-_WHITELIST = ("/api/auth/", "/api/health", "/docs", "/openapi.json", "/redoc")
+# 鉴权中间件：除登录/健康检查外，所有 /api/* 一律要求 token
+_WHITELIST = ("/api/auth/", "/api/health")
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
+    # CORS 预检不带 Authorization，放行给 CORS 中间件处理
+    if request.method == "OPTIONS":
+        return await call_next(request)
     path = request.url.path
     if path.startswith("/api/") and not any(path.startswith(w) for w in _WHITELIST):
-        if has_account():
-            token = get_token_from_request(request)
-            user = verify_token(token) if token else None
-            if not user:
-                return JSONResponse(status_code=401, content={"ok": False, "error": "未登录"})
-    # WS 单独校验
-    if path == "/ws/logs" and has_account():
-        token = request.query_params.get("token") or get_token_from_request(request)
-        if not verify_token(token or ""):
-            return JSONResponse(status_code=401, content={"ok": False})
+        token = get_token_from_request(request)
+        user = verify_token(token) if token else None
+        if not user:
+            error = "未登录" if has_account() else "尚未设置 WebUI 账号"
+            return JSONResponse(status_code=401, content={"ok": False, "error": error})
     return await call_next(request)
 
 # 静态资源
@@ -72,6 +74,8 @@ def _startup():
     ensure_log_handler()
     from game_auto.webui.auth import ensure_default_account
     ensure_default_account()
+    if not has_account():
+        logger.warning("[WebUI] 尚未设置账号：所有 API 将返回 401，请在桌面 GUI 的 WebUI 设置页创建账号")
     logger.info(f"[WebUI] 启动成功 http://localhost:{WEBUI_DEFAULT_PORT}")
 
 @app.get("/", response_class=HTMLResponse)
@@ -117,11 +121,10 @@ def login_logs(limit: int = 100):
 # WebSocket 日志推送（需鉴权，低频轮询降低 CPU）
 @app.websocket("/ws/logs")
 async def ws_logs(ws: WebSocket):
-    if has_account():
-        token = ws.query_params.get("token") or ws.cookies.get("webui_token") or ws.headers.get("authorization","").replace("Bearer ","")
-        if not verify_token(token or ""):
-            await ws.close(code=4401)
-            return
+    token = ws.query_params.get("token") or ws.cookies.get("webui_token") or ws.headers.get("authorization","").replace("Bearer ","")
+    if not verify_token(token or ""):
+        await ws.close(code=4401)
+        return
     await ws.accept()
     ensure_log_handler()
     for line in get_recent_logs(30):
@@ -148,8 +151,45 @@ async def ws_logs(ws: WebSocket):
         except Exception:
             pass
 
+_webui_thread = None
+_webui_lock = threading.Lock()
+
+
+def start_webui_background() -> bool:
+    """已设置账号时后台启动 WebUI；返回是否已在运行/已启动。"""
+    from game_auto.webui.auth import has_account
+
+    if not has_account():
+        return False
+    global _webui_thread
+    with _webui_lock:
+        if _webui_thread is not None and _webui_thread.is_alive():
+            return True
+
+        def _run():
+            try:
+                import uvicorn
+                uvicorn.run(
+                    app,
+                    host="127.0.0.1",
+                    port=int(WEBUI_DEFAULT_PORT),
+                    log_level="warning",
+                    access_log=False,
+                )
+            except Exception as exc:
+                logger.warning("[WebUI] 启动失败（端口占用或依赖缺失）: %s", exc)
+
+        _webui_thread = threading.Thread(target=_run, name="WebUI-Uvicorn", daemon=True)
+        _webui_thread.start()
+        logger.info("[WebUI] 后台服务已启动 http://127.0.0.1:%s", WEBUI_DEFAULT_PORT)
+        return True
+
+
 # 便于 `python -m game_auto.webui.app`
 if __name__ == "__main__":
+    from game_auto.webui.auth import has_account
+    if not has_account():
+        raise SystemExit("未设置 WebUI 账号：请先在桌面 GUI 的 WebUI 设置页创建账号")
     import uvicorn
     port = int(os.environ.get("WEBUI_PORT", str(WEBUI_DEFAULT_PORT)))
     uvicorn.run("game_auto.webui.app:app", host="127.0.0.1", port=port, reload=False)
