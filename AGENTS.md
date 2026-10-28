@@ -1237,10 +1237,10 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
 - **快照 / 双副本坑（2026-10-28 用户截图）**：页面只在打开或点「刷新」时读文件，
   脚本自己的 UI 改配置后不会自动同步；保存只提交 `dirty` 字段，未触碰字段不会
   被旧快照覆盖；卡片显示「有 N 项未保存」。whimbox 有两份安装/配置
-  （`whimbox_app` 与 `whimbox_launcher`），适配器会优先按**正在运行的 whibox
-  进程**定位安装目录（`startOneDragon` 进程优先于只开着的 UI），没有运行进程时
-  才退回 `app_config` 的 launcher；卡片顶部路径显示实际编辑的那份，做到“跑哪份
-  改哪份”，不要写死 app/launcher。
+  （`whimbox_app` 与 `whimbox_launcher`），**配置路径只跟 `app_config` 里
+  InfinityNikki 的 launcher**：whibox 的 bat 会 `cd /d %~dp0`，所以就是
+  `<launcher 所在目录>/configs/config.json`。不要按 UI 进程或运行副本切换——UI
+  开哪份不影响一条龙实际跑的那份；要换副本就改 `app_config` 的 launcher。
 
 ## flow_configs 本地/示例拆分（2026-10-28）
 
