@@ -1199,3 +1199,26 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
   快照接线、源码接线）。
   2026-10-27 的 activity/daily 记录已补正为 `100/100（实得 105）`，原值备份在
   `storage/cache/daily_progress_baijing_20261027_backup.json`。
+
+## 第三方脚本体力刷本配置（2026-10-28 第一期）
+
+- **页面**：`ui/qml/views/StaminaConfigView.qml`，Main.qml 侧栏「脚本刷本配置」→
+  `stamina_config`（已加入 `UiBridge.switchView` 白名单）；bridge 槽
+  `getStaminaConfigs()` / `saveStaminaConfig(game_key, json)` /
+  `openStaminaConfigFile(game_key)`。
+- **适配器**：`services/stamina_configs/`，JSON 五款：原神 BetterGI（`User/OneDragon/默认配置.json`）、
+  鸣潮 ok-ww（`DailyTask.json`）、终末地 ok-ef（`DailyBattleTask.json` + `DailyTask.json` 刷体力开关）、
+  异环 ok-nte（`DailyRoutineTaskConfigs.json` daily_anomaly）、暖暖 whimbox
+  （`configs/config.json` OneDragon）。配置路径从 `app_config.json` 的脚本安装路径
+  推导，不写死盘符。
+- **安全规则**：只改白名单字段；写前复制到
+  `storage/cache/config_backups/<game>/<file>.<时间>.bak`；同目录临时文件 +
+  `os.replace` 原子替换；脚本/游戏进程运行中拒绝写入；未知字段/越界值拒绝。
+  JSON 会按 indent=2 重排，但只影响被写的文件。
+- **第二期**：崩铁 March7th `config.yaml`、绝区零 ZZZ OneDragon
+  `config/01/one_dragon/charge_plan.yml` + `team.yml`。YAML 必须用 `ruamel.yaml`
+  保留注释/顺序，**禁止用 PyYAML dump**（会重排 45KB 配置并丢注释）；依赖需同时
+  更新 `requirements.txt` 和 `services/dependency_manager.py`。
+- **回归**：`artifacts/test_stamina_configs_20261028.py`（5 个真实配置临时副本读写、
+  备份、非法值/未知字段拒绝、运行中拒绝、bridge 槽接线、Main/QML 接线）；
+  `StaminaConfigView.qml` 已用 offscreen + stub bridge 实例化验证。

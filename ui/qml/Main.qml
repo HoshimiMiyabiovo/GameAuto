@@ -30,6 +30,7 @@ HusWindow {
     property bool setupWizardEverLoaded: false
     property bool clickSequenceEverLoaded: false
     property bool webUIEverLoaded: false
+    property bool staminaConfigEverLoaded: false
 
     // ── 性能优先：默认关闭 Mica/Acrylic 毛玻璃（5700X 切页卡顿），仅保留主题色 ──
     Component.onCompleted: {
@@ -146,6 +147,7 @@ HusWindow {
 
                     initModel: [
                         { key: "automation",      label: "自动化运行",     iconSource: HusIcon.PlayCircleOutlined },
+                        { key: "stamina_config",  label: "脚本刷本配置",   iconSource: HusIcon.SettingOutlined },
                         { key: "wool",             label: "薅羊毛集合",     iconSource: HusIcon.WalletOutlined },
                         { key: "daily",            label: "每日进度",       iconSource: HusIcon.CalendarOutlined },
                         { key: "gacha",            label: "HoYo 抽卡分析",  iconSource: HusIcon.GiftOutlined },
@@ -198,6 +200,15 @@ HusWindow {
                 visible: bridge.currentView === "wool"
                 source: "views/WoolView.qml"
                 onLoaded: mainWindow.woolEverLoaded = true
+            }
+            Loader {
+                id: staminaConfigLoader
+                anchors.fill: parent
+                asynchronous: true
+                active: bridge.currentView === "stamina_config" || mainWindow.staminaConfigEverLoaded
+                visible: bridge.currentView === "stamina_config"
+                source: "views/StaminaConfigView.qml"
+                onLoaded: mainWindow.staminaConfigEverLoaded = true
             }
             Loader {
                 id: dailyLoader

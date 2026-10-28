@@ -610,7 +610,7 @@ class UiBridge(QObject):
     @Slot(str)
     def switchView(self, view_key: str):
         valid = {
-            "automation", "wool", "daily", "gacha", "nikki",
+            "automation", "stamina_config", "wool", "daily", "gacha", "nikki",
             "wuwa", "tajiduo", "endfield_center", "setup_wizard",
             "click_sequence", "webui"
         }
@@ -2502,6 +2502,58 @@ class UiBridge(QObject):
             os.startfile(str(FLOW_FAILURE_DIR))
         except Exception as exc:
             logger.error("[Bridge] 打开失败证据目录失败: %s", exc)
+            self._request_toast(f"打开失败: {exc}", "#b04b44")
+
+    # ── 第三方脚本体力刷本配置（第一期 JSON：原神/鸣潮/终末地/异环/暖暖） ──
+
+    @Slot(result=str)
+    def getStaminaConfigs(self) -> str:
+        """读取 5 个脚本的体力刷本配置，返回 JSON 数组。"""
+        try:
+            from ..services.stamina_configs import list_configs
+
+            data = list_configs()
+            logger.info("[刷本配置] 读取 %d 个脚本配置", len(data))
+            return json.dumps(data, ensure_ascii=False)
+        except Exception as exc:
+            logger.warning("[刷本配置] 读取失败: %s", exc)
+            return json.dumps(
+                [{"game_key": "", "display_name": "", "error": str(exc), "fields": [], "values": {}}],
+                ensure_ascii=False,
+            )
+
+    @Slot(str, str, result=str)
+    def saveStaminaConfig(self, game_key: str, values_json: str) -> str:
+        """保存某个脚本的刷本配置；返回 {ok, message, backups} 或 {ok:false,error}。"""
+        try:
+            from ..services.stamina_configs import get_adapter
+
+            values = json.loads(values_json or "{}")
+            if not isinstance(values, dict):
+                raise ValueError("配置参数不是对象")
+            adapter = get_adapter(str(game_key))
+            result = adapter.write(values)
+            logger.info("[刷本配置] 保存 %s: %s", game_key, result.get("message"))
+            self._request_toast(f"{adapter.display_name} 配置已保存", "#2f7d4a")
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as exc:
+            logger.warning("[刷本配置] 保存 %s 失败: %s", game_key, exc)
+            self._request_toast(f"保存失败: {exc}", "#b04b44")
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    @Slot(str)
+    def openStaminaConfigFile(self, game_key: str):
+        """用系统默认程序打开脚本配置文件（方便看原文/高级字段）。"""
+        try:
+            from ..services.stamina_configs import get_adapter
+
+            adapter = get_adapter(str(game_key))
+            path = adapter.primary_path()
+            if not path or not path.is_file():
+                raise FileNotFoundError("配置文件不存在")
+            os.startfile(str(path))
+        except Exception as exc:
+            logger.warning("[刷本配置] 打开配置文件失败: %s", exc)
             self._request_toast(f"打开失败: {exc}", "#b04b44")
 
     # ── Tool slots ────────────────────────────────────────────────
