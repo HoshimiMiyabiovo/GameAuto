@@ -46,6 +46,8 @@ from .ocr_click_tester import (
     grab_screen,
 )
 
+_LOGGER = logging.getLogger("GameAutomation")
+
 # 模板路径
 _TPL = {
     "launcher_start": str(TEMPLATES_DIR / "白荆回廊-开始游戏.png"),
@@ -107,8 +109,8 @@ def _find_game_window(logger: logging.Logger, process_name: str = GAME_PROCESS) 
                 title = win32gui.GetWindowText(hwnd)
                 if title:  # 只要有标题的顶级窗口
                     found.append(hwnd)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[白荆回廊] 枚举窗口失败: %s", exc)
 
     try:
         win32gui.EnumWindows(_enum, None)
@@ -137,8 +139,8 @@ def _focus_game_window(logger: logging.Logger, hwnd: Optional[int]):
         try:
             win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
             win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[白荆回廊] 模拟 Alt 键失败: %s", exc)
         foreground_ok = False
         try:
             win32gui.SetForegroundWindow(hwnd)
@@ -213,8 +215,8 @@ def _match_template_in_screenshot(
             if max_val >= thresh:
                 h, w = tpl_gray.shape[:2]
                 return (max_loc[0] + w // 2, max_loc[1] + h // 2), max_val
-    except Exception:
-        pass
+    except Exception as exc:
+        _LOGGER.debug("[白荆回廊] 模板匹配异常: %s", exc)
     return None, 0.0
 
 
@@ -369,6 +371,7 @@ def _wait_process(logger: logging.Logger, process_name: str, timeout: int = 300,
                     logger.info(f"[白荆回廊] 游戏本体进程已启动: {process_name} PID={proc.info['pid']}")
                     return proc.info["pid"]
             except (psutil.NoSuchProcess, psutil.AccessDenied):
+                # 进程已退出或无权限读取，继续轮询
                 pass
         time.sleep(2)
     logger.warning(f"[白荆回廊] 等待游戏本体进程超时: {process_name} ({timeout}s)")
@@ -628,8 +631,8 @@ def _resolve_baijing_window(logger: logging.Logger) -> Optional[int]:
             best = max(found, key=lambda h: _wg.GetWindowRect(h)[2] - _wg.GetWindowRect(h)[0])
             logger.info(f"[白荆回廊] 通过标题回退定位窗口 HWND={best}")
             return best
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[白荆回廊] 标题回退定位窗口失败: %s", exc)
     return None
 
 
@@ -648,15 +651,15 @@ def _prune_old_verify_images(logger: logging.Logger):
                 if fp.stat().st_mtime < cutoff:
                     fp.unlink()
                     logger.debug(f"[白荆回廊] 清理过期验证图: {fp.name}")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"[白荆回廊] 清理验证图失败 {fp.name}: {exc}")
         for fp in dir_p.glob("*.png"):
             try:
                 if fp.stat().st_mtime < cutoff:
                     fp.unlink()
                     logger.debug(f"[白荆回廊] 清理过期验证图: {fp.name}")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"[白荆回廊] 清理验证图失败 {fp.name}: {exc}")
     except Exception as e:
         logger.debug(f"[白荆回廊] 清理验证图失败: {e}")
 
@@ -738,8 +741,8 @@ def _ensure_baijing_window_valid(logger: logging.Logger, hwnd: Optional[int]) ->
         import win32gui as _wg
         if hwnd and _wg.IsWindow(hwnd) and _wg.IsWindowVisible(hwnd):
             return hwnd
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[白荆回廊] 窗口有效性检查失败: %s", exc)
     # 重找
     nh = _resolve_baijing_window(logger)
     if nh:
@@ -861,8 +864,8 @@ def _play_sequence_with_verify_capture(
                     return False, verify_path
                 try:
                     _focus_game_window(logger, hwnd)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[白荆回廊] 点击前聚焦窗口失败: %s", exc)
                 try:
                     _pyautogui_click_guarded(sx, sy, button=getattr(ev, "button", "left") or "left")
                     logger.info(
@@ -1195,6 +1198,6 @@ def run_baijing_full_flow(config: dict, logger: logging.Logger, controller=None)
         logger.error(f"[白荆回廊] 一条龙异常: {e}", exc_info=True)
         try:
             _close_baijing_game(logger)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[白荆回廊] 异常退出时关闭游戏失败: %s", exc)
         return False

@@ -466,6 +466,7 @@ def _discover_log_dir_near_paths(file_pattern: str, path_values: Iterable[object
                     if any(candidate.glob(file_pattern)):
                         return str(candidate)
                 except OSError:
+                    # 无权限/目录损坏时跳过该候选，继续搜索下一个
                     pass
                 if not fallback:
                     fallback = str(candidate)
@@ -486,6 +487,7 @@ def _discover_log_dir_near_paths(file_pattern: str, path_values: Iterable[object
                     if any(current_path.glob(file_pattern)):
                         return str(current_path)
                 except OSError:
+                    # 无权限/目录损坏时保持 fallback，继续遍历
                     pass
                 if not fallback:
                     fallback = str(current_path)

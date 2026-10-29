@@ -1,7 +1,7 @@
 """体力刷本配置适配器注册表。
 
 第一期（JSON）：原神 BetterGI / 鸣潮 ok-ww / 终末地 ok-ef / 异环 ok-nte / 暖暖 whimbox。
-崩铁 March7th、绝区零 ZZZ OneDragon 是 YAML，第二期接（需要 ruamel.yaml 保注释）。
+第二期（YAML，ruamel round-trip 保注释）：崩铁 March7th / 绝区零 OneDragon。
 """
 
 from __future__ import annotations
@@ -13,10 +13,12 @@ from typing import Any, Dict, List, Optional
 from ...settings.paths import APP_CONFIG_PATH
 from .base import ConfigError
 from .bettergi import BetterGIConfigAdapter
+from .march7th import March7thConfigAdapter
 from .ok_ef import OkEfConfigAdapter
 from .ok_nte import OkNteConfigAdapter
 from .ok_ww import OkWwConfigAdapter
 from .whimbox import WhimboxConfigAdapter
+from .zzz_one_dragon import ZzzOneDragonConfigAdapter
 
 LOGGER = logging.getLogger("GameAutomation.StaminaConfigs")
 
@@ -26,6 +28,8 @@ ADAPTER_CLASSES = (
     OkEfConfigAdapter,
     OkNteConfigAdapter,
     WhimboxConfigAdapter,
+    March7thConfigAdapter,
+    ZzzOneDragonConfigAdapter,
 )
 
 

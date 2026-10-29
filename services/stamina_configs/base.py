@@ -11,7 +11,8 @@
     → read() 返回 {game_key, fields, values, files, running}
     → QML 编辑 → write(values) → 备份 → 临时文件 → os.replace
 
-格式：第一期只支持 JSON；YAML（March7th/ZZZ）需要 ruamel.yaml 保留注释，放到第二期。
+格式：JSON 与 YAML。YAML 走 ruamel.yaml round-trip（YamlConfigAdapter），
+保留注释/键顺序/行内注释，**禁止用 PyYAML dump**（会重排整份配置并丢注释）。
 """
 
 from __future__ import annotations
@@ -155,6 +156,8 @@ def _coerce(spec: FieldSpec, raw: Any) -> Any:
     value = str(raw or "").strip()
     if not value and not spec.allow_empty:
         raise ConfigError(f"{spec.label} 不能为空")
+    if value and spec.options and value not in spec.options:
+        raise ConfigError(f"{spec.label} 只能是: {', '.join(spec.options)}")
     return value
 
 
@@ -261,6 +264,10 @@ class JsonConfigAdapter:
         except Exception as exc:
             raise ConfigError(f"写入 {path.name} 失败: {exc}")
 
+    def _write_file(self, path: Path, data: Any) -> None:
+        """按文件格式落盘；YAML 适配器覆盖为保留注释的 ruamel 写回。"""
+        self._write_json(path, data)
+
     def _apply(self, data: Dict[str, Any], spec: FieldSpec, value: Any) -> None:
         """默认按 path 写入；特殊字段（如列表成员开关）由子类覆盖。"""
         _set_path(data[spec.file], spec.path, value)
@@ -311,7 +318,7 @@ class JsonConfigAdapter:
         for file_key in changed:
             path = self._files[file_key]
             backups.append(self._backup(path))
-            self._write_json(path, data[file_key])
+            self._write_file(path, data[file_key])
         message = f"已保存 {sum(changed.values())} 项"
         LOGGER.info("[刷本配置] %s %s，备份: %s", self.display_name, message, backups)
         return {"ok": True, "message": message, "backups": backups}

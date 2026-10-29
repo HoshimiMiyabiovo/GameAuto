@@ -32,7 +32,7 @@ from __future__ import annotations
 import subprocess
 import time
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .automation_controller import GAME_UPDATING_SKIP
 from .background_template_runner import (
@@ -730,8 +730,8 @@ def _run_single_task(
                     "kind": "script_task",
                 },
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            controller.logger.debug("[%s] 记录脚本失败诊断异常: %s", script_name, exc)
 
     if weekly_seq_line:
         report_lines.append(weekly_seq_line)
@@ -960,6 +960,7 @@ def run_task_batch(
             try:
                 app_results[app_results.index(r)] = new_result
             except ValueError:
+                # 结果对象可能已被并发清理，找不到就保留原批次结果
                 pass
 
     return TaskBatchResult(report=report, warnings=warnings, startup_lines=startup_lines)

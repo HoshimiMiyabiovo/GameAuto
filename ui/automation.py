@@ -1241,8 +1241,8 @@ class FletAutomationMixin:
             launcher = str(xm_cfg.get("launcher") or "").strip()
             if launcher and os.path.isfile(launcher):
                 return launcher
-        except Exception:
-            pass
+        except Exception as exc:
+            self.controller.logger.debug("[XM] 读取启动器配置失败: %s", exc)
         # 回退到 glob 模式（如果配置了）
         if self.XM_SEER_PATH_PATTERN:
             matches = glob.glob(self.XM_SEER_PATH_PATTERN)

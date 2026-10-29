@@ -2,11 +2,14 @@
 
 import copy
 import json
+import logging
 import os
 import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+LOGGER = logging.getLogger("GameAutomation")
 
 from .defaults import (
     DEFAULT_APPS,
@@ -72,8 +75,8 @@ def _walk_decrypt(obj: Any, parent: Optional[Dict] = None):
                     # 仅当解密结果与原值不同或已确认是密文时才覆盖，避免误改
                     if dec != v or is_encrypted(v) or legacy_flag == "dpapi":
                         obj[k] = dec
-                except Exception:
-                    pass
+                except Exception as exc:
+                    LOGGER.warning("[Config] 敏感字段解密失败，保留原值 key=%s: %s", k, exc)
     elif isinstance(obj, list):
         for item in obj:
             if isinstance(item, dict):
@@ -99,8 +102,8 @@ def _walk_encrypt(obj: Any):
                     enc, ok = try_protect(v)
                     if ok:
                         obj[k] = enc
-                except Exception:
-                    pass
+                except Exception as exc:
+                    LOGGER.warning("[Config] 敏感字段加密失败，将按明文保留 key=%s: %s", k, exc)
     elif isinstance(obj, list):
         for item in obj:
             _walk_encrypt(item)
@@ -111,8 +114,8 @@ def _decrypt_config(cfg: Dict) -> Dict:
         return cfg
     try:
         _walk_decrypt(cfg, None)
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.warning("[Config] 配置解密失败，返回原配置: %s", exc)
     return cfg
 
 def _encrypt_for_persist(cfg: Dict) -> Dict:
@@ -128,8 +131,8 @@ def _encrypt_for_persist(cfg: Dict) -> Dict:
             pwd = str(clone["email"].get("password") or "")
             if is_encrypted(pwd):
                 clone["email"]["password_protect"] = "dpapi"
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.warning("[Config] 配置加密失败，准备按明文落盘: %s", exc)
     return clone
 
 
@@ -155,7 +158,7 @@ def _default_config() -> Dict:
         "setup_completed": False,
         "app_order": list(DEFAULT_APP_ORDER),
         "qbittorrent": copy.deepcopy(DEFAULT_QBITTORRENT),
-        "log": {"dir": "logs", "file": "auto_runner.log", "backup_count": 0},
+        "log": {"dir": "data/logs", "file": "auto_runner.log", "backup_count": 0},
         "global": {"min_run_time": 300, "check_interval": 10, "debug_mode": False},
         "baijing": {"cat_exchange": copy.deepcopy(DEFAULT_BAIJING_CAT_EXCHANGE)},
         "apps": copy.deepcopy(DEFAULT_APPS),
@@ -241,8 +244,8 @@ def _raw_has_plaintext_sensitive(raw: Any) -> bool:
                             import base64
                             base64.b64decode(v.encode("ascii"))
                             continue
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            LOGGER.debug("[Config] password 旧式 base64 校验失败，按明文处理: %s", exc)
                     found = True
                     return
         elif isinstance(o, list):
@@ -268,8 +271,8 @@ def load(force: bool = False) -> Dict:
                     try:
                         # 用解密后的缓存重写一次，落盘时会自动加密
                         save(_cache)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        LOGGER.warning("[Config] 明文敏感字段自动迁移失败: %s", exc)
             except (json.JSONDecodeError, OSError):
                 _cache = defaults
         else:
@@ -316,8 +319,8 @@ def atomic_write_json(path: Path, data: Dict) -> None:
     except Exception:
         try:
             os.unlink(tmp_path)
-        except OSError:
-            pass
+        except OSError as exc:
+            LOGGER.debug("[Config] 清理临时文件失败: %s", exc)
         raise
 
 
@@ -333,8 +336,8 @@ def save(config: Dict) -> None:
                 Path(str(_CONFIG_FILE) + _BACKUP_SUFFIX),
                 _encrypt_for_persist(persisted),
             )
-        except OSError:
-            pass
+        except OSError as exc:
+            LOGGER.warning("[Config] 配置备份写入失败: %s", exc)
 
     atomic_write_json(_CONFIG_FILE, persisted)
     _cache = _merge_defaults(_default_config(), persisted)
@@ -363,7 +366,7 @@ def get_qbittorrent() -> Dict:
 def get_log_config() -> Dict:
     cfg = load().get("log", {})
     return {
-        "dir": cfg.get("dir", "logs"),
+        "dir": cfg.get("dir", "data/logs"),
         "file": cfg.get("file", "auto_runner.log"),
         "backup_count": cfg.get("backup_count", 0),
     }

@@ -1,5 +1,6 @@
-# 游戏自动化助手 - 依赖列表
-# 安装命令：pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 游戏自动化助手 - 运行时依赖（人类维护的唯一清单）
+# 安装：以普通权限运行 setup_deps.bat（内部用 uv 按 requirements.lock 精确安装）
+# 重新冻结锁文件：.venv\Scripts\python.exe tools\refresh_requirements_lock.py
 
 psutil>=5.9.0
 pyautogui>=0.9.54
@@ -7,7 +8,7 @@ pytesseract>=0.3.10
 pywin32>=306
 opencv-python>=4.8.0
 Pillow>=10.0.0
-# GUI 框架
+# GUI 框架（PySide6 版本敏感：6.10 会炸 PyHuskarUI 的 QML，见 AGENTS.md）
 flet>=0.28.0
 PySide6>=6.8.3,<6.9
 pyhuskarui>=0.6.0
@@ -18,6 +19,17 @@ rsa>=4.9
 genshin>=1.7
 pycryptodome>=3.20.0
 pynput>=1.8.0
+# WebUI
 fastapi>=0.110
 uvicorn[standard]>=0.29
 websockets>=12.0
+pydantic>=2.0
+# OCR / 屏幕采集
+# 注意：必须用 GPU 版 onnxruntime。装 CPU 版 onnxruntime 会让 RapidOCR
+# 静默退回 CPU（2026-10 实测过），锁文件与 setup_deps 都按 --no-deps 安装。
+rapidocr-onnxruntime>=1.2.3
+onnxruntime-gpu>=1.20
+windows-capture>=1.2
+numpy>=1.26
+# 刷本配置（第二期）：YAML round-trip 保注释，禁止用 PyYAML dump
+ruamel.yaml>=0.18

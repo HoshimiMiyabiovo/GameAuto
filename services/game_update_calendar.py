@@ -7,7 +7,7 @@
 - 崩铁：sg-hkrpg-api.hoyoverse.com/common/hkrpg_global/announcement/api/（lang=zh-cn）
 - 绝区零：sg-announcement-static.hoyoverse.com/common/nap_global/announcement/api/（lang=zh-cn）
 
-公告时间均为 UTC+8。缓存写到 storage/cache/game_update_calendar.json，
+公告时间均为 UTC+8。缓存写到 data/cache/game_update_calendar.json，
 默认 6 小时刷新；网络失败返回旧缓存，没有缓存则返回 None，
 调用方回退到固定补跑任务。
 """

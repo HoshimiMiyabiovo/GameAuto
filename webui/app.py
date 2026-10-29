@@ -144,12 +144,13 @@ async def ws_logs(ws: WebSocket):
                 # 缓冲被清空或回绕
                 last_len = len(cur)
     except WebSocketDisconnect:
+        # 客户端正常断开
         pass
     except Exception:
         try:
             await ws.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WebUI] 关闭 WebSocket 失败: %s", exc)
 
 _webui_thread = None
 _webui_lock = threading.Lock()

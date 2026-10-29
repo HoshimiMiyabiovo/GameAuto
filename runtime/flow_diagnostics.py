@@ -210,6 +210,7 @@ def record_failure(
                     f"截图={image_name or '无'}（artifacts/flow_failures/）"
                 )
         except Exception:
+            # 失败取证自身的日志写入失败不能再写日志，避免递归
             pass
         return row_id
     except Exception as exc:
@@ -217,6 +218,7 @@ def record_failure(
             if logger is not None:
                 logger.debug(f"[失败记录] 记录失败（已忽略）: {exc}")
         except Exception:
+            # logger 本身抛异常时绝不能再记录，避免递归
             pass
         return None
 

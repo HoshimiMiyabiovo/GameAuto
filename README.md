@@ -45,11 +45,10 @@
 git clone <repo-url>
 cd game_auto
 
-# 2. 创建虚拟环境并安装依赖
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 2. 以普通权限安装依赖（uv + requirements.lock 精确复现；不要用管理员运行）
+setup_deps.bat
 
-# 3. 启动（首次启动会自动检查并安装缺失依赖，然后进入配置向导）
+# 3. 启动（启动时只检查依赖，缺包会提示运行 setup_deps.bat；随后进入配置向导）
 ```
 
 | 入口 | 说明 |
@@ -74,15 +73,15 @@ game_auto/
 ├── clients/        # 米游社 / 库街区 / 塔吉多 / 森空岛等外部接口客户端
 ├── gacha/          # 各游戏抽卡导入、解析与分析
 ├── settings/       # 默认配置、路径常量、配置读写（含原子写入）
-├── storage/        # SQLite 数据访问层（workflow_db.py）
+├── storage/        # SQLite 数据访问层（workflow_db.py；不再存放缓存）
+├── data/           # 运行时数据（不入库）：logs/、artifacts/、cache/、workflow.sqlite3
 ├── maintenance/    # 维护脚本与一次性工具（旧配置编辑器、模板种子等）
 ├── start/          # 用户双击入口
 ├── launchers/      # 内部提权与包模式启动脚本
 ├── tools/          # 内置工具（Tesseract OCR、QML 布局 smoke 测试等）
 ├── 模板/            # 图像模板流程用的截图模板
 ├── app_config.json      # 用户覆盖配置与执行顺序（不入库）
-├── flow_configs.json    # 图像模板流程定义（XM / CJ / NTE）
-└── workflow.sqlite3     # 本机偏好与运行数据数据库（不入库）
+└── flow_configs.json    # 图像模板流程定义（XM / CJ / NTE；本地文件，不入库）
 ```
 
 ### runtime/ 主要模块
@@ -134,21 +133,34 @@ game_auto/
 
 ## 依赖项
 
-主要 Python 包（完整列表见 `requirements.txt`，首次启动由 `services/dependency_manager.py` 自动补装）：
+主要 Python 包（完整列表见 `requirements.txt`；`requirements.lock` 是已验证环境的精确快照，安装统一走 `setup_deps.bat`。启动时 `services/dependency_manager.py` 只检查、不安装）：
 
 - `PySide6`（锁定 `>=6.8,<6.9`，兼容 PyHuskarUI）+ `pyhuskarui` — 默认 GUI 框架与 QML 控件库
 - `flet` — 旧 GUI 框架，保留作回退
 - `psutil` — 进程管理；`pywin32` — Windows API 与 DPAPI 密码加密
 - `pyautogui` / `opencv-python` / `Pillow` — 屏幕自动化与图像模板匹配
-- `pytesseract` — OCR 文字识别
+- `pytesseract` — OCR 文字识别；`rapidocr-onnxruntime` + `onnxruntime-gpu` — 主 OCR 引擎（必须 GPU 版，CPU 版会静默降级）
+- `windows-capture` — 窗口截屏；`numpy` — 图像处理
 - `genshin` — 米哈游协议（签到、便笺、stoken 换取）
 - `browser-cookie3` — 浏览器 Cookie 提取；`qrcode` — 扫码登录二维码
 - `rsa` / `pycryptodome` — 库街区 / 塔吉多接口签名加密
 - `openpyxl` — Excel 解析（鸣潮抽卡记录）
+- `ruamel.yaml` — 刷本配置（崩铁 March7th / 绝区零 OneDragon）YAML 读写，保留注释与键顺序
 
 ## 开发注意
 
 重复踩坑的工程约定（依赖新增规则、日志规则、QML 兼容性避坑、米哈游协议已验证事实等）集中记录在 [AGENTS.md](AGENTS.md)，改代码前先看它。
+
+```bash
+# 纯逻辑回归套件（tests/suite_*.py，逐个子进程隔离）
+.venv\Scripts\python.exe -m pytest tests -q
+
+# 静态检查（E9 / F821 / E722 窄规则集）
+.venv\Scripts\ruff.exe check .
+
+# 依赖变更后刷新锁文件（先在本机验证，再执行）
+.venv\Scripts\python.exe tools\refresh_requirements_lock.py
+```
 
 ## 免责声明
 

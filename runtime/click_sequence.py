@@ -37,6 +37,8 @@ except Exception:  # pragma: no cover - 录制功能依赖 pynput
 
 from ..settings.paths import CLICK_SEQUENCES_DIR
 
+_LOGGER = logging.getLogger("GameAutomation")
+
 
 def sequence_path(name: str, directory: Optional[str] = None) -> Path:
     """校验序列名并返回文件路径；拒绝路径分隔符、盘符与上级目录。"""
@@ -67,8 +69,8 @@ def _resolve_window(
                 title = win32gui.GetWindowText(hwnd).strip()
                 rect = win32gui.GetWindowRect(hwnd)
                 return int(hwnd), title, rect
-        except Exception:
-            pass
+        except Exception as exc:
+            _LOGGER.debug("[序列] 窗口枚举项失败: %s", exc)
     if not keyword:
         return None, None, None
     kw = keyword.lower()
@@ -165,8 +167,8 @@ def list_windows(
     fg_hwnd = 0
     try:
         fg_hwnd = win32gui.GetForegroundWindow()
-    except Exception:
-        pass
+    except Exception as exc:
+        _LOGGER.debug("[序列] 获取前台窗口失败: %s", exc)
 
     items: List[dict] = []
 
@@ -193,8 +195,8 @@ def list_windows(
                 if exclude_own_process and pid == own_pid:
                     return  # 排除本程序的窗口（避免选到自己）
                 exe = _query_process_exe(pid)
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOGGER.debug("[序列] 查询窗口进程失败: %s", exc)
         if _is_cloaked(hwnd):
             return
         try:
@@ -380,8 +382,8 @@ class ClickRecorder:
                 ))
                 self._last_ts = now
                 self.logger.info(f"[录制] 第{len(self.events)}次: ⌨ 按键 {name}")
-        except Exception:
-            pass
+        except Exception as exc:
+            self.logger.debug("[录制] 键盘回调处理失败: %s", exc)
 
     def _on_click(self, x, y, button, pressed):
         if not pressed or not self._recording:
@@ -422,8 +424,8 @@ class ClickRecorder:
             if lst is not None:
                 try:
                     lst.stop()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self.logger.debug("[录制] 停止监听器失败: %s", exc)
         self._mouse_listener = None
         self._key_listener = None
         if self.events:
@@ -610,6 +612,7 @@ def main(argv=None):
             while rec._recording:
                 time.sleep(0.2)
         except KeyboardInterrupt:
+            # Ctrl+C 是用户主动结束录制，按正常收尾处理
             pass
         rec.stop()
         if rec.events:

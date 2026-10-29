@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path
+
+LOGGER = logging.getLogger("GameAutomation")
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 APP_CONFIG_PATH = BASE_DIR / "app_config.json"
-LOG_DIR = BASE_DIR / "logs"
+# 运行时数据统一放 data/（日志/失败截图/数据库/缓存），根目录只留源码与资源。
+# 旧版本把 logs/artifacts/workflow.sqlite3/storage/cache 直接放在根目录，
+# 迁移脚本：tools/migrate_data_layout_20261029.py（一次性，迁移后本注释仍有效）。
+DATA_DIR = BASE_DIR / "data"
+LOG_DIR = DATA_DIR / "logs"
 LOG_FILE = LOG_DIR / "auto_runner.log"
 # 看门狗栈转储按故障类型分文件（原先两类硬故障混在一个 watchdog.log，事后没法区分）
 # 主线程无心跳（GUI 卡死）：hang_watchdog 写这个
@@ -18,7 +25,7 @@ TESSERACT_DIR = TOOLS_DIR / "tesseract"
 TESSERACT_EXE = TESSERACT_DIR / "tesseract.exe"
 TESSDATA_DIR = TESSERACT_DIR / "tessdata"
 TEMPLATES_DIR = BASE_DIR / "模板"
-ARTIFACTS_DIR = BASE_DIR / "artifacts"
+ARTIFACTS_DIR = DATA_DIR / "artifacts"
 OCR_DEBUG_DIR = ARTIFACTS_DIR / "ocr_debug"
 FLOW_CONFIG_PATH = BASE_DIR / "flow_configs.json"
 # 仓库里只提交默认流程定义；flow_configs.json 是每台机器的本地配置（GUI 会写
@@ -34,10 +41,10 @@ def ensure_flow_config_path() -> Path:
     if FLOW_CONFIG_EXAMPLE_PATH.is_file():
         try:
             shutil.copy2(FLOW_CONFIG_EXAMPLE_PATH, FLOW_CONFIG_PATH)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("[Paths] flow_configs.json 初始化复制失败: %s", exc)
     return FLOW_CONFIG_PATH
-WORKFLOW_DB_PATH = BASE_DIR / "workflow.sqlite3"
+WORKFLOW_DB_PATH = DATA_DIR / "workflow.sqlite3"
 # 固定点击序列（录制/回放）存储目录
 CLICK_SEQUENCES_DIR = BASE_DIR / "click_sequences"
 # 已集成进一条龙的序列，禁止在 GUI 误删（白荆回廊日常/验证/周常）
@@ -48,7 +55,7 @@ PROTECTED_CLICK_SEQUENCES = frozenset({
 })
 # 受保护序列的备份目录（用于误删后恢复）
 PROTECTED_BACKUP_DIR = CLICK_SEQUENCES_DIR / ".protected_backup"
-CACHE_DIR = BASE_DIR / "storage" / "cache"
+CACHE_DIR = DATA_DIR / "cache"
 # 第三方脚本配置修改前的备份（每次写入前复制，不覆盖历史）
 CONFIG_BACKUP_DIR = CACHE_DIR / "config_backups"
 # 终末地森空岛查询结果的本地缓存（进页面即时展示，过期后后台刷新）

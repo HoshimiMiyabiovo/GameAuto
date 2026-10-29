@@ -369,8 +369,8 @@ def cdp_runtime_eval(ws_url: str, expression: str,
     finally:
         try:
             sock.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("[库街区ADB] 关闭 socket 失败: %s", exc)
 
 
 # ── 主流程 ──────────────────────────────────────────────────────────
@@ -465,8 +465,8 @@ def capture_kujiequ_token(
         if progress_cb:
             try:
                 progress_cb(msg)
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.debug("[库街区ADB] 进度回调失败: %s", exc)
 
     if adb_path is None:
         adb_path = find_adb()
@@ -586,7 +586,7 @@ def grab_and_persist(
     serial: Optional[str] = None,
     port: int = CDP_FORWARD_PORT,
     progress_cb=None,
-) -> Tuple[KujiequAdbCapture, "WuwaKujiequProfile"]:
+) -> Tuple[KujiequAdbCapture, "wuwa_kujiequ.WuwaKujiequProfile"]:
     """一步式：抓取 + 加密入库 + 返回可直接用于签到的 profile。
 
     Returns:

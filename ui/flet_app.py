@@ -724,6 +724,7 @@ class FletGameAutoApp(FletAutomationMixin):
                 self.controller.logger.warning(
                     "[UI] 视图 %s 刷新配置失败：%s", view_key, exc)
             except Exception:
+                # 日志记录本身失败，不能再写日志
                 pass
 
     def _on_view_nav_click(self, e):
@@ -6898,6 +6899,7 @@ def run_flet_gui(dep_report=None):
             ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
             sys.exit(0)
     except Exception:
+        # 提权失败时继续以当前权限启动，由后续功能自行提示
         pass
 
     def main(page: ft.Page):

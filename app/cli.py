@@ -7,6 +7,7 @@ try:
     sys.stdout.reconfigure(line_buffering=True)
     sys.stderr.reconfigure(line_buffering=True)
 except (AttributeError, ValueError):
+    # 非标准流（无 reconfigure）或被重定向时不支持行缓冲
     pass
 
 from ..settings import APP_ORDER, get_app_display_name, resolve_app_key
@@ -52,9 +53,12 @@ def main():
 
     warn_once_at_startup(bootstrap_logger)
 
-    dep_report = run_full_dependency_check(bootstrap_logger, auto_install=True)
+    dep_report = run_full_dependency_check(bootstrap_logger)
     if dep_report.errors:
-        bootstrap_logger.error("检测到关键依赖错误，程序继续运行但部分功能可能不可用")
+        bootstrap_logger.error(
+            "检测到关键依赖错误，程序继续运行但部分功能可能不可用；"
+            "请以普通权限运行 setup_deps.bat 补齐依赖"
+        )
 
     controller = AutomationController()
     report = []

@@ -24,6 +24,7 @@ except ImportError:
 
 
 Rect = Tuple[int, int, int, int]
+_LOGGER = logging.getLogger("GameAutomation")
 
 # ── 模板图缓存：避免每次匹配都 Image.open 读盘（抄 ok-script FeatureSet 预加载思路）──
 _TEMPLATE_IMAGE_CACHE: Dict[str, Any] = {}
@@ -78,8 +79,8 @@ def _match_template_cv2_once(screenshot: Any, tpl: Any, confidences) -> Optional
         if max_val >= min_conf:
             h, w = tpl_gray.shape[:2]
             return int(max_loc[0] + w // 2), int(max_loc[1] + h // 2)
-    except Exception:
-        pass
+    except Exception as exc:
+        _LOGGER.debug("[模板] 匹配异常: %s", exc)
     return None
 TEXT_TEMPLATE_OCR_MEMORY: Dict[str, Tuple[str, ...]] = {
     "异环-进入游戏.png": ("进入游戏",),
@@ -694,8 +695,8 @@ def _focus_window(hwnd: int):
         try:
             win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
             win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
-        except Exception:
-            pass
+        except Exception as exc:
+            _LOGGER.debug("[窗口] 模拟 Alt 键失败: %s", exc)
         win32gui.SetForegroundWindow(hwnd)
         # 先设 TOPMOST 压过可能也是 TOPMOST 的启动器窗口，再立即取消 TOPMOST
         # 这样 CJ 窗口被提到最上层，但不会一直遮挡后续其他窗口
@@ -703,10 +704,10 @@ def _focus_window(hwnd: int):
         try:
             win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0, flags)
             win32gui.SetWindowPos(hwnd, win32con.HWND_NOTOPMOST, 0, 0, 0, 0, flags)
-        except Exception:
-            pass
-    except Exception:
-        pass
+        except Exception as exc:
+            _LOGGER.debug("[窗口] SetWindowPos 置顶失败: %s", exc)
+    except Exception as exc:
+        _LOGGER.debug("[窗口] SetForegroundWindow 失败: %s", exc)
 
 
 def _locate_template_on_screen(
@@ -752,8 +753,8 @@ def _locate_template_on_screen(
                     box = pyautogui.locate(tpl, screenshot)
                     if box:
                         return int(box.left + box.width / 2 + region[0]), int(box.top + box.height / 2 + region[1])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _LOGGER.debug("[模板] 屏幕定位失败: %s", exc)
             time.sleep(throttle_sec)
     return None
 
@@ -1446,6 +1447,227 @@ def close_flow_processes(
                 logger.warning(f"[{flow_key}] 清理残留进程 {name} PID={proc.pid} 失败: {exc}")
 
 
+
+
+# 自带内部循环的动作：匹配阶段直接放行，交给 _dispatch_step_action 执行
+_BUILTIN_ACTIONS = (
+    "zzz_shop_buy",
+    "monthly_exchange",
+    "nikki_enter_game",
+    "starrail_enter_main",
+    "genshin_enter_main",
+    "qoder_open_campaign",
+    "qoder_verify_claim",
+    "wool_verify_log",
+)
+
+
+def _dispatch_step_action(
+    *,
+    logger: logging.Logger,
+    flow_key: str,
+    step: dict,
+    name: str,
+    step_no: int,
+    action: str,
+    hwnd: int,
+    pid: Optional[int],
+    scales: List[float],
+    confidences: List[float],
+    stop_check: Optional[Callable[[], bool]],
+) -> Tuple[bool, str, int, Optional[int]]:
+    """执行内建动作步骤（采购/兑换/进入主界面/Qoder 领取/日志核验）。
+
+    返回 (是否成功, 失败说明, 最新 hwnd, 最新 pid)：进入游戏类动作会把
+    窗口切到游戏本体，调用方必须用返回值覆盖本地 hwnd/pid。
+    """
+    if action == "zzz_shop_buy":
+        # 绝区零后勤商店采购：内部完成页签切换 + 逐商品「点商品→确认」循环
+        from .zzz_monthly_shop import buy_shop_groups
+
+        shop_ok, shop_msg = buy_shop_groups(
+            logger,
+            hwnd,
+            step,
+            scales=scales,
+            confidences=confidences,
+            stop_check=stop_check,
+        )
+        if not shop_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({shop_msg})", hwnd, pid
+        logger.info(f"[{flow_key}] 步骤{step_no}采购完成: {shop_msg}")
+    elif action == "monthly_exchange":
+        # 商店 → 兑换商店 → 目标页签 每月兑换（绝区零信号残响 / 崩铁余烬兑换共用）
+        from .monthly_exchange import buy_monthly_exchange
+
+        exchange_ok, exchange_msg = buy_monthly_exchange(
+            logger,
+            hwnd,
+            step,
+            scales=scales,
+            confidences=confidences,
+            stop_check=stop_check,
+        )
+        if not exchange_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({exchange_msg})", hwnd, pid
+        logger.info(f"[{flow_key}] 步骤{step_no}每月兑换完成: {exchange_msg}")
+    elif action == "nikki_enter_game":
+        # 无限暖暖：启动器 → 登录页 → 加载 → 主界面（聊天气泡特征）
+        from .nikki_launcher import enter_main_interface
+
+        nikki_ok, nikki_msg, game_hwnd, game_pid = enter_main_interface(
+            logger,
+            hwnd,
+            step,
+            scales,
+            confidences,
+            stop_check=stop_check,
+        )
+        if not nikki_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({nikki_msg})", hwnd, pid
+        if game_hwnd:
+            hwnd = game_hwnd
+            pid = game_pid or pid
+        logger.info(f"[{flow_key}] 步骤{step_no}进入主界面成功: {nikki_msg}")
+    elif action == "qoder_open_campaign":
+        # 头像 → 权益中心：活动弹窗不会自动出现，必须走常驻入口
+        from .qoder_claim import open_campaign
+
+        open_ok, open_msg = open_campaign(
+            logger,
+            hwnd,
+            scales,
+            confidences,
+            timeout_sec=int(step.get("timeout_sec", 20)),
+            stop_check=stop_check,
+        )
+        if not open_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({open_msg})", hwnd, pid
+        logger.info(f"[{flow_key}] 步骤{step_no}权益中心已打开: {open_msg}")
+    elif action == "qoder_verify_claim":
+        # Qoder 领取结果以 App 自身日志为准；UI 空跑不再算成功
+        from .qoder_claim import verify_claim
+
+        claim_ok, claim_msg = verify_claim(
+            logger,
+            timeout_sec=int(step.get("timeout_sec", 60)),
+        )
+        if not claim_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({claim_msg})", hwnd, pid
+        logger.info(f"[{flow_key}] 步骤{step_no}领取状态确认: {claim_msg}")
+    elif action == "wool_verify_log":
+        # MiniMax/TRAE 以接口日志为准，避免 UI 确认误报
+        from .wool_claim_logs import verify as verify_wool_log
+
+        wool_ok, wool_msg = verify_wool_log(
+            logger,
+            str(step.get("source") or ""),
+            hwnd,
+            scales,
+            confidences,
+            step,
+            int(step.get("timeout_sec", 30)),
+        )
+        if not wool_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({wool_msg})", hwnd, pid
+        logger.info(f"[{flow_key}] 步骤{step_no}日志确认成功: {wool_msg}")
+    elif action == "starrail_enter_main":
+        # 崩铁：复刻 March7th 的进入方法（点击进入 → 主界面特征连续命中）
+        from .starrail_launcher import enter_main_interface
+
+        sr_ok, sr_msg, game_hwnd, game_pid = enter_main_interface(
+            logger,
+            hwnd,
+            step,
+            scales,
+            confidences,
+            stop_check=stop_check,
+        )
+        if not sr_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({sr_msg})", hwnd, pid
+        if game_hwnd:
+            hwnd = game_hwnd
+            pid = game_pid or pid
+        logger.info(f"[{flow_key}] 步骤{step_no}进入主界面成功: {sr_msg}")
+    elif action == "genshin_enter_main":
+        # 原神：复刻 BetterGI GameLoading 的进入方法（点击进入 → 空月祝福 → 派蒙图标）
+        from .genshin_launcher import enter_main_interface
+
+        gi_ok, gi_msg, game_hwnd, game_pid = enter_main_interface(
+            logger,
+            hwnd,
+            step,
+            scales,
+            confidences,
+            stop_check=stop_check,
+        )
+        if not gi_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({gi_msg})", hwnd, pid
+        if game_hwnd:
+            hwnd = game_hwnd
+            pid = game_pid or pid
+        logger.info(f"[{flow_key}] 步骤{step_no}进入主界面成功: {gi_msg}")
+    else:
+        return False, f"[{flow_key}] 未知动作: {action}", hwnd, pid
+    return True, "", hwnd, pid
+
+
+
+
+def _collect_failure_evidence(
+    *,
+    logger: logging.Logger,
+    flow_key: str,
+    step: dict,
+    name: str,
+    step_no: int,
+    action: str,
+    target_texts: List[str],
+    template: str,
+    hwnd: int,
+    retry_count: int,
+    max_attempts: int,
+    step_enable_ocr: bool,
+) -> None:
+    """步骤重试耗尽时抓当帧 OCR + 截图并落库（一次识别，两处复用）。"""
+    ocr_results = None
+    try:
+        from .ocr_click_tester import ocr_window_content
+        results = ocr_window_content(logger, hwnd=hwnd)
+        if results:
+            logger.warning(f"[{flow_key}] 步骤失败时屏幕文字:")
+            for r in results[:10]:
+                logger.warning(f"  - \"{r['text']}\" (置信度: {r['confidence']:.2f}) @ {r['center']}")
+        ocr_results = results
+    except Exception as exc:
+        logger.debug("[%s] 输出 OCR 失败样本异常: %s", flow_key, exc)
+    # 失败取证：截图 + 当帧文字 + 结构化落库（复用上面的 OCR 结果，
+    # 不重复识别），供 tools/flow_failure_report.py 事后聚合分析
+    try:
+        from .flow_diagnostics import record_failure
+
+        record_failure(
+            logger,
+            flow_key=flow_key,
+            step=name,
+            error="未匹配模板/OCR（超过重试上限）",
+            hwnd=hwnd,
+            retry_count=retry_count,
+            ocr_results=ocr_results,
+            extra={
+                "step_no": step_no,
+                "step_action": action,
+                "target_texts": target_texts if step_enable_ocr else [],
+                "template": template or "",
+                "max_attempts": max_attempts,
+                "kind": "flow_step",
+            },
+        )
+    except Exception as exc:
+        logger.debug("[%s] 记录失败诊断异常: %s", flow_key, exc)
+
+
+
 def run_flow(
     logger: logging.Logger,
     flow_key: str,
@@ -1679,9 +1901,7 @@ def run_flow(
                     _focus_window(hwnd)
 
                     # 自带内部循环的动作跳过模板匹配，直接进分发
-                    if action in ("zzz_shop_buy", "monthly_exchange", "nikki_enter_game",
-                                  "starrail_enter_main", "genshin_enter_main",
-                                  "qoder_open_campaign", "qoder_verify_claim", "wool_verify_log"):
+                    if action in _BUILTIN_ACTIONS:
                         break
 
                     if search_scope == "screen":
@@ -1723,9 +1943,7 @@ def run_flow(
 
             matched = (
                 (action == "wait_process" and match_method == "process")
-                or action in ("zzz_shop_buy", "monthly_exchange", "nikki_enter_game",
-                              "starrail_enter_main", "genshin_enter_main",
-                              "qoder_open_campaign", "qoder_verify_claim", "wool_verify_log")
+                or action in _BUILTIN_ACTIONS
                 or center is not None
             )
             if not matched:
@@ -1737,41 +1955,20 @@ def run_flow(
                     continue
                 step_attempts[i] = step_attempts.get(i, 0) + 1
                 if step_attempts[i] > max_attempts:
-                    ocr_failed = None
-                    try:
-                        from .ocr_click_tester import ocr_window_content
-                        results = ocr_window_content(logger, hwnd=hwnd)
-                        if results:
-                            logger.warning(f"[{flow_key}] 步骤失败时屏幕文字:")
-                            for r in results[:10]:
-                                logger.warning(f"  - \"{r['text']}\" (置信度: {r['confidence']:.2f}) @ {r['center']}")
-                        ocr_failed = results
-                    except Exception:
-                        pass
-                    # 失败取证：截图 + 当帧文字 + 结构化落库（复用上面的 OCR 结果，
-                    # 不重复识别），供 tools/flow_failure_report.py 事后聚合分析
-                    try:
-                        from .flow_diagnostics import record_failure
-
-                        record_failure(
-                            logger,
-                            flow_key=flow_key,
-                            step=name,
-                            error="未匹配模板/OCR（超过重试上限）",
-                            hwnd=hwnd,
-                            retry_count=step_attempts[i],
-                            ocr_results=ocr_failed,
-                            extra={
-                                "step_no": step_no,
-                                "step_action": action,
-                                "target_texts": target_texts if step_enable_ocr else [],
-                                "template": template or "",
-                                "max_attempts": max_attempts,
-                                "kind": "flow_step",
-                            },
-                        )
-                    except Exception:
-                        pass
+                    _collect_failure_evidence(
+                        logger=logger,
+                        flow_key=flow_key,
+                        step=step,
+                        name=name,
+                        step_no=step_no,
+                        action=action,
+                        target_texts=target_texts,
+                        template=template,
+                        hwnd=hwnd,
+                        retry_count=step_attempts[i],
+                        max_attempts=max_attempts,
+                        step_enable_ocr=step_enable_ocr,
+                    )
 
                     return False, f"[{flow_key}] 步骤失败: {name} 未匹配模板/OCR（超过重试上限）"
                 if on_fail == "retry_prev" and i > 0:
@@ -1834,134 +2031,22 @@ def run_flow(
                 logger.info(f"[{flow_key}] 状态确认通过: {name}")
             elif action == "wait_process":
                 logger.info(f"[{flow_key}] 目标进程已出现: {process_name}")
-            elif action == "zzz_shop_buy":
-                # 绝区零后勤商店采购：内部完成页签切换 + 逐商品「点商品→确认」循环
-                from .zzz_monthly_shop import buy_shop_groups
-
-                shop_ok, shop_msg = buy_shop_groups(
-                    logger,
-                    hwnd,
-                    step,
+            elif action in _BUILTIN_ACTIONS:
+                dispatch_ok, dispatch_msg, hwnd, pid = _dispatch_step_action(
+                    logger=logger,
+                    flow_key=flow_key,
+                    step=step,
+                    name=name,
+                    step_no=step_no,
+                    action=action,
+                    hwnd=hwnd,
+                    pid=pid,
                     scales=scales,
                     confidences=confidences,
                     stop_check=stop_check,
                 )
-                if not shop_ok:
-                    return False, f"[{flow_key}] 步骤失败: {name} ({shop_msg})"
-                logger.info(f"[{flow_key}] 步骤{step_no}采购完成: {shop_msg}")
-            elif action == "monthly_exchange":
-                # 商店 → 兑换商店 → 目标页签 每月兑换（绝区零信号残响 / 崩铁余烬兑换共用）
-                from .monthly_exchange import buy_monthly_exchange
-
-                exchange_ok, exchange_msg = buy_monthly_exchange(
-                    logger,
-                    hwnd,
-                    step,
-                    scales=scales,
-                    confidences=confidences,
-                    stop_check=stop_check,
-                )
-                if not exchange_ok:
-                    return False, f"[{flow_key}] 步骤失败: {name} ({exchange_msg})"
-                logger.info(f"[{flow_key}] 步骤{step_no}每月兑换完成: {exchange_msg}")
-            elif action == "nikki_enter_game":
-                # 无限暖暖：启动器 → 登录页 → 加载 → 主界面（聊天气泡特征）
-                from .nikki_launcher import enter_main_interface
-
-                nikki_ok, nikki_msg, game_hwnd, game_pid = enter_main_interface(
-                    logger,
-                    hwnd,
-                    step,
-                    scales,
-                    confidences,
-                    stop_check=stop_check,
-                )
-                if not nikki_ok:
-                    return False, f"[{flow_key}] 步骤失败: {name} ({nikki_msg})"
-                if game_hwnd:
-                    hwnd = game_hwnd
-                    pid = game_pid or pid
-                logger.info(f"[{flow_key}] 步骤{step_no}进入主界面成功: {nikki_msg}")
-            elif action == "qoder_open_campaign":
-                # 头像 → 权益中心：活动弹窗不会自动出现，必须走常驻入口
-                from .qoder_claim import open_campaign
-
-                open_ok, open_msg = open_campaign(
-                    logger,
-                    hwnd,
-                    scales,
-                    confidences,
-                    timeout_sec=int(step.get("timeout_sec", 20)),
-                    stop_check=stop_check,
-                )
-                if not open_ok:
-                    return False, f"[{flow_key}] 步骤失败: {name} ({open_msg})"
-                logger.info(f"[{flow_key}] 步骤{step_no}权益中心已打开: {open_msg}")
-            elif action == "qoder_verify_claim":
-                # Qoder 领取结果以 App 自身日志为准；UI 空跑不再算成功
-                from .qoder_claim import verify_claim
-
-                claim_ok, claim_msg = verify_claim(
-                    logger,
-                    timeout_sec=int(step.get("timeout_sec", 60)),
-                )
-                if not claim_ok:
-                    return False, f"[{flow_key}] 步骤失败: {name} ({claim_msg})"
-                logger.info(f"[{flow_key}] 步骤{step_no}领取状态确认: {claim_msg}")
-            elif action == "wool_verify_log":
-                # MiniMax/TRAE 以接口日志为准，避免 UI 确认误报
-                from .wool_claim_logs import verify as verify_wool_log
-
-                wool_ok, wool_msg = verify_wool_log(
-                    logger,
-                    str(step.get("source") or ""),
-                    hwnd,
-                    scales,
-                    confidences,
-                    step,
-                    int(step.get("timeout_sec", 30)),
-                )
-                if not wool_ok:
-                    return False, f"[{flow_key}] 步骤失败: {name} ({wool_msg})"
-                logger.info(f"[{flow_key}] 步骤{step_no}日志确认成功: {wool_msg}")
-            elif action == "starrail_enter_main":
-                # 崩铁：复刻 March7th 的进入方法（点击进入 → 主界面特征连续命中）
-                from .starrail_launcher import enter_main_interface
-
-                sr_ok, sr_msg, game_hwnd, game_pid = enter_main_interface(
-                    logger,
-                    hwnd,
-                    step,
-                    scales,
-                    confidences,
-                    stop_check=stop_check,
-                )
-                if not sr_ok:
-                    return False, f"[{flow_key}] 步骤失败: {name} ({sr_msg})"
-                if game_hwnd:
-                    hwnd = game_hwnd
-                    pid = game_pid or pid
-                logger.info(f"[{flow_key}] 步骤{step_no}进入主界面成功: {sr_msg}")
-            elif action == "genshin_enter_main":
-                # 原神：复刻 BetterGI GameLoading 的进入方法（点击进入 → 空月祝福 → 派蒙图标）
-                from .genshin_launcher import enter_main_interface
-
-                gi_ok, gi_msg, game_hwnd, game_pid = enter_main_interface(
-                    logger,
-                    hwnd,
-                    step,
-                    scales,
-                    confidences,
-                    stop_check=stop_check,
-                )
-                if not gi_ok:
-                    return False, f"[{flow_key}] 步骤失败: {name} ({gi_msg})"
-                if game_hwnd:
-                    hwnd = game_hwnd
-                    pid = game_pid or pid
-                logger.info(f"[{flow_key}] 步骤{step_no}进入主界面成功: {gi_msg}")
-            else:
-                return False, f"[{flow_key}] 未知动作: {action}"
+                if not dispatch_ok:
+                    return False, dispatch_msg
 
             if action == "click_template" and not no_click:
                 ok, reason = execute_confirm_strategy(

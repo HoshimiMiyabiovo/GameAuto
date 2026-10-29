@@ -1,0 +1,4 @@
+# 开发工具依赖（不进运行时 lock；普通权限安装）：
+#   uv pip install --python .venv/Scripts/python.exe -r requirements-dev.txt
+pytest>=8.0
+ruff>=0.5

@@ -165,8 +165,8 @@ def unprotect_password(protected: str) -> str:
         try:
             if protected.startswith("dpapi:"):
                 return _sec_unprotect(protected)  # type: ignore
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("[email] 新式 DPAPI 解密失败，回退旧式: %s", exc)
     if not _HAS_DPAPI:
         raise RuntimeError("当前环境没有 win32crypt，无法解密 DPAPI 密码")
     if not protected:

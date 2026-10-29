@@ -1,39 +1,55 @@
+"""启动依赖检查（只检查，不安装）。
+
+依赖清单唯一来源是仓库根目录的 requirements.txt：
+- 本模块运行时解析它，得到「import 名 -> pip 包名」映射做可导入性检查；
+- 新增依赖只需改 requirements.txt（符合 AGENTS.md 的依赖规则），
+  不再维护第二份硬编码清单；
+- 真正安装由 setup_deps.bat 以普通权限执行（uv + requirements.lock，
+  --no-deps 精确回放，避免 CPU 版 onnxruntime 覆盖 GPU 版）。GUI/CLI 启动
+  路径一律不再 pip install —— 历史行为是提权进程里自动装包，攻击面过大。
+
+注意: 不要在模块顶层 import ..settings / ..settings.paths, 它们会顺带拉起
+settings.discovery → runtime.process_supervisor, 后者依赖 psutil 等本模块要检查的包,
+会导致 import 阶段就先于 run_full_dependency_check 触发 ModuleNotFoundError。
+所有需要 APPS / QBITTORRENT / TESSERACT_EXE 的位置都改成函数内 import。
+"""
+
 import importlib.util
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Tuple
 
-# 注意: 不要在模块顶层 import ..settings / ..settings.paths, 它们会顺带拉起
-# settings.discovery → runtime.process_supervisor, 后者依赖 psutil 等本模块要自动安装的包,
-# 会导致 import 阶段就先于 run_full_dependency_check 触发 ModuleNotFoundError,
-# 让自动安装机制形同虚设。所有需要 APPS / QBITTORRENT / TESSERACT_EXE 的位置都改成函数内 import。
+REQUIREMENTS_FILE = Path(__file__).resolve().parent.parent / "requirements.txt"
 
-DEFAULT_PIP_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
-
-# import_name -> pip_package
-REQUIRED_PYTHON_PACKAGES: Dict[str, str] = {
-    "psutil": "psutil",
-    "pyautogui": "pyautogui",
-    "pytesseract": "pytesseract",
-    "win32gui": "pywin32",
-    "PIL": "Pillow",
-    "cv2": "opencv-python",
-    "flet": "flet",
-    "PySide6": "PySide6",
-    "pyhuskarui": "pyhuskarui",
-    "browser_cookie3": "browser-cookie3",
-    "qrcode": "qrcode",
-    "openpyxl": "openpyxl",
-    "rsa": "rsa",
-    "genshin": "genshin",
-    "Crypto": "pycryptodome",
-    "pynput": "pynput",
+# pip 包名 -> import 名；未列出的按 PEP 503 规范化（点/横线转下划线、小写）。
+# 只放“包名与 import 名不同”的例外，其余自动推导。
+IMPORT_NAME_BY_PACKAGE: Dict[str, str] = {
+    "pyside6": "PySide6",
+    "pywin32": "win32gui",
+    "pillow": "PIL",
+    "opencv-python": "cv2",
+    "pycryptodome": "Crypto",
+    "browser-cookie3": "browser_cookie3",
+    "windows-capture": "windows_capture",
+    "rapidocr-onnxruntime": "rapidocr_onnxruntime",
+    "onnxruntime-gpu": "onnxruntime",
+    "ruamel.yaml": "ruamel",
 }
+
+# requirements.txt 不可读时的兜底（打包/裁剪环境）。正常源码运行不会走到。
+_FALLBACK_PIP_PACKAGES: Tuple[str, ...] = (
+    "psutil", "pyautogui", "pytesseract", "pywin32", "opencv-python", "Pillow",
+    "flet", "PySide6", "pyhuskarui", "browser-cookie3", "qrcode", "openpyxl",
+    "rsa", "genshin", "pycryptodome", "pynput", "fastapi", "uvicorn", "websockets",
+    "pydantic", "rapidocr-onnxruntime", "onnxruntime-gpu", "windows-capture", "numpy",
+)
 
 
 @dataclass
@@ -41,6 +57,7 @@ class DependencyCheckReport:
     ok: bool = True
     installed_packages: List[str] = field(default_factory=list)
     failed_packages: List[str] = field(default_factory=list)
+    missing_packages: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     info: List[str] = field(default_factory=list)
@@ -56,34 +73,49 @@ class DependencyCheckReport:
         self.info.append(msg)
 
 
+def _parse_requirement_name(line: str) -> str:
+    """从一行 requirements 里提取分发名（去注释/extras/版本/环境标记）。"""
+    text = line.split("#", 1)[0].strip()
+    if not text:
+        return ""
+    text = text.split(";", 1)[0].strip()
+    text = re.sub(r"\[.*?\]", "", text)
+    name = re.split(r"[<>=!~ ]", text, maxsplit=1)[0].strip()
+    return name
+
+
+def load_requirement_packages() -> List[str]:
+    """读取 requirements.txt 的分发名列表；文件缺失时返回兜底清单。"""
+    try:
+        lines = REQUIREMENTS_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return list(_FALLBACK_PIP_PACKAGES)
+    packages = [_parse_requirement_name(line) for line in lines]
+    return [p for p in packages if p]
+
+
+def _import_name_for(package: str) -> str:
+    return IMPORT_NAME_BY_PACKAGE.get(package.lower(), re.sub(r"[-.]+", "_", package.lower()))
+
+
+def build_required_packages() -> Dict[str, str]:
+    """构建 import 名 -> pip 包名 映射（供检查与测试共用）。"""
+    mapping: Dict[str, str] = {}
+    for package in load_requirement_packages():
+        mapping[_import_name_for(package)] = package
+    return mapping
+
+
+REQUIRED_PYTHON_PACKAGES: Dict[str, str] = build_required_packages()
+
+
 def _is_module_available(module_name: str) -> bool:
     return importlib.util.find_spec(module_name) is not None
 
 
-def _install_package(pkg_name: str, mirror_url: str, logger: logging.Logger) -> Tuple[bool, str]:
-    cmds = [
-        [sys.executable, "-m", "pip", "install", "-i", mirror_url, pkg_name],
-        [sys.executable, "-m", "pip", "install", pkg_name],
-    ]
-    last_err = ""
-    for cmd in cmds:
-        try:
-            logger.info(f"安装依赖: {pkg_name} ({'镜像源' if '-i' in cmd else '官方源'})")
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            if result.returncode == 0:
-                logger.info(f"依赖安装成功: {pkg_name}")
-                return True, ""
-            logger.warning(f"依赖安装失败: {pkg_name}, code={result.returncode}")
-            last_err = (result.stderr or result.stdout or "").strip()[:300]
-        except Exception as e:
-            logger.warning(f"安装依赖异常: {pkg_name}, error={str(e)}")
-            last_err = str(e)
-    return False, last_err
-
-
 def _collect_app_paths() -> List[Tuple[str, str, str]]:
     # 延迟导入: settings 在被 import 时会触发 discovery / process_supervisor 的副作用链,
-    # 那条链需要 psutil 等本模块正在尝试自动安装的依赖。函数内 import 避开循环依赖。
+    # 那条链需要 psutil 等本模块正在检查的依赖。函数内 import 避开循环依赖。
     from ..settings import APPS, QBITTORRENT
 
     paths: List[Tuple[str, str, str]] = []
@@ -142,59 +174,31 @@ def _check_runtime_environment(report: DependencyCheckReport):
     report.add_info(f"Python: {sys.version.split()[0]}")
     report.add_info(f"Platform: {platform.platform()}")
     report.add_info(f"Executable: {sys.executable}")
-    if sys.version_info < (3, 9):
-        report.add_error("Python 版本过低，建议升级到 3.9+")
+    if sys.version_info < (3, 10):
+        report.add_error("Python 版本过低，需要 3.10+（requirements 与代码语法均按此基线）")
 
 
-def ensure_runtime_dependencies(
-    logger: logging.Logger,
-    auto_install: bool = True,
-    mirror_url: str = DEFAULT_PIP_MIRROR,
-) -> Tuple[bool, List[str]]:
-    """
-    启动时检查依赖并尝试自动安装。
-    返回: (是否满足运行, 警告列表)
-    """
-    report = run_full_dependency_check(logger, auto_install=auto_install, mirror_url=mirror_url)
-    issues = report.errors + report.warnings
-    return report.ok and not report.errors, issues
+def run_full_dependency_check(logger: logging.Logger) -> DependencyCheckReport:
+    """检查 Python 包 / Tesseract / 外部程序路径 / 运行环境。
 
-
-def run_full_dependency_check(
-    logger: logging.Logger,
-    auto_install: bool = True,
-    mirror_url: str = DEFAULT_PIP_MIRROR,
-) -> DependencyCheckReport:
-    """
-    全面依赖管理检测：
-    - Python 包检测 + 自动安装
-    - OCR/Tesseract 能力检测
-    - 外部程序路径检测（配置中的 launcher/qBittorrent）
-    - 运行环境检测（Python/平台）
+    只做检查，不安装：缺失包记录到 report.missing_packages 与 errors，
+    调用方（GUI/CLI）据此提示用户以普通权限运行 setup_deps.bat。
     """
     report = DependencyCheckReport()
-    logger.info("开始执行全面依赖检测")
+    logger.info("开始执行依赖检测（只检查，不安装）")
 
     _check_runtime_environment(report)
 
-    missing: List[Tuple[str, str]] = []
     for import_name, pip_name in REQUIRED_PYTHON_PACKAGES.items():
         if not _is_module_available(import_name):
-            missing.append((import_name, pip_name))
+            report.missing_packages.append(pip_name)
+            report.add_error(f"缺少 Python 包: {pip_name} (import: {import_name})")
 
-    if missing and auto_install:
-        logger.info(f"检测到缺失 Python 依赖 {len(missing)} 个，开始自动安装")
-        for import_name, pip_name in missing:
-            ok, err = _install_package(pip_name, mirror_url, logger)
-            if ok:
-                report.installed_packages.append(pip_name)
-            else:
-                report.failed_packages.append(pip_name)
-                report.add_error(f"安装失败: {pip_name} (import: {import_name}) {err}")
-
-    unresolved = [m for m in REQUIRED_PYTHON_PACKAGES if not _is_module_available(m)]
-    if unresolved:
-        report.add_error("仍缺少 Python 模块: " + ", ".join(unresolved))
+    if report.missing_packages:
+        report.add_error(
+            "依赖不完整：请以普通权限运行 setup_deps.bat 安装（uv + requirements.lock），"
+            "完成后重启本程序"
+        )
 
     _check_tesseract_capability(report)
     _check_external_paths(report)
@@ -207,8 +211,7 @@ def run_full_dependency_check(
         logger.error(item)
 
     if report.ok:
-        logger.info("全面依赖检测通过")
+        logger.info("依赖检测通过")
     else:
-        logger.error("全面依赖检测未通过（存在错误项）")
+        logger.error("依赖检测未通过（不自动安装，请运行 setup_deps.bat）")
     return report
-

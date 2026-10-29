@@ -8,10 +8,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List
 
 from .base import FieldSpec, JsonConfigAdapter, script_root
+
+LOGGER = logging.getLogger("GameAutomation.StaminaConfig")
 
 STAMINA_TASK_NAME = "刷体力"
 
@@ -45,8 +48,8 @@ class OkEfConfigAdapter(JsonConfigAdapter):
                     names.extend(str(x) for x in value)
             if names:
                 return tuple(dict.fromkeys(names))
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("[刷本配置] 读取 ok-ef 关卡选项失败，使用内置列表: %s", exc)
         return (
             "D96钢", "超距辉映管", "快子遴捡晶格", "象限拟合液", "三相纳米片",
             "枢纽区", "源石研究园", "试验园区", "矿脉源区", "供能高地",

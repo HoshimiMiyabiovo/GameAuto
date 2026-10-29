@@ -432,16 +432,16 @@
       {
         "name": "点击菜单里的Buddy加油站",
         "action": "click_template",
-        "template": "模板\\hy4-Buddy加油站菜单.png",
         "target_text": "Buddy加油站",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
-        "timeout_sec": 10,
+        "timeout_sec": 12,
         "clicks": 1,
         "post_delay_sec": 2.5,
-        "on_fail": "retry_step",
-        "max_attempts": 2,
-        "search_interval_sec": 1.0
+        "on_fail": "retry_prev",
+        "max_attempts": 3,
+        "search_interval_sec": 1.0,
+        "_comment": "2026-10-29：模板会把聊天侧栏的「做任务赢积分好礼」促销卡误认成菜单项，导致点完领取后重新导航失败、假报未领取；改为纯 OCR 定位「Buddy加油站」，失败时回退上一步重点头像。"
       },
       {
         "name": "等待加油站页面的立即领取",
@@ -491,18 +491,16 @@
       },
       {
         "name": "重新点击菜单里的Buddy加油站",
-        "_comment": "同上：重新打开加油站页面再看「今日已领取」。页面还开着时菜单不存在，超时跳过。",
+        "_comment": "2026-10-29：模板会把聊天侧栏的「做任务赢积分好礼」促销卡误认成菜单项，导致点完领取后重新导航失败、假报未领取；改为纯 OCR 定位「Buddy加油站」，失败时回退上一步重点头像。",
         "action": "click_template",
-        "template": "模板\\hy4-Buddy加油站菜单.png",
         "target_text": "Buddy加油站",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
-        "timeout_sec": 6,
+        "timeout_sec": 12,
         "clicks": 1,
         "post_delay_sec": 2.5,
-        "optional_if_missing": true,
-        "on_fail": "retry_step",
-        "max_attempts": 2,
+        "on_fail": "retry_prev",
+        "max_attempts": 3,
         "search_interval_sec": 1.0
       },
       {

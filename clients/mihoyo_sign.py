@@ -1596,25 +1596,6 @@ def complete_qrcode_login(*, browser_name: str = "") -> Dict[str, Any]:
         "record_ready": record_ready,
         "method": "qrcode_app",
     }
-    final_mid = str(final_fields.get("mid") or mid or "").strip()
-    stoken_cookie = _build_persisted_stoken_cookie(
-        _parse_cookie_pairs(str(enriched.get("cookie") or full_cookie)),
-        account_id=final_account_id,
-        stoken=final_stoken,
-        mid=final_mid,
-    )
-    LOGGER.info("[米游社] 扫码登录完成：账号 %s | 便笺查询 %s",
-                final_account_id or account_id, "已就绪" if enriched["record_ready"] else "未就绪")
-    return {
-        "cookie": enriched["cookie"],
-        "stoken_cookie": tidy_cookie(stoken_cookie),
-        "fields": enriched["fields"],
-        "account_id": enriched["account_id"],
-        "record_ready": enriched["record_ready"],
-        "method": "qrcode",
-        "browser_cookie": tidy_cookie(str(enriched.get("browser_cookie") or "")),
-        "browser_used": bool(enriched.get("browser_used")),
-    }
 
 
 def validate_cookie_text(cookie: str) -> Dict[str, Any]:
@@ -2177,8 +2158,8 @@ def _decode_response_text(raw: bytes, content_encoding: str) -> str:
                 payload = gzip.decompress(payload)
             elif "deflate" in encoding:
                 payload = zlib.decompress(payload)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("[米游社] 响应解压失败，按原始字节解析: %s", exc)
     try:
         return payload.decode("utf-8")
     except UnicodeDecodeError:

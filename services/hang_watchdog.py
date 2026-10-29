@@ -101,8 +101,8 @@ class HangWatchdog:
                 )
                 try:
                     self.dump_path.replace(archive)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    _logger.debug("[看门狗] 归档旧 dump 失败: %s", exc)
             with open(self.dump_path, "a", encoding="utf-8") as fh:
                 fh.write(
                     f"\n{'=' * 72}\n"

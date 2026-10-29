@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import urllib.request
 from functools import lru_cache
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable
 
 from ..settings.paths import ARTIFACTS_DIR
+
+LOGGER = logging.getLogger("GameAutomation.Gacha")
 
 
 CACHE_DIR = ARTIFACTS_DIR / "nikki_catalog"
@@ -135,8 +138,8 @@ def _load_locale_payload(kind: str, urls: Iterable[str]) -> Dict[str, Any]:
     if _is_cache_fresh(cache_file):
         try:
             return _read_json_file(cache_file)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("[图鉴] 读取本地缓存失败，改为联网刷新: %s", exc)
 
     try:
         payload = _download_json(urls)
@@ -151,8 +154,8 @@ def _load_locale_payload(kind: str, urls: Iterable[str]) -> Dict[str, Any]:
     if isinstance(payload, dict):
         try:
             _write_json_file(cache_file, payload)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("[图鉴] 写入本地缓存失败: %s", exc)
         return payload
     return {}
 

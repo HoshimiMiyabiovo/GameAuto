@@ -15,6 +15,8 @@ from PIL import ImageOps, ImageEnhance, ImageDraw, Image
 import numpy as np
 from ..settings.paths import OCR_DEBUG_DIR, TEMPLATES_DIR, TESSDATA_DIR, TESSERACT_EXE, WORKFLOW_DB_PATH as PROJECT_WORKFLOW_DB_PATH
 
+_LOGGER = logging.getLogger("GameAutomation")
+
 # CUDA EP 会把整套 cublas/cuDNN（约 2.2G DLL 映射）载入 GUI 进程，
 # 实测占了 3.4G 常驻里的绝大部分。默认关闭，只在 GAMEAUTO_OCR_CUDA=1 时启用。
 _USE_CUDA_OCR = os.environ.get("GAMEAUTO_OCR_CUDA", "0") == "1"
@@ -52,8 +54,8 @@ def _ensure_nvidia_cuda_dlls():
             ):
                 try:
                     os.add_dll_directory(p)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _LOGGER.debug("[OCR] 注册 CUDA DLL 目录失败 %s: %s", p, exc)
                 extra.append(p)
     if extra:
         existing = os.environ.get("PATH", "")
@@ -81,6 +83,7 @@ def _wgc_on_frame(frame, control):
         _wgc_latest = frame.frame_buffer
         _wgc_control = control
     except Exception:
+        # 帧回调失败只丢失当前帧，下一次回调会继续，不能刷日志
         pass
 
 
@@ -230,8 +233,8 @@ try:
                 # 打印实际生效 EP（取识别模型 session）
                 try:
                     lg.info(f"[OCR] 生效 EP={eng.text_recognizer.session.session.get_providers()}")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    lg.debug("[OCR] 读取生效 EP 失败: %s", exc)
             except Exception as e:
                 logging.getLogger("GameAutomation").warning(f"RapidOCR 初始化失败: {e}")
                 return None
@@ -303,8 +306,8 @@ def _find_by_template(
                 if pt:
                     logger.info(f"模板匹配成功(无confidence): {template_path}")
                     return (pt.x, pt.y)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[OCR] 模板定位失败 %s: %s", template_path, exc)
     return None
 
 
@@ -332,8 +335,8 @@ def _save_ocr_overlay(
             draw.text((left, max(0, top - 12)), text, fill="yellow")
         out = os.path.join(debug_dir, f"ocr_overlay_{tag}_{int(time.time())}.png")
         overlay.save(out)
-    except Exception:
-        pass
+    except Exception as exc:
+        _LOGGER.debug("[OCR] 保存调试覆盖图失败: %s", exc)
 
 
 def _find_window_by_keywords(keywords) -> Optional[int]:
@@ -507,6 +510,7 @@ def _window_obscured_ratio(hwnd: int, samples: int = 5) -> Optional[float]:
             # Win8+ 需进程声明 DPI 感知，否则 WindowFromPoint 返回的是缩放后坐标
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
         except Exception:
+            # 旧系统没有 shcore 或已设置过 DPI 感知，忽略
             pass
 
         covered = 0
@@ -530,6 +534,7 @@ def _window_obscured_ratio(hwnd: int, samples: int = 5) -> Optional[float]:
                     if ctypes.windll.user32.GetAncestor(hit, 2) == root_owner:
                         continue
                 except Exception:
+                    # 单点查询失败按遮挡处理，继续采样
                     pass
                 covered += 1
         if total == 0:
@@ -549,8 +554,8 @@ def _alert_window_obscured(logger: logging.Logger, hwnd: int, ratio: float) -> N
     title = ""
     try:
         title = win32gui.GetWindowText(hwnd) or ""
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[OCR防护] 读取窗口标题失败: %s", exc)
     logger.warning(
         f"[OCR防护] ⚠️ 目标窗口被遮挡约 {ratio * 100:.0f}%（HWND={hwnd} 标题={title!r}）"
     )
@@ -604,8 +609,8 @@ def _ensure_window_region(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
     try:
         if win32gui.IsIconic(hwnd):
             return None
-    except Exception:
-        pass
+    except Exception as exc:
+        _LOGGER.debug("[OCR] 判断窗口最小化失败: %s", exc)
     return _get_window_region(hwnd)
 
 
@@ -872,8 +877,8 @@ def _click_text_with_retry(
                 output_type=pytesseract.Output.DICT,
             )
             _save_ocr_overlay(shot, data, debug_dir, _normalize_text(text))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[OCR] 保存点击调试图失败: %s", exc)
     logger.error(f"超时未识别到文本: {text}")
     return False
 
@@ -1060,8 +1065,8 @@ def ocr_window_content(
                     f"[OCR防护] ⚠️ 识别区域({rw}x{rh})超出截图({sw}x{sh})，"
                     f"可能因显示器缩放/多屏导致坐标错位 region={current_region} hwnd={hwnd}"
                 )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[OCR防护] 坐标系自检失败: %s", exc)
 
     # 使用 RapidOCR
     if _get_rapidocr_engine:

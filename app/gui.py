@@ -41,7 +41,7 @@ def main():
 
     def _depcheck_bg():
         try:
-            dep_state["report"] = run_full_dependency_check(bootstrap_logger, auto_install=True)
+            dep_state["report"] = run_full_dependency_check(bootstrap_logger)
         except Exception as exc:
             bootstrap_logger.warning("[启动] 后台依赖检测异常: %s", exc)
             dep_state["report"] = None
@@ -162,9 +162,14 @@ def _launch_qml_ui(dep_report=None) -> None:
                 return
             rep = state.get("report") if state is not None else dep_report
             if rep is not None and getattr(rep, "errors", None):
-                bridge.emit_event("toast", message="依赖检测未通过，详见日志", color="#b04b44")
-        except Exception:
-            pass
+                missing = getattr(rep, "missing_packages", None) or []
+                message = (
+                    "缺少依赖：请以普通权限运行 setup_deps.bat 后重启"
+                    if missing else "依赖检测未通过，详见日志"
+                )
+                bridge.emit_event("toast", message=message, color="#b04b44")
+        except Exception as exc:
+            ui_logger.debug("[启动] 依赖检测结果提示失败: %s", exc)
 
     QTimer.singleShot(3000, _report_dep_result)
 
@@ -175,8 +180,8 @@ def _launch_qml_ui(dep_report=None) -> None:
         try:
             beat_timer.stop()
             watchdog.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            ui_logger.debug("[退出] 停止看门狗失败: %s", exc)
         try:
             if bridge._controller is not None:
                 bridge._controller.stop_current_task = True
@@ -187,12 +192,14 @@ def _launch_qml_ui(dep_report=None) -> None:
             # 移除日志 handler 防止 Qt 对象被回收后回调崩溃
             game_logger.removeHandler(ui_log_handler)
         except Exception:
+            # 日志基础设施清理阶段，记录会递归
             pass
         # 强制刷新所有日志 handler，确保退出前日志落盘
         for h in logging.getLogger().handlers:
             try:
                 h.flush()
             except Exception:
+                # 正在刷新日志 handler，不能记录，否则递归
                 pass
         # 手动释放实例锁：os._exit 会跳过 atexit 钩子，必须先释放
         # 否则下次启动会误判为"已有实例在运行"

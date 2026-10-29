@@ -152,8 +152,8 @@ def _record_failure(logger, step_name: str, message: str, hwnd: int) -> None:
             ocr_results=ocr_results,
             extra={"kind": "starrail_enter_main"},
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[崩铁启动器] 记录失败诊断异常 %s: %s", step_name, exc)
 
 
 def enter_main_interface(

@@ -779,8 +779,8 @@ class UiBridge(QObject):
             if cur == name:
                 self._click_seq_detail_json = "{}"
                 self.clickSeqDetailChanged.emit("{}")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[Bridge] 刷新序列详情失败: %s", exc)
         self.refreshClickSequences()
 
     def _ensure_protected_backup(self):
@@ -851,8 +851,8 @@ class UiBridge(QObject):
                         })
                 # 受保护序列置顶
                 items.sort(key=lambda it: (not it.get("protected", False), it.get("name", "")))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[Bridge] 序列排序失败: %s", exc)
             self._click_seq_list_json = json.dumps(items, ensure_ascii=False)
             self.clickSeqListChanged.emit(self._click_seq_list_json)
         except Exception as exc:
@@ -1047,8 +1047,8 @@ class UiBridge(QObject):
         targets = set(self._pinned_hwnds)
         try:
             targets.update(int(h) for h in self._find_own_windows())
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[Bridge] 取消置顶时枚举自身窗口失败: %s", exc)
         for hwnd in targets:
             self._unmake_window_topmost(hwnd)
 
@@ -1106,13 +1106,13 @@ class UiBridge(QObject):
                 _, pid = GetWindowThreadProcessId(h)
                 if pid == own_pid and win32gui.GetWindowText(h).strip():
                     found.append(int(h))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[Bridge] 枚举自身窗口失败: %s", exc)
 
         try:
             win32gui.EnumWindows(cb, None)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[Bridge] EnumWindows 失败: %s", exc)
         return found
 
     @staticmethod
@@ -1149,8 +1149,8 @@ class UiBridge(QObject):
                 _, pid = GetWindowThreadProcessId(h)
                 if pid == own_pid and win32gui.GetWindowText(h).strip():
                     found.append(h)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[Bridge] 定位自身窗口失败: %s", exc)
 
         try:
             win32gui.EnumWindows(cb, None)
@@ -1232,8 +1232,8 @@ class UiBridge(QObject):
             unpins.add(int(hwnd))
         try:
             unpins.update(int(h) for h in self._find_own_windows())
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[Bridge] 结束录制时枚举自身窗口失败: %s", exc)
         for pinned in unpins:
             try:
                 self._unmake_window_topmost(pinned)
@@ -1580,18 +1580,18 @@ class UiBridge(QObject):
                 _ws_ctrl = _ws_get_ctrl()
                 if _ws_ctrl is not None:
                     _ws_ctrl.stop_current_task = True
-            except Exception:
-                pass
-        except Exception:
-            pass
+            except Exception as exc:
+                logger.debug("[Bridge] 同步 WebUI 控制器停止标志失败: %s", exc)
+        except Exception as exc:
+            logger.debug("[Bridge] 停止 WebUI 侧任务失败: %s", exc)
         try:
             from game_auto.webui.state import update_queue_state, get_run_status
             st = get_run_status()
             cur = st.get("current") or {}
             if cur.get("app_key"):
                 update_queue_state(cur["app_key"], "stopped", "用户停止")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[Bridge] 标记 WebUI 队列停止状态失败: %s", exc)
 
     @Slot()
     def cancelShutdown(self):
@@ -1864,8 +1864,8 @@ class UiBridge(QObject):
                 if str(t.get("time") or "") < now_hm:
                     continue
                 out.append(t)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[Bridge] 读取今日已触发定时任务失败: %s", exc)
         return out
 
     def _has_unfired_scheduled_today(self) -> bool:
@@ -1896,8 +1896,8 @@ class UiBridge(QObject):
             # 关机仍跟随全局意图，避免补跑后不关机。
             email_on_finish = bool(task.get("email_on_finish", prefs.get("email")))
             shutdown_on_finish = bool(task.get("shutdown_on_finish", prefs.get("shutdown")))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[Bridge] 读取定时任务偏好失败: %s", exc)
         # 仅补跑模式：到点后交给 run_task_batch 按“今日脚本任务已完成”逐游戏跳过；
         # 普通模式保持旧行为（force_rerun=True，用户手动改过配置也强制重跑）。
         self.startAutomation(
@@ -2280,8 +2280,8 @@ class UiBridge(QObject):
                 from game_auto.webui.state import set_running as _ws_set_running_w, logger as _ws_logger_w
                 _ws_set_running_w(True, queue=[{"app_key": "WoolFlow", "display_name": "薅羊毛集合", "script_choice": "", "state": "running"}], source="gui")
                 _ws_logger_w.info("[WebUI][运行] GUI 发起薅羊毛")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[Bridge] 同步 WebUI 薅羊毛启动状态失败: %s", exc)
             from ..runtime.background_template_runner import run_wool_background
             ok, msg = run_wool_background(logger)
             for line in msg.split("；"):
@@ -2302,8 +2302,8 @@ class UiBridge(QObject):
                 from game_auto.webui.state import set_running as _ws_set_running_w2, set_last_result as _ws_set_last_w2
                 _ws_set_last_w2([msg], [])
                 _ws_set_running_w2(False)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[Bridge] 同步 WebUI 薅羊毛结果失败: %s", exc)
         except Exception as exc:
             logger.exception("[Bridge] 薅羊毛集合执行失败")
             self.emit_event("status", title="运行失败", body=str(exc), tone=TONE_DANGER)
@@ -2312,8 +2312,8 @@ class UiBridge(QObject):
                 from game_auto.webui.state import set_running as _ws_set_running_w3, set_last_result as _ws_set_last_w3
                 _ws_set_last_w3([f"薅羊毛失败: {exc}"], [])
                 _ws_set_running_w3(False)
-            except Exception:
-                pass
+            except Exception as sync_exc:
+                logger.debug("[Bridge] 同步 WebUI 薅羊毛失败状态失败: %s", sync_exc)
         finally:
             self.isRunning = False
             try:
@@ -2322,8 +2322,8 @@ class UiBridge(QObject):
                 import game_auto.webui.state as _ws_state
                 if _ws_state.is_running():
                     _ws_set_running_w4(False)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[Bridge] 复位 WebUI 运行状态失败: %s", exc)
 
     # ── Daily progress slots ──────────────────────────────────────
 
@@ -2664,8 +2664,8 @@ class UiBridge(QObject):
                 emitted = dict(cache["payload"])
                 emitted["cached_at"] = cache.get("fetched_at")
                 self.wuwaDailyChanged.emit(json.dumps(emitted, ensure_ascii=False))
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[Bridge] 推送鸣潮日报缓存失败: %s", exc)
         if self._wuwa_daily_needs_refresh():
             self._wuwa_daily_refreshing = True
             threading.Thread(target=self._load_wuwa_daily_backend, daemon=True).start()
@@ -2836,8 +2836,8 @@ class UiBridge(QObject):
                 emitted["cached_at"] = cache.get("fetched_at")
                 self.endfieldQueryResultChanged.emit(
                     json.dumps(emitted, ensure_ascii=False))
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[Bridge] 推送终末地查询缓存失败: %s", exc)
         if self._endfield_skland_needs_refresh():
             self._endfield_skland_refreshing = True
             threading.Thread(
@@ -3131,8 +3131,8 @@ class UiBridge(QObject):
                 for app_key in deferred_keys:
                     _ws_upd(app_key, "skipped", "更新中，已排队补跑")
                 _ws_logger.info("[WebUI][运行] GUI 发起任务 %s", ", ".join([q["app_key"] for q in ws_queue]))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[Bridge] 同步 WebUI 任务启动状态失败: %s", exc)
 
             from ..runtime.task_batch_runner import run_task_batch, TaskBatchHooks
 
@@ -3145,8 +3145,8 @@ class UiBridge(QObject):
                 try:
                     from game_auto.webui.state import update_queue_state as _ws_upd2
                     _ws_upd2(app_key, "running", display_name)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[Bridge] 同步 WebUI 队列运行状态失败: %s", exc)
 
             def on_after_app(result):
                 app_key = result.app_key if hasattr(result, "app_key") else ""
@@ -3168,8 +3168,8 @@ class UiBridge(QObject):
                     elif result_state == "stopped":
                         ws_state = "stopped"
                     _ws_upd3(app_key, ws_state, getattr(result, "message", ""))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[Bridge] 同步 WebUI 队列完成状态失败: %s", exc)
                 try:
                     self._handle_update_retry_result(result)
                 except Exception:
@@ -3243,8 +3243,8 @@ class UiBridge(QObject):
                 from game_auto.webui.state import set_running as _ws_set_running2, set_last_result as _ws_set_last2
                 _ws_set_last2(report, warnings)
                 _ws_set_running2(False)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[Bridge] 同步 WebUI 任务结果失败: %s", exc)
             self.emit_event("finished", toast=True, shutdown_scheduled=scheduled_shutdown)
             if run_error is not None:
                 self.emit_event("status", title="运行失败", body=str(run_error), tone=TONE_DANGER)
@@ -3344,1548 +3344,115 @@ class UiBridge(QObject):
         logger.info("[Bridge] 已计划 %s 秒后自动关机 (rc=%s)", delay_sec, rc)
         return True
 
-    def _refresh_daily_snapshot_for_report(self, tracker_factory, timeout_sec: float = 120.0):
-        """发报告前实时拉取各游戏每日进度，写入 tracker 并返回最新快照。
+    def _refresh_daily_snapshot_for_report(self, *args, **kwargs):
+        from .bridge_backends.daily_progress import _refresh_daily_snapshot_for_report as _impl
+        return _impl(self, *args, **kwargs)
 
-        返回 (snapshot, fresh)。
-          fresh=True  → 本次实时查询成功，数据是新的
-          fresh=False → 查询超时/失败，已降级到数据库缓存（邮件里会标注）
+    def _send_daily_email_report(self, *args, **kwargs):
+        from .bridge_backends.daily_progress import _send_daily_email_report as _impl
+        return _impl(self, *args, **kwargs)
 
-        设计要点：
-          - 实时查询要访问多个外网 API，必须放子线程 + join(timeout)，
-            否则会卡住随后的关机流程；超时就退回缓存，绝不阻塞发信。
-          - check_games_progress(tracker=...) 会把结果写回库，
-            所以之后 load_today() 拿到的就是新鲜数据。
-        """
-        try:
-            tracker = tracker_factory()
-        except Exception as exc:
-            logger.warning("[Bridge] 打开进度 tracker 失败: %s", exc)
-            return None, False
+    def _save_preferences_backend(self, *args, **kwargs):
+        from .bridge_backends.daily_progress import _save_preferences_backend as _impl
+        return _impl(self, *args, **kwargs)
 
-        box: Dict[str, Any] = {}
+    def _run_daily_check_backend(self, *args, **kwargs):
+        from .bridge_backends.daily_progress import _run_daily_check_backend as _impl
+        return _impl(self, *args, **kwargs)
 
-        def _run():
-            try:
-                from ..clients.daily_checker import check_games_progress
-                box["result"] = check_games_progress(tracker=tracker)
-            except Exception as exc:
-                box["error"] = exc
+    def _serialize_snapshot_games(self, *args, **kwargs):
+        from .bridge_backends.daily_progress import _serialize_snapshot_games as _impl
+        return _impl(self, *args, **kwargs)
 
-        try:
-            t = threading.Thread(target=_run, daemon=True, name="daily-refresh-for-email")
-            t.start()
-            t.join(timeout=timeout_sec)
-        except Exception as exc:
-            logger.warning("[Bridge] 实时刷新每日进度线程异常: %s", exc)
-            box["error"] = exc
+    def _load_daily_dates_backend(self, *args, **kwargs):
+        from .bridge_backends.daily_progress import _load_daily_dates_backend as _impl
+        return _impl(self, *args, **kwargs)
 
-        if threading.current_thread() is not t and t.is_alive():
-            logger.warning(
-                "[Bridge] 实时刷新每日进度超时（%.0fs），邮件改用数据库缓存数据", timeout_sec)
-            try:
-                return tracker.load_today(), False
-            except Exception as exc:
-                logger.warning("[Bridge] 读取进度缓存失败: %s", exc)
-                return None, False
+    def _load_daily_history_backend(self, *args, **kwargs):
+        from .bridge_backends.daily_progress import _load_daily_history_backend as _impl
+        return _impl(self, *args, **kwargs)
 
-        err = box.get("error")
-        if err is not None:
-            logger.warning("[Bridge] 实时刷新每日进度失败，改用缓存: %s", err)
-            try:
-                return tracker.load_today(), False
-            except Exception as exc:
-                logger.warning("[Bridge] 读取进度缓存失败: %s", exc)
-                return None, False
+    def _load_daily_stats_backend(self, *args, **kwargs):
+        from .bridge_backends.daily_progress import _load_daily_stats_backend as _impl
+        return _impl(self, *args, **kwargs)
 
-        result = box.get("result")
-        if result is not None:
-            ok = sum(1 for g in result.games if g.is_daily_completed)
-            logger.info(
-                "[Bridge] 发信前实时刷新每日进度完成: %d 款游戏，其中 %d 款已完成",
-                len(result.games), ok)
-        try:
-            return tracker.load_today(), True
-        except Exception as exc:
-            logger.warning("[Bridge] 读取刷新后进度失败: %s", exc)
-            return None, True
-
-    def _send_daily_email_report(
-        self,
-        automation_report: List[str],
-        automation_warnings: List[str],
-    ) -> tuple:
-        """读取 SMTP 配置 + tracker 数据，发送一条龙报告邮件。返回 (成功, 错误信息)。"""
-        from ..services.email_reporter import (
-            build_daily_report,
-            is_email_configured,
-            load_email_config,
-            send_email,
-        )
-        from ..services.daily_progress_tracker import get_tracker
-        from ..settings.paths import WORKFLOW_DB_PATH
-
-        if not is_email_configured():
-            return False, "app_config.json 的 email 段未配置或 enabled=false"
-
-        config = load_email_config()
-        if config is None:
-            return False, "SMTP 配置不完整（缺少 host/sender/password/recipients）"
-
-        # 发信前**实时**查一遍各游戏每日进度并写回 tracker。
-        # 不能用 load_today() 直接读缓存：一条龙通常跑几十分钟到几小时，
-        # 库里可能还是跑之前（甚至早上）的数据，邮件会发出过时进度。
-        daily_snapshot, snapshot_fresh = self._refresh_daily_snapshot_for_report(
-            tracker_factory=lambda: get_tracker(str(WORKFLOW_DB_PATH))
-        )
-
-        # 简单统计：本轮 success / failed 计数
-        automation_total = len(automation_report)
-        automation_success = sum(1 for line in automation_report if "✅" in line or "已完成" in line)
-        automation_failed = sum(1 for line in automation_report if "❌" in line or "失败" in line)
-
-        subject, body = build_daily_report(
-            automation_report=automation_report,
-            automation_warnings=automation_warnings,
-            automation_total=automation_total,
-            automation_success=automation_success,
-            automation_failed=automation_failed,
-            daily_snapshot=daily_snapshot,
-            snapshot_fresh=snapshot_fresh,
-        )
-
-        try:
-            ok, err = send_email(config, subject, body)
-        except Exception as exc:
-            logger.exception("[Bridge] 邮件发送异常")
-            return False, str(exc)
-        if not ok:
-            return False, err or "未知 SMTP 错误"
-        self._request_toast("每日进度邮件已发送", "#2f7d4a")
-        return True, ""
-
-    def _save_preferences_backend(self, prefs: List[Dict]):
-        """后台保存启动偏好。"""
-        try:
-            db = self._get_preference_db()
-            for pref in prefs:
-                app_key = pref.get("app_key", "")
-                enabled = bool(pref.get("enabled", False))
-                script_choice = pref.get("script_choice", "")
-                db.save_app_launch_preference(app_key, enabled, script_choice, False)
-            self.emit_event("toast", message="启动偏好已保存", color="#2f7d4a")
-            logger.info("[Bridge] 已保存 %d 项启动偏好", len(prefs))
-        except Exception as exc:
-            logger.exception("[Bridge] 保存偏好失败")
-            self.emit_event("toast", message=f"保存失败: {exc}", color="#b04b44")
-
-    def _run_daily_check_backend(self, game_keys: List[str]):
-        """后台查询每日进度。"""
-        try:
-            self.emit_event("status", title="正在查询", body="正在获取每日进度...", tone=TONE_RUNNING)
-
-            from ..clients.daily_checker import check_games_progress
-            from ..services.daily_progress_tracker import get_tracker
-            from ..settings.paths import WORKFLOW_DB_PATH
-
-            # 同步写入 tracker，让 loadDailyProgress 下次能拿到今日记录
-            tracker = None
-            try:
-                tracker = get_tracker(str(WORKFLOW_DB_PATH))
-            except Exception as exc:
-                logger.warning("[Bridge] 初始化 tracker 失败，跳过持久化: %s", exc)
-
-            result = check_games_progress(
-                game_keys=game_keys if game_keys else None,
-                tracker=tracker,
-            )
-
-            games_data = []
-            for game in result.games:
-                tasks_data = []
-                for task in game.tasks:
-                    # DailyTaskItem 字段：name/current/total/is_completed
-                    t_status = "success" if task.is_completed else "pending"
-                    if task.total and task.total > 0:
-                        t_message = f"{task.current}/{task.total}"
-                    elif task.is_completed:
-                        t_message = "已完成"
-                    else:
-                        t_message = "未完成"
-                    tasks_data.append({
-                        "task_key": task.name,
-                        "task_name": task.name,
-                        "status": t_status,
-                        "message": t_message,
-                        "current": task.current,
-                        "total": task.total,
-                    })
-                games_data.append({
-                    "game_key": game.game_key,
-                    "game_name": game.game_name,
-                    "uid": game.uid,
-                    "nickname": game.nickname,
-                    # GameDailyStatus 用 is_daily_completed，没有 is_all_success/has_failed
-                    # has_failed 仅当 API 报错时为真；任务未完成属于 pending 不算 failed
-                    "is_all_success": game.is_daily_completed,
-                    "has_failed": bool(game.errors),
-                    "progress_percent": game.progress_percent,
-                    "tasks": tasks_data,
-                    "errors": game.errors,
-                })
-
-            self._inject_external_log_progress(games_data)
-            self._inject_sign_task_into_games(games_data)
-            self._ensure_baijing_placeholder(games_data)
-            self._attach_completion_state(games_data)
-            self.emit_event("daily_progress", games=games_data, date_key="")
-            self.emit_event("status", title="查询完成",
-                            body=f"已查询 {len(games_data)} 款游戏",
-                            tone=TONE_SUCCESS)
-            self.emit_event("toast", message="每日进度已刷新", color="#2f7d4a")
-        except Exception as exc:
-            logger.exception("[Bridge] 每日进度查询失败")
-            self.emit_event("status", title="查询失败", body=str(exc), tone=TONE_DANGER)
-            self.emit_event("toast", message=f"查询失败: {exc}", color="#b04b44")
-
-    def _serialize_snapshot_games(self, snapshot) -> List[Dict[str, Any]]:
-        """把 DailyProgressSnapshot 序列化成 QML 可直接绑定的列表。"""
-        from ..settings import resolve_game_key
-        from ..settings.defaults import GAME_KEYS
-
-        games_data: List[Dict[str, Any]] = []
-        for game in snapshot.games:
-            gk = resolve_game_key(game.game_key)
-            tasks_data = []
-            for task in game.tasks:
-                t_extra = task.extra if isinstance(task.extra, dict) else {}
-                t_current, t_total = self._extract_task_counts(t_extra)
-                tasks_data.append({
-                    "task_key": task.task_key,
-                    "task_name": task.task_name,
-                    "status": task.status,
-                    "message": task.message,
-                    "current": t_current,
-                    "total": t_total,
-                    "extra": t_extra,
-                })
-            games_data.append({
-                "game_key": gk,
-                "game_name": game.game_name or GAME_KEYS.get(gk, gk),
-                "uid": game.uid,
-                "nickname": game.nickname,
-                "is_all_success": game.is_all_success,
-                "has_failed": game.has_failed,
-                "progress_percent": game.progress_percent,
-                "completion_state": game.completion_state(),
-                "tasks": tasks_data,
-                "errors": list(game.errors or []),
-            })
-        games_data.sort(key=lambda g: (-g["progress_percent"], g["game_name"]))
-        return games_data
-
-    def _load_daily_dates_backend(self):
-        """列出有每日进度记录的日期（倒序）。"""
-        try:
-            from ..services.daily_progress_tracker import get_tracker
-            from ..settings.paths import WORKFLOW_DB_PATH
-
-            tracker = get_tracker(str(WORKFLOW_DB_PATH))
-            dates = tracker.list_available_dates(limit=120)
-            payload = {"ok": True, "dates": dates}
-        except Exception as exc:
-            logger.exception("[Bridge] 加载历史日期列表失败")
-            payload = {"ok": False, "dates": [], "message": str(exc)}
-        self._daily_dates_json = json.dumps(payload, ensure_ascii=False)
-        self.dailyDatesChanged.emit(self._daily_dates_json)
-
-    def _load_daily_history_backend(self, date_key: str):
-        """回看指定日期的每日进度。"""
-        if not date_key:
-            self._daily_history_json = json.dumps(
-                {"ok": False, "date_key": "", "message": "未指定日期", "games": []},
-                ensure_ascii=False)
-            self.dailyHistoryChanged.emit(self._daily_history_json)
-            return
-        try:
-            from ..services.daily_progress_tracker import get_tracker
-            from ..settings.paths import WORKFLOW_DB_PATH
-
-            tracker = get_tracker(str(WORKFLOW_DB_PATH))
-            snapshot = tracker.load_date(date_key)
-            games = self._serialize_snapshot_games(snapshot)
-            payload = {
-                "ok": True,
-                "date_key": snapshot.date_key,
-                "games": games,
-                "message": "" if games else f"{date_key} 没有记录",
-            }
-            logger.info("[Bridge] 回看历史进度 %s：%d 款游戏", date_key, len(games))
-        except Exception as exc:
-            logger.exception("[Bridge] 回看历史进度失败: %s", date_key)
-            payload = {"ok": False, "date_key": date_key, "games": [], "message": str(exc)}
-        self._daily_history_json = json.dumps(payload, ensure_ascii=False)
-        self.dailyHistoryChanged.emit(self._daily_history_json)
-
-    def _load_daily_stats_backend(self, days: int):
-        """统计最近 days 天各游戏完成率。"""
-        try:
-            from ..services.daily_progress_tracker import get_tracker
-            from ..settings.paths import WORKFLOW_DB_PATH
-
-            tracker = get_tracker(str(WORKFLOW_DB_PATH))
-            stats = tracker.stats_recent_days(days)
-            dates = tracker.list_available_dates(limit=days)
-            payload = {
-                "ok": True,
-                "days": days,
-                "date_from": dates[-1] if dates else "",
-                "date_to": dates[0] if dates else "",
-                "stats": stats,
-            }
-            logger.info("[Bridge] 统计最近 %d 天完成率：%d 款游戏", days, len(stats))
-        except Exception as exc:
-            logger.exception("[Bridge] 统计完成率失败")
-            payload = {"ok": False, "days": days, "stats": [], "message": str(exc)}
-        self._daily_stats_json = json.dumps(payload, ensure_ascii=False)
-        self.dailyStatsChanged.emit(self._daily_stats_json)
-
-    def _load_daily_progress_backend(self):
-        """从 SQLite 加载今日持久化进度。"""
-        try:
-            from ..services.daily_progress_tracker import get_tracker
-            from ..settings.paths import WORKFLOW_DB_PATH
-            from ..settings import resolve_game_key
-            from ..settings.defaults import GAME_KEYS
-            tracker = get_tracker(str(WORKFLOW_DB_PATH))
-            snapshot = tracker.load_today()
-
-            # 合并同游戏的卡片：tracker 里可能同时存在大驼峰式（旧 task_batch_runner）
-            # 和小写式（daily_checker / parser）两种 game_key，需要统一合并。
-            merged_games: Dict[str, Dict[str, Any]] = {}
-            for game in snapshot.games:
-                gk = resolve_game_key(game.game_key)
-                tasks_data = []
-                for task in game.tasks:
-                    t_extra = task.extra if isinstance(task.extra, dict) else {}
-                    t_current, t_total = self._extract_task_counts(t_extra)
-                    # 白荆验证截图：extra.verify_image 为相对路径，需转 file:// 供 QML Image
-                    v_rel = t_extra.get("verify_image") if isinstance(t_extra.get("verify_image"), str) else None
-                    v_url = None
-                    if v_rel:
-                        try:
-                            from pathlib import Path as _P
-                            from ..settings.paths import BASE_DIR as _BD
-                            # 兼容相对/绝对两种写法
-                            p = _P(v_rel)
-                            if not p.is_absolute():
-                                p = _BD / v_rel
-                            if p.exists():
-                                v_url = p.as_uri()
-                            else:
-                                v_url = None
-                        except Exception:
-                            v_url = None
-                    tasks_data.append({
-                        "task_key": task.task_key,
-                        "task_name": task.task_name,
-                        "status": task.status,
-                        "message": task.message,
-                        "current": t_current,
-                        "total": t_total,
-                        "verify_image": v_rel,
-                        "verify_image_url": v_url,
-                        "extra": t_extra,
-                    })
-                if gk in merged_games:
-                    # 合并到已有卡片
-                    existing = merged_games[gk]
-                    existing["tasks"].extend(tasks_data)
-                    existing["errors"].extend(game.errors or [])
-                    # 取更优状态
-                    if game.is_all_success:
-                        existing["is_all_success"] = True
-                    if game.has_failed:
-                        existing["has_failed"] = True
-                else:
-                    merged_games[gk] = {
-                        "game_key": gk,
-                        "game_name": game.game_name or GAME_KEYS.get(gk, gk),
-                        "uid": game.uid,
-                        "nickname": game.nickname,
-                        "is_all_success": game.is_all_success,
-                        "has_failed": game.has_failed,
-                        "progress_percent": game.progress_percent,
-                        "tasks": tasks_data,
-                        "errors": list(game.errors or []),
-                    }
-            games_data = list(merged_games.values())
-
-            self._inject_external_log_progress(games_data)
-            self._inject_sign_task_into_games(games_data)
-            self._ensure_baijing_placeholder(games_data)
-            self._attach_completion_state(games_data)
-            self.emit_event("daily_progress", games=games_data, date_key=snapshot.date_key)
-            logger.info("[Bridge] 加载持久化进度: date_key=%s games=%d",
-                        snapshot.date_key, len(games_data))
-        except Exception as exc:
-            logger.exception("[Bridge] 加载持久化进度失败")
-            self.emit_event("toast", message=f"加载失败: {exc}", color="#b04b44")
+    def _load_daily_progress_backend(self, *args, **kwargs):
+        from .bridge_backends.daily_progress import _load_daily_progress_backend as _impl
+        return _impl(self, *args, **kwargs)
 
     @staticmethod
-    def _real_completion_percent(game_key: str, tasks: List[Dict[str, Any]]):
-        """从任务列表里取"真实游玩进度"百分比，而非脚本子任务比例。
-
-        返回 (percent, source_key) 或 (None, None) 表示无可用真实计数。
-        动机：ok-ww 的 progress_percent 只是"脚本跑了几步"，全跑完就是 100%，
-        但玩家活跃度可能只有 90/100 —— 直接展示会严重误导。
-        """
-        # 复用 tracker 里的统一映射，避免两处各写一份逐渐走样
-        try:
-            from ..services.daily_progress_tracker import KEY_PROGRESS_TASKS
-        except Exception:
-            return None, None
-        names = KEY_PROGRESS_TASKS.get(game_key)
-        if not names:
-            return None, None
-        for want in names:
-            for t in tasks or []:
-                tname = str(t.get("task_name") or t.get("task_key") or "")
-                if tname != want:
-                    continue
-                cur = t.get("current")
-                total = t.get("total")
-                try:
-                    cur_i = int(cur)
-                    total_i = int(total)
-                except (TypeError, ValueError):
-                    continue
-                if total_i <= 0:
-                    continue
-                # 官方 API 未刷新时 cur 会是 0，此时不谎报 0%，交给调用方兜底
-                if cur_i <= 0:
-                    return None, None
-                pct = int(cur_i / total_i * 100)
-                return min(pct, 100), want
-        return None, None
+    @staticmethod
+    def _real_completion_percent(*args, **kwargs):
+        from .bridge_backends.daily_progress import _real_completion_percent as _impl
+        return _impl(*args, **kwargs)
 
     @staticmethod
-    def _attach_completion_state(games_data: List[Dict[str, Any]]):
-        """给合并后的 games_data 逐项补 completion_state（供卡片徽标用）。
-
-        合并后的 dict 不是 GameDailyRecord，按字段重建一个再判定，
-        兼容两种任务形状：tracker 侧 extra.current/total 与查询侧顶层 current/total。
-        失败不抛，缺字段就跳过该项（QML 回退旧逻辑）。
-        """
-        try:
-            from ..services.daily_progress_tracker import DailyTaskRecord, GameDailyRecord
-        except Exception:
-            return
-        for g in games_data or []:
-            try:
-                tasks = []
-                for t in (g.get("tasks") or []):
-                    if not isinstance(t, dict):
-                        continue
-                    extra = t.get("extra") if isinstance(t.get("extra"), dict) else {}
-                    if "current" not in extra and t.get("current") is not None:
-                        extra = dict(extra)
-                        extra["current"] = t.get("current")
-                        extra["total"] = t.get("total")
-                    tasks.append(DailyTaskRecord(
-                        task_key=str(t.get("task_key") or t.get("task_name") or ""),
-                        task_name=str(t.get("task_name") or t.get("task_key") or ""),
-                        source=str(t.get("source") or "script"),
-                        status=str(t.get("status") or "pending"),
-                        message=str(t.get("message") or ""),
-                        extra=extra,
-                    ))
-                rec = GameDailyRecord(
-                    game_key=str(g.get("game_key") or ""),
-                    game_name=str(g.get("game_name") or ""),
-                    tasks=tasks,
-                    errors=list(g.get("errors") or []),
-                )
-                g["completion_state"] = rec.completion_state()
-                # 完成度口径标签：拿得到关键任务真实计数（活跃度等）时，
-                # progress_percent 就是游玩进度，必须标 non-script，否则白荆
-                # 活跃度 15/100 会被误显示成"脚本 15%"（2026-10-19）。
-                # 取不到真实计数时才是脚本子任务完成比例。
-                # wuwa/endfield 合并路径已自带更精确的来源名，不覆盖。
-                if not g.get("progress_source"):
-                    g["progress_source"] = (
-                        "real" if rec.real_progress_percent() is not None else "script"
-                    )
-            except Exception:
-                continue
+    @staticmethod
+    def _attach_completion_state(*args, **kwargs):
+        from .bridge_backends.daily_progress import _attach_completion_state as _impl
+        return _impl(*args, **kwargs)
 
     @staticmethod
-    def _extract_task_counts(t_extra: Dict[str, Any]):
-        """从任务 extra 里取真实计数 (current, total)。
-
-        优先顶层 current/total；缺失时回退 extra.summary 的
-        done/tasks_total——白荆"日常任务"把 2/15 这类真实完成度放在
-        summary 里，顶层没有计数。不提取的话 UI 只能看到
-        status=success 的 ✅，实际只做了 2/15 也会打勾误导用户
-        （2026-10-19 事故）。
-        """
-        if not isinstance(t_extra, dict):
-            return None, None
-        current = t_extra.get("current")
-        total = t_extra.get("total")
-        if current is None or total is None:
-            summary = t_extra.get("summary")
-            if isinstance(summary, dict):
-                if current is None:
-                    current = summary.get("done")
-                if total is None:
-                    total = summary.get("tasks_total")
-        return current, total
-
-    def _inject_external_log_progress(self, games_data: List[Dict[str, Any]]):
-        """读取外部自动化工具日志，将日常执行情况注入 games_data。
-
-        支持的工具与映射：
-          - ok-ef（终末地）→ game_key="endfield"，只要关键任务（⭐活动奖励、⭐日常奖励）成功就算成功
-          - ok-nte（异环）→ game_key="nte"，只要关键任务（领取活跃度奖励）成功就算成功
-          - ok-ww（鸣潮）→ game_key="wuwa"，只要出现 Successfully Executed Task 就算成功
-          - whimbox（无限暖暖）→ game_key="nikki"，白名单任务 + 末尾"一条龙结束"算成功
-          - BetterGI（原神）→ game_key="genshin"，每日委托奖励 + 探索派遣 都完成才算成功
-
-        行为：
-          - whimbox：保留原有 tasks，**前置插入**白名单任务（同名不重复），用于细化任务细节
-          - 其他：如果今天的日志存在，整体替换原有的对应 game 项；否则保持原数据不变
-        """
-        from ..services.ok_ef_daily_parser import parse_latest_ok_ef_report
-        from ..services.ok_nte_daily_parser import parse_latest_ok_nte_log
-        from ..services.ok_ww_daily_parser import parse_latest_ok_ww_log
-        from ..services.whimbox_daily_parser import parse_latest_whimbox_log
-        from ..services.bettergi_daily_parser import parse_latest_bettergi_log
-        from ..services.zzz_daily_parser import parse_latest_zzz_log
-        from ..services.starrail_daily_parser import parse_latest_starrail_log
-        from ..settings import resolve_game_key
-
-        parsers = (
-            ("endfield", "ok-ef", parse_latest_ok_ef_report),
-            ("nte", "ok-nte", parse_latest_ok_nte_log),
-            ("wuwa", "ok-ww", parse_latest_ok_ww_log),
-            ("nikki", "whimbox", parse_latest_whimbox_log),
-            ("genshin", "BetterGI", parse_latest_bettergi_log),
-            ("zzz", "OneDragon", parse_latest_zzz_log),
-            ("honkai_sr", "March7th", parse_latest_starrail_log),
-        )
-        for game_key, tool_name, parser_func in parsers:
-            try:
-                data = parser_func()
-                if data is None:
-                    if game_key == "nte":
-                        # 异环：ok-nte 今天若未执行，仍保留“游戏内每日”占位任务，
-                        # 进度由 ok-nte 执行情况判定（未执行 = 待执行），避免游戏内进度整体缺失。
-                        data = {
-                            "game_key": "nte",
-                            "game_name": "异环",
-                            "uid": "",
-                            "nickname": "ok-nte",
-                            "is_all_success": False,
-                            "has_failed": False,
-                            "progress_percent": 0,
-                            "tasks": [{
-                                "task_key": "游戏内每日",
-                                "task_name": "游戏内每日",
-                                "status": "pending",
-                                "message": "待 ok-nte 执行",
-                            }],
-                            "errors": [],
-                            "report_time": "",
-                            "log_date": "",
-                        }
-                    else:
-                        continue
-                resolved_key = resolve_game_key(game_key)
-                replaced = False
-                for g_idx, game in enumerate(games_data):
-                    if resolve_game_key(game.get("game_key", "")) == resolved_key:
-                        if game_key == "nikki":
-                            # 无限暖暖特殊处理：whimbox 的子任务前置插入，保留 Pearpal 基线
-                            existing_tasks = list(game.get("tasks") or [])
-                            whimbox_tasks = data.get("tasks") or []
-                            # 用 task_key 去重：whimbox 的 task_key 与 Pearpal 同名则取最新
-                            existing_keys = {t.get("task_key") or t.get("task_name"): idx
-                                             for idx, t in enumerate(existing_tasks)}
-                            merged = []
-                            for wt in whimbox_tasks:
-                                wkey = wt.get("task_key") or wt.get("task_name")
-                                if wkey in existing_keys:
-                                    e_idx = existing_keys[wkey]
-                                    # 用 whimbox 数据覆盖同名（更精细的进度）
-                                    merged.append({**existing_tasks[e_idx], **wt})
-                                else:
-                                    merged.append(wt)
-                            for j, t in enumerate(existing_tasks):
-                                tkey = t.get("task_key") or t.get("task_name")
-                                if tkey not in {(wt.get("task_key") or wt.get("task_name")) for wt in whimbox_tasks}:
-                                    merged.append(t)
-                            games_data[g_idx]["tasks"] = merged
-                            # 整体成功/失败由 whimbox 决定（更精确）
-                            games_data[g_idx]["is_all_success"] = data.get("is_all_success", games_data[g_idx].get("is_all_success"))
-                            games_data[g_idx]["has_failed"] = data.get("has_failed", games_data[g_idx].get("has_failed"))
-                            if data.get("errors"):
-                                games_data[g_idx]["errors"] = data["errors"]
-                            games_data[g_idx]["nickname"] = data.get("nickname", games_data[g_idx].get("nickname", ""))
-                            logger.info("[Bridge] 已用 %s 日志合并 %s 任务细节: tasks=%d",
-                                        tool_name, game_key, len(merged))
-                        else:
-                            if game_key == "nte":
-                                # 异环特殊处理：游戏内进度由 ok-nte 执行情况判定。
-                                # 保留塔吉多社区任务（社区签到/浏览帖子/点赞帖子/分享）
-                                # 与 BBS 签到成果；仅丢弃"游戏签到"任务（其完成情况
-                                # 由 ok-nte 进入游戏后的真实执行结果代表）。
-                                # 历史 bug：过滤条件写成"endswith(签到)"，把 BBS签到
-                                # （+80金币 API 成果）和异环签到也误删，导致 DailyView
-                                # 签到行走 last_sign_* 兜底显示"今日尚未签到"。
-                                existing_tasks = list(game.get("tasks") or [])
-                                ok_nte_tasks = list(data.get("tasks") or [])
-                                kept = [
-                                    t for t in existing_tasks
-                                    if str(t.get("task_name", "")) != "游戏签到"
-                                ]
-                                merged = list(kept) + ok_nte_tasks
-                                # 社区任务全部完成（无社区任务时视为满足，不阻塞 ok-nte 判定）
-                                community_done = all(
-                                    t.get("status") == "success" for t in kept
-                                ) if kept else True
-                                game["tasks"] = merged
-                                game["is_all_success"] = bool(data.get("is_all_success")) and community_done
-                                game["has_failed"] = bool(data.get("has_failed")) or bool(game.get("has_failed"))
-                                if data.get("errors"):
-                                    game["errors"] = (game.get("errors") or []) + list(data.get("errors"))
-                                game["nickname"] = data.get("nickname", game.get("nickname", ""))
-                                game["progress_percent"] = data.get("progress_percent", game.get("progress_percent"))
-                                logger.info(
-                                    "[Bridge] 异环：合并 ok-nte 游戏内进度(%d 项) + 社区任务(%d 项)，成功=%s",
-                                    len(ok_nte_tasks), len(kept), game["is_all_success"])
-                            elif game_key in ("wuwa", "endfield"):
-                                # 鸣潮/终末地：脚本日志与 API 便笺数据**互补**，合并而非替换。
-                                # API 行（daily_checker）带体力/活跃度等便笺数据，
-                                # 日志行带脚本执行进度；同名任务以日志为准，日志任务前置。
-                                existing_tasks = list(game.get("tasks") or [])
-                                log_tasks = list(data.get("tasks") or [])
-                                log_keys = {(t.get("task_key") or t.get("task_name")) for t in log_tasks}
-                                sign_tasks = [
-                                    t for t in existing_tasks
-                                    if (t.get("task_key") or "").startswith("sign_")
-                                ]
-                                kept_api_tasks = [
-                                    t for t in existing_tasks
-                                    if (t.get("task_key") or t.get("task_name")) not in log_keys
-                                    and not (t.get("task_key") or "").startswith("sign_")
-                                ]
-                                game["tasks"] = sign_tasks + log_tasks + kept_api_tasks
-                                game["is_all_success"] = data.get(
-                                    "is_all_success", game.get("is_all_success"))
-                                game["has_failed"] = bool(data.get("has_failed")) or bool(game.get("has_failed"))
-                                if data.get("errors"):
-                                    game["errors"] = (game.get("errors") or []) + list(data.get("errors"))
-                                game["nickname"] = data.get("nickname") or game.get("nickname", "")
-
-                                # 完成度必须反映真实游玩进度，不能用脚本子任务比例代替：
-                                # ok-ww 的 progress_percent 是"脚本跑了几步"（全跑完就 100%），
-                                # 与活跃度 90/100 无关。这里优先取 API 便笺的关键计数。
-                                real_pct, real_src = self._real_completion_percent(
-                                    game_key, sign_tasks + log_tasks + kept_api_tasks)
-                                if real_pct is not None:
-                                    game["progress_percent"] = real_pct
-                                    game["progress_source"] = real_src
-                                else:
-                                    game["progress_percent"] = data.get(
-                                        "progress_percent", game.get("progress_percent"))
-                                    game["progress_source"] = "script"
-                                logger.info(
-                                    "[Bridge] %s：合并脚本日志进度(%d 项) + API 便笺数据(%d 项)，成功=%s 完成度=%s%%(%s)",
-                                    game_key, len(log_tasks), len(kept_api_tasks),
-                                    game["is_all_success"],
-                                    game["progress_percent"], game.get("progress_source"))
-                            else:
-                                # 保留 tracker 里已有的签到任务（sign_ 前缀），
-                                # 避免被外部日志整体替换后丢失签到状态。
-                                existing_sign_tasks = [
-                                    t for t in (game.get("tasks") or [])
-                                    if (t.get("task_key") or "").startswith("sign_")
-                                ]
-                                if existing_sign_tasks:
-                                    data_tasks = list(data.get("tasks") or [])
-                                    data["tasks"] = existing_sign_tasks + data_tasks
-                                games_data[g_idx] = data
-                                logger.info("[Bridge] 已用 %s 日志替换 %s 进度: success=%s sign_tasks=%d",
-                                            tool_name, game_key, data.get("is_all_success"), len(existing_sign_tasks))
-                        replaced = True
-                        break
-                if not replaced:
-                    games_data.append(data)
-                    logger.info("[Bridge] 已注入 %s %s 进度: success=%s",
-                                tool_name, game_key, data.get("is_all_success"))
-            except Exception as exc:
-                logger.warning("[Bridge] 读取 %s 日志失败: %s", tool_name, exc)
-
-    def _ensure_baijing_placeholder(self, games_data: List[Dict[str, Any]]):
-        """确保白荆回廊卡片始终可见：无记录时注入待执行占位，避免每日进度里看不到。"""
-        try:
-            from ..settings import resolve_game_key
-            has = any(resolve_game_key(g.get("game_key", "")) == "baijing" for g in games_data)
-            if has:
-                return
-            games_data.append({
-                "game_key": "baijing",
-                "game_name": "白荆回廊",
-                "uid": "",
-                "nickname": "",
-                "is_all_success": False,
-                "has_failed": False,
-                "progress_percent": 0,
-                "tasks": [
-                    {"task_key": "enter_game", "task_name": "进入游戏", "status": "pending", "message": "待一条龙执行", "current": None, "total": None},
-                    {"task_key": "daily", "task_name": "日常任务", "status": "pending", "message": "待执行", "current": None, "total": None},
-                    {"task_key": "verify", "task_name": "验证", "status": "pending", "message": "待验证截图", "current": None, "total": None, "verify_image": None, "verify_image_url": None, "extra": {}},
-                    {"task_key": "weekly", "task_name": "每周商店购买", "status": "pending", "message": "待周常（每周一次）", "current": None, "total": None},
-                    {"task_key": "monthly", "task_name": "每月有猫兑换", "status": "pending", "message": "待月度（每月一次，购买清单待定）", "current": None, "total": None},
-                ],
-                "errors": [],
-            })
-            logger.info("[Bridge] 已注入白荆回廊占位进度（今日无记录）")
-        except Exception as exc:
-            logger.debug("[Bridge] 注入白荆占位失败: %s", exc)
-
-    def _load_gacha_accounts_backend(self, game_code: str):
-        """从 SQLite 加载指定游戏的抽卡账号列表。"""
-        try:
-            db = self._get_preference_db()
-            accounts = db.get_gacha_accounts(game_code)
-            accounts_data = []
-            for acc in accounts:
-                accounts_data.append({
-                    "uid": acc.get("uid", ""),
-                    "imported_at": acc.get("imported_at", ""),
-                    "import_count": acc.get("import_count", 0),
-                    "total_records": acc.get("total_records", 0),
-                })
-            self.emit_event("gacha_accounts", accounts=accounts_data)
-            logger.info("[Bridge] 加载抽卡账号: game=%s count=%d", game_code, len(accounts_data))
-        except Exception as exc:
-            logger.exception("[Bridge] 加载抽卡账号失败")
-            self.emit_event("toast", message=f"加载失败: {exc}", color="#b04b44")
-
-    def _load_gacha_analysis_backend(self, game_code: str, uid: str):
-        """从 SQLite 加载抽卡记录并生成分析数据。"""
-        try:
-            if not uid:
-                self.emit_event("gacha_analysis", overview={}, pools=[], history=[], pity={})
-                return
-
-            db = self._get_preference_db()
-            records = db.get_gacha_records(game_code, uid)
-            if not records:
-                self.emit_event("gacha_analysis", overview={}, pools=[], history=[], pity={})
-                self.emit_event("toast", message="该 UID 暂无抽卡记录", color="#b66f1f")
-                return
-
-            latest = db.get_latest_gacha_import(game_code, uid)
-            accounts = db.get_gacha_accounts(game_code)
-            import_count = len(accounts)
-
-            from ..gacha.hoyo_analysis import (
-                build_overview,
-                build_pool_analysis,
-                build_high_rarity_history,
-                build_pity_summary,
-            )
-            from ..gacha.luck_analysis import build_hoyo_luck
-
-            raw_overview = build_overview(records, game_code, latest, import_count)
-            raw_pools = build_pool_analysis(records, game_code)
-            history = build_high_rarity_history(records, game_code)
-            raw_pity = build_pity_summary(records, game_code)
-            luck = build_hoyo_luck(records, game_code)
-
-            # 转换 overview → 扁平化字段供 QML 使用
-            total = raw_overview.get("total_records", 0)
-            high_count = raw_overview.get("high_rarity_count", 0)
-            overview = {
-                "total_pulls": total,
-                "high_rarity_count": high_count,
-                "high_rarity_rate": f"{high_count / total * 100:.1f}%" if total > 0 else "0%",
-                "latest_import": raw_overview.get("latest_imported_at", ""),
-                "import_count": raw_overview.get("import_count", 0),
-                "earliest_time": raw_overview.get("earliest_time", ""),
-                "latest_time": raw_overview.get("latest_time", ""),
-            }
-
-            # 转换 pools dict → list
-            pools = []
-            for pool_name, pool_data in raw_pools.items():
-                pool_total = pool_data.get("total", 0)
-                pool_high = pool_data.get("high_rarity_count", 0)
-                pools.append({
-                    "pool_name": pool_name,
-                    "total_pulls": pool_total,
-                    "high_rarity_count": pool_high,
-                    "high_rarity_rate": pool_data.get("high_rarity_pct", "0%"),
-                    "current_pity": pool_data.get("current_pity", 0),
-                    "high_rarity_history": pool_data.get("high_rarity_list", []),
-                })
-
-            # 转换 pity list → dict
-            pity = {}
-            if isinstance(raw_pity, list):
-                for item in raw_pity:
-                    group_name = item.get("group_name", "")
-                    pity[group_name] = {
-                        "avg_pity": item.get("avg_pity", 0),
-                        "min_pity": item.get("min_pity", 0),
-                        "max_pity": item.get("max_pity", 0),
-                        "current_pity": item.get("current_pity", 0),
-                    }
-            elif isinstance(raw_pity, dict):
-                pity = raw_pity
-
-            # 提取全局保底摘要
-            all_pities = []
-            for v in pity.values():
-                if isinstance(v, dict) and v.get("avg_pity"):
-                    all_pities.append(v)
-            pity_summary = {
-                "avg_pity": int(sum(v["avg_pity"] for v in all_pities) / len(all_pities)) if all_pities else 0,
-                "min_pity": min((v["min_pity"] for v in all_pities), default=0),
-                "max_pity": max((v["max_pity"] for v in all_pities), default=0),
-                "current_pity": max((v["current_pity"] for v in all_pities), default=0),
-            }
-
-            self.emit_event(
-                "gacha_analysis",
-                overview=overview,
-                pools=pools,
-                history=history,
-                pity=pity_summary,
-                luck=luck,
-            )
-            logger.info("[Bridge] 抽卡分析完成: game=%s uid=%s records=%d pools=%d",
-                        game_code, uid, len(records), len(pools))
-        except Exception as exc:
-            logger.exception("[Bridge] 加载抽卡分析失败")
-            self.emit_event("toast", message=f"分析失败: {exc}", color="#b04b44")
-
-    def _import_gacha_backend(self, file_path: str):
-        """后台导入 UIGF JSON 文件。"""
-        try:
-            self.emit_event("status", title="正在导入", body="正在解析 UIGF 文件...", tone=TONE_RUNNING)
-            from ..gacha.hoyo_importer import import_uigf
-            from ..settings.paths import WORKFLOW_DB_PATH
-            summaries = import_uigf(file_path, str(WORKFLOW_DB_PATH))
-
-            total_count = sum(s.get("total_records", 0) for s in summaries)
-            game_code = summaries[0].get("game_code", "hk4e") if summaries else "hk4e"
-
-            self.emit_event("status", title="导入完成",
-                            body=f"已导入 {total_count} 条记录",
-                            tone=TONE_SUCCESS)
-            self.emit_event("toast", message=f"导入完成: {total_count} 条", color="#2f7d4a")
-            # 自动刷新账号列表
-            self._load_gacha_accounts_backend(game_code)
-        except Exception as exc:
-            logger.exception("[Bridge] 导入抽卡文件失败")
-            self.emit_event("status", title="导入失败", body=str(exc), tone=TONE_DANGER)
-            self.emit_event("toast", message=f"导入失败: {exc}", color="#b04b44")
-
-    def _import_hoyogacha_db_backend(self, db_path: str, game_label: str):
-        """后台从 HoYo.Gacha 数据库导入（只读拷临时文件，不锁原库）。"""
-        try:
-            self.emit_event("status", title="正在导入", body="正在读取 HoYo.Gacha 数据库...", tone=TONE_RUNNING)
-            from ..gacha.hoyo_importer import import_hoyogacha_db
-            from ..settings.paths import WORKFLOW_DB_PATH
-            summaries = import_hoyogacha_db(db_path, str(WORKFLOW_DB_PATH))
-
-            total_count = sum(s.get("total_records", 0) for s in summaries)
-            codes = {s.get("game_code", "") for s in summaries}
-            want = self._GACHA_GAME_MAP.get((game_label or "").strip(), "")
-            refresh_code = want if want in codes else (summaries[0].get("game_code", "hk4e") if summaries else "hk4e")
-
-            self.emit_event("status", title="导入完成",
-                            body=f"HoYo.Gacha 已导入 {total_count} 条记录",
-                            tone=TONE_SUCCESS)
-            self.emit_event("toast", message=f"导入完成: {total_count} 条", color="#2f7d4a")
-            # 只刷新当前选中游戏的账号列表（切游戏下拉会自动加载其它游戏）
-            self._load_gacha_accounts_backend(refresh_code)
-        except Exception as exc:
-            logger.exception("[Bridge] HoYo.Gacha 数据库导入失败")
-            self.emit_event("status", title="导入失败", body=str(exc), tone=TONE_DANGER)
-            self.emit_event("toast", message=f"导入失败: {exc}", color="#b04b44")
-
-    def _load_nikki_gacha_backend(self):
-        """从数据库加载无限暖暖抽卡数据并分析。"""
-        try:
-            db = self._get_preference_db()
-            accounts = db.get_gacha_accounts("nikki")
-            if not accounts:
-                self.emit_event("nikki_gacha", overview={}, pools=[])
-                self.emit_event("toast", message="暂无无限暖暖抽卡记录", color="#b66f1f")
-                return
-
-            uid = accounts[0].get("uid", "")
-            db_rows = db.get_gacha_records("nikki", uid)
-            if not db_rows:
-                self.emit_event("nikki_gacha", overview={}, pools=[])
-                return
-
-            from ..gacha.nikki_resonance_analysis import (
-                db_to_nikki_document,
-                build_overview as build_nikki_overview,
-                build_pool_summary as build_nikki_pool_summary,
-                build_pearpal_overview as build_nikki_pearpal_overview,
-                build_pearpal_pool_summary as build_nikki_pearpal_pool_summary,
-            )
-            from ..gacha.nikki_resonance_fetch import GACHA_POOLS as NIKKI_GACHA_POOLS
-
-            document = db_to_nikki_document(db_rows)
-            records_by_pool = document.get("records_by_pool", {})
-            pearpal_by_pool = document.get("pearpal_by_pool", {})
-
-            has_raw = any(bool(rows) for rows in records_by_pool.values())
-            has_pearpal = any(bool(rows) for rows in pearpal_by_pool.values())
-
-            pools = []
-            if has_raw:
-                raw_overview = build_nikki_overview(records_by_pool)
-                overview = {
-                    "total_records": raw_overview.get("total_records", 0),
-                    "total_pulls": raw_overview.get("total_records", 0),
-                    "pool_count": raw_overview.get("pool_count", 0),
-                    "earliest_time": raw_overview.get("earliest_time", ""),
-                    "latest_time": raw_overview.get("latest_time", ""),
-                    "mode": "raw",
-                }
-                for pool_id, pool_name in NIKKI_GACHA_POOLS.items():
-                    rows = records_by_pool.get(pool_id, [])
-                    if not rows:
-                        continue
-                    summary = build_nikki_pool_summary(pool_id, rows)
-                    pools.append({
-                        "pool_id": pool_id,
-                        "pool_name": pool_name,
-                        "total_pulls": summary.get("total_records", 0),
-                        "total_records": summary.get("total_records", 0),
-                        "unique_item_ids": summary.get("unique_item_ids", 0),
-                        "earliest_time": summary.get("earliest_time", ""),
-                        "latest_time": summary.get("latest_time", ""),
-                        "top_items": summary.get("top_items", []),
-                        "mode": "raw",
-                    })
-            elif has_pearpal:
-                pp_overview = build_nikki_pearpal_overview(pearpal_by_pool)
-                overview = {
-                    "total_records": pp_overview.get("total_events", 0),
-                    "total_pulls": pp_overview.get("total_pulls", 0),
-                    "pool_count": pp_overview.get("pool_count", 0),
-                    "four_count": pp_overview.get("four_count", 0),
-                    "five_count": pp_overview.get("five_count", 0),
-                    "earliest_time": "",
-                    "latest_time": "",
-                    "mode": "pearpal",
-                }
-
-                def _aggregate_outfits(five_hist: List[Dict]) -> List[Dict]:
-                    """把 5★ 出货历史按套装聚合：套装名 → 已获得部件（含部位）。
-
-                    PearPal 的五星都是套装部件（outfit_name=套装、item_type_label=部位），
-                    玩家关心的是"集齐了哪个套装的哪几件"，不是一串单件名。
-                    """
-                    groups: Dict[str, Dict[str, Any]] = {}
-                    order: List[str] = []
-                    for r in five_hist:
-                        outfit = (r.get("outfit_name") or "").strip() or "未知套装"
-                        if outfit not in groups:
-                            groups[outfit] = {"outfit_name": outfit, "parts": [], "min_pity": None}
-                            order.append(outfit)
-                        groups[outfit]["parts"].append({
-                            "name": r.get("name") or "",
-                            "part_type": (r.get("part_type") or "").strip(),
-                            "pity": r.get("pity", 0),
-                            "draw_index": r.get("draw_index", 0),
-                        })
-                        p = r.get("pity", 0)
-                        if isinstance(p, int) and p > 0:
-                            cur = groups[outfit]["min_pity"]
-                            groups[outfit]["min_pity"] = p if cur is None else min(cur, p)
-                    return [groups[k] for k in order]
-
-                # 全局套装汇总（跨池）：先收集全部 5★ 再聚合
-                all_five_hist: List[Dict] = []
-                for pool_id, pool_name in NIKKI_GACHA_POOLS.items():
-                    rows = pearpal_by_pool.get(pool_id, [])
-                    if not rows:
-                        continue
-                    summary = build_nikki_pearpal_pool_summary(pool_id, rows)
-                    # 完整 5★ 出货历史（无30条限制；recent_records 只保留30条会漏）
-                    five_star_history = [
-                        {
-                            "name": r.get("display_name_with_type")
-                            or r.get("display_name")
-                            or r.get("item_name")
-                            or ("ID " + str(r.get("item_id", ""))),
-                            "pity": r.get("five_gap", 0),
-                            "draw_index": r.get("draw_index", 0),
-                            "time": "",
-                            "pool_name": pool_name,
-                            # 套装聚合用（PearPal 数据自带套装归属）
-                            "outfit_name": (r.get("outfit_name") or "").strip(),
-                            "part_type": (r.get("item_type_label") or r.get("item_type") or "").strip(),
-                        }
-                        for r in summary.get("five_star_history", [])
-                    ]
-                    all_five_hist.extend(five_star_history)
-                    pools.append({
-                        "pool_id": pool_id,
-                        "pool_name": pool_name,
-                        "total_pulls": summary.get("estimated_total_pulls", 0),
-                        "total_records": summary.get("event_count", 0),
-                        "unique_item_ids": summary.get("unique_item_ids", 0),
-                        "four_count": summary.get("four_count", 0),
-                        "five_count": summary.get("five_count", 0),
-                        "current_four_pity": summary.get("current_four_pity", 0),
-                        "current_five_pity": summary.get("current_five_pity", 0),
-                        "average_four_gap": summary.get("average_four_gap", 0),
-                        "average_five_gap": summary.get("average_five_gap", 0),
-                        "top_items": summary.get("top_items", []),
-                        "high_rarity_history": five_star_history,
-                        "outfit_summary": _aggregate_outfits(five_star_history),
-                        "mode": "pearpal",
-                    })
-                overview["outfit_summary"] = _aggregate_outfits(all_five_hist)
-            else:
-                overview = {}
-
-            self.emit_event("nikki_gacha", overview=overview, pools=pools, uid=uid)
-            logger.info("[Bridge] 暖暖抽卡分析完成: uid=%s pools=%d", uid, len(pools))
-        except Exception as exc:
-            logger.exception("[Bridge] 加载暖暖抽卡失败")
-            self.emit_event("toast", message=f"加载失败: {exc}", color="#b04b44")
-
-    def _load_wuwa_daily_backend(self):
-        """拉取鸣潮库街区每日数据（体力/活跃度/周本/深塔等）供 QML 展示。"""
-        try:
-            from ..services import credential_store
-            from ..clients import wuwa_kujiequ
-
-            profile = credential_store.load_wuwa_kujiequ_profile()
-            if profile is None:
-                self.emit_event(
-                    "wuwa_daily",
-                    ok=False,
-                    message="库街区 Token 或 DID 未配置，请先 ADB 抓取或手动填写",
-                )
-                return
-
-            logger.info("[Bridge] 拉取库街区每日数据: role=%s", profile.role_name)
-            daily = wuwa_kujiequ.fetch_daily_data(profile)
-            try:
-                base = wuwa_kujiequ.fetch_base_data(profile)
-            except Exception as exc:  # 基础数据失败不影响主数据展示
-                logger.warning("[Bridge] 拉取库街区基础数据失败，忽略: %s", exc)
-                base = {}
-
-            def _fmt(detail, label):
-                if not isinstance(detail, dict):
-                    return None
-                cur = detail.get("cur")
-                total = detail.get("total")
-                if cur is None and total is None:
-                    return None
-                return {
-                    "name": detail.get("name") or label,
-                    "cur": cur if cur is not None else 0,
-                    "total": total if total is not None else 0,
-                }
-
-            items = []
-            for key, label in (
-                ("energy", "结晶波片"),
-                ("liveness", "活跃度"),
-                ("weekly", "战歌重奏"),
-                ("weekly_rouge", "千道门扉的异想"),
-                ("store_energy", "结晶单质"),
-                ("tower", "逆境深塔"),
-                ("slash_tower", "冥歌海墟"),
-            ):
-                item = _fmt(daily.get(key), label)
-                if item:
-                    items.append(item)
-
-            payload = {
-                "ok": True,
-                "role_name": daily.get("role_name") or profile.role_name or "",
-                "server_name": daily.get("server_name") or "",
-                "has_signed": bool(daily.get("has_signed")),
-                "sign_text": daily.get("sign_text") or "",
-                "items": items,
-                "active_days": (base or {}).get("active_days", 0),
-                # 官方限制：活跃度需进入游戏后才会刷新，未刷新时为前一日数据
-                "stale_hint": "活跃度需进入游戏后才会更新，未更新时展示前一日数据",
-                "cached_at": time.time(),
-            }
-            self.emit_event("wuwa_daily", **payload)
-            # 仅成功结果落地缓存；失败保留上次好缓存
-            self._save_wuwa_daily_cache(payload)
-        except Exception as exc:
-            logger.exception("[Bridge] 拉取库街区每日数据失败")
-            self.emit_event("wuwa_daily", ok=False, message=str(exc))
-
-    def _load_wuwa_gacha_backend(self):
-        """从数据库加载鸣潮抽卡数据并分析。"""
-        try:
-            db = self._get_preference_db()
-            accounts = db.get_gacha_accounts("wuwa")
-            if not accounts:
-                self.emit_event("wuwa_gacha", overview={}, pools=[])
-                self.emit_event("toast", message="暂无鸣潮抽卡记录", color="#b66f1f")
-                return
-
-            uid = accounts[0].get("uid", "")
-            db_rows = db.get_gacha_records("wuwa", uid)
-            if not db_rows:
-                self.emit_event("wuwa_gacha", overview={}, pools=[])
-                return
-
-            from ..gacha.wuwa_analysis import (
-                db_to_wuwa_records,
-                build_wuwa_overview,
-                build_wuwa_pool_analysis,
-                build_wuwa_five_star_history,
-            )
-            from ..gacha.luck_analysis import build_wuwa_luck
-
-            records = db_to_wuwa_records(db_rows)
-            overview = build_wuwa_overview(records)
-            raw_pools = build_wuwa_pool_analysis(records)
-            history = build_wuwa_five_star_history(records)
-            luck = build_wuwa_luck(records)
-
-            # 转换 pools dict → list
-            pools = []
-            for pool_name, pool_data in raw_pools.items():
-                pools.append({
-                    "pool_name": pool_name,
-                    "total_pulls": pool_data.get("total", 0),
-                    "five_star_count": pool_data.get("five_star_count", 0),
-                    "five_star_rate": pool_data.get("five_star_pct", "0%"),
-                    "high_rarity_history": pool_data.get("five_star_list", []),
-                })
-
-            self.emit_event("wuwa_gacha", overview=overview, pools=pools, history=history, uid=uid, luck=luck)
-            logger.info("[Bridge] 鸣潮抽卡分析完成: uid=%s pools=%d", uid, len(pools))
-        except Exception as exc:
-            logger.exception("[Bridge] 加载鸣潮抽卡失败")
-            self.emit_event("toast", message=f"加载失败: {exc}", color="#b04b44")
-
-    def _import_wuwa_gacha_from_json_backend(self, file_paths_json: str):
-        """从 WutheringWavesTool 的 pool.json 导入抽卡记录到数据库。
-
-        支持多文件合并去重。导入前清空该 uid 的旧 wuwa 记录，避免不同
-        record_id 格式造成重复。
-        """
-        try:
-            # 解析 file_paths_json → list[str]
-            file_paths: List[str] = []
-            if file_paths_json:
-                try:
-                    parsed = json.loads(file_paths_json)
-                    if isinstance(parsed, list):
-                        file_paths = [str(p) for p in parsed if str(p).strip()]
-                    elif isinstance(parsed, str):
-                        file_paths = [parsed] if parsed.strip() else []
-                    else:
-                        file_paths = []
-                except (json.JSONDecodeError, TypeError):
-                    # 当作单路径字符串
-                    file_paths = [file_paths_json] if file_paths_json.strip() else []
-
-            if not file_paths:
-                self.emit_event("toast", message="未选择文件", color="#b04b44")
-                return
-
-            # 检查文件存在性
-            missing = [p for p in file_paths if not os.path.exists(p)]
-            if missing:
-                self.emit_event(
-                    "toast",
-                    message=f"文件不存在: {missing[0]}",
-                    color="#b04b44",
-                )
-                return
-
-            # 从配置取 uid（优先 role_id，没有则用 user_id）
-            from ..settings import manager as cfg_manager
-            cfg = cfg_manager.load()
-            profile = (cfg.get("wuwa_kujiequ") or {}).get("profile") or {}
-            uid = str(profile.get("role_id") or profile.get("user_id") or "")
-            if not uid:
-                self.emit_event(
-                    "toast",
-                    message="未找到鸣潮角色 ID，请先在库街区凭据里登录或 ADB 抓取",
-                    color="#b04b44",
-                )
-                return
-
-            self.emit_event(
-                "toast",
-                message=f"开始解析 {len(file_paths)} 个 pool.json...",
-                color="#295d86",
-            )
-
-            from ..gacha.wuwa_analysis import (
-                load_wuwa_pool_json,
-                wuwa_pool_json_to_db_records,
-            )
-
-            records = load_wuwa_pool_json(file_paths)
-            if not records:
-                self.emit_event(
-                    "toast", message="pool.json 中未找到有效记录", color="#b66f1f"
-                )
-                return
-
-            db_rows = wuwa_pool_json_to_db_records(records, uid)
-
-            db = self._get_preference_db()
-            # 清旧记录，避免业务键 record_id 与旧 xlsx 导入（用 index 后缀）重复
-            deleted = db.delete_gacha_records_by_uid("wuwa", uid)
-            logger.info(
-                "[Bridge] 清空旧 wuwa 抽卡记录: uid=%s 删除 %d 条", uid, deleted,
-            )
-
-            source_paths = "|".join(os.path.basename(p) for p in file_paths)
-            import_id = db.start_gacha_import({
-                "game_code": "wuwa",
-                "uid": uid,
-                "source_path": source_paths,
-                "source_hash": "",
-                "uigf_version": "",
-                "export_app": "WutheringWavesTool",
-                "export_app_version": "",
-                "export_timestamp": "",
-                "lang": "zh-cn",
-                "timezone": "UTC+8",
-                "total_records": len(db_rows),
-                "notes": "pool.json 合并去重导入",
-            })
-            stats = db.upsert_gacha_records("wuwa", uid, import_id, db_rows)
-
-            self.emit_event(
-                "toast",
-                message=(
-                    f"鸣潮抽卡导入完成：共 {stats['total_count']} 条 "
-                    f"(新增 {stats['inserted_count']}, 更新 {stats['updated_count']})"
-                ),
-                color="#2f7d4a",
-            )
-            logger.info(
-                "[Bridge] 鸣潮抽卡导入完成: uid=%s total=%d inserted=%d updated=%d",
-                uid, stats["total_count"], stats["inserted_count"],
-                stats["updated_count"],
-            )
-
-            # 触发加载刷新 UI
-            self._load_wuwa_gacha_backend()
-        except Exception as exc:
-            logger.exception("[Bridge] 鸣潮抽卡 pool.json 导入失败")
-            self.emit_event(
-                "toast",
-                message=f"导入失败: {exc}",
-                color="#b04b44",
-            )
-
-    def _load_endfield_gacha_backend(self, file_path: str):
-        """从文件加载终末地抽卡数据并分析，同时写入数据库。"""
-        try:
-            from ..gacha.endfield_analysis import (
-                load_all_records as load_endfield_records,
-                build_overview as build_endfield_overview,
-                build_six_star_history,
-                build_pool_analysis as build_endfield_pool_analysis,
-                endfield_to_db_records,
-                extract_uid_from_filename,
-            )
-
-            records = load_endfield_records(file_path)
-            if not records:
-                self.emit_event("toast", message="文件中无抽卡记录", color="#b66f1f")
-                return
-
-            # 写入数据库
-            from ..settings.paths import WORKFLOW_DB_PATH
-            db = self._get_preference_db()
-            # 从文件名 `<uid>_<roleId>.json` 提取真实终末地 UID，
-            # 历史遗留的 uid="" 写法会让多账号场景下不同来源的数据无法合并。
-            uid = extract_uid_from_filename(file_path)
-            # 若本次导入有真实 uid，先把 DB 中遗留的旧 uid（含空字符串）迁移到该 uid
-            if uid:
-                self._migrate_endfield_uids_to(db, uid)
-            db_records = endfield_to_db_records(records, uid)
-            import_id = db.start_gacha_import({
-                "game_code": "endfield",
-                "uid": uid,
-                "source_path": file_path,
-                "source_hash": "",
-                "uigf_version": "",
-                "export_app": "",
-                "export_app_version": "",
-                "export_timestamp": "",
-                "lang": "zh-cn",
-                "timezone": "8",
-                "total_records": len(records),
-                "notes": "Endfield 文件导入",
-            })
-            db.upsert_gacha_records("endfield", uid, import_id, db_records)
-            logger.info(
-                "[Bridge] 终末地抽卡数据已写入数据库: uid=%s records=%d 条",
-                uid or "<空>", len(records),
-            )
-
-            overview = build_endfield_overview(records)
-            raw_pools = build_endfield_pool_analysis(records)
-            history = build_six_star_history(records)
-
-            # 转换 pools dict → list
-            pools = []
-            for pool_name, pool_data in raw_pools.items():
-                pools.append({
-                    "pool_name": pool_name,
-                    "total_pulls": pool_data.get("total", 0),
-                    "six_star_count": pool_data.get("six_star_count", 0),
-                    "six_star_rate": f"{pool_data.get('six_star_pct', 0):.1f}%",
-                    "high_rarity_history": pool_data.get("six_star_list", []),
-                })
-
-            self.emit_event("endfield_gacha", overview=overview, pools=pools, history=history)
-            self.emit_event("toast", message=f"导入完成: {len(records)} 条", color="#2f7d4a")
-            logger.info("[Bridge] 终末地抽卡分析完成: records=%d pools=%d", len(records), len(pools))
-        except Exception as exc:
-            logger.exception("[Bridge] 加载终末地抽卡失败")
-            self.emit_event("toast", message=f"分析失败: {exc}", color="#b04b44")
-
-    def _migrate_endfield_uids_to(self, db, uid: str) -> None:
-        """把 DB 里 endfield 所有旧 uid 的记录迁移到本次真实 uid。
-
-        用于：
-        - 文件导入路径（从文件名提取的真实 uid）
-        - token 同步路径（用户填写的真实 uid）
-
-        迁移会把旧 record_id（如 `endfield__<ts>_<seq>`）改写成
-        `endfield_<uid>_<ts>_<seq>`，使后续 upsert 能正确合并去重。
-        """
-        if not uid:
-            return
-        try:
-            accounts = db.get_gacha_accounts("endfield")
-        except Exception:
-            accounts = []
-        for acct in accounts:
-            old_uid = str(acct.get("uid", "") or "")
-            if old_uid == uid:
-                continue
-            try:
-                migrated = db.migrate_gacha_uid(
-                    "endfield",
-                    old_uid=old_uid,
-                    new_uid=uid,
-                    record_id_prefix="endfield_",
-                )
-                if migrated > 0:
-                    logger.info(
-                        "[Bridge] 终末地 uid 迁移: %r → %r (%d rows)",
-                        old_uid, uid, migrated,
-                    )
-            except Exception:
-                logger.exception(
-                    "[Bridge] 终末地 uid 迁移失败: %r → %r", old_uid, uid,
-                )
-
-    def _load_endfield_db_backend(self):
-        """从数据库加载终末地抽卡数据。无数据则不报错，等用户手动导入文件。"""
-        try:
-            db = self._get_preference_db()
-            accounts = db.get_gacha_accounts("endfield")
-            if not accounts:
-                logger.debug("[Bridge] 数据库中无终末地抽卡记录，等待用户导入文件")
-                return
-
-            uid = accounts[0].get("uid", "")
-            db_rows = db.get_gacha_records("endfield", uid)
-            if not db_rows:
-                logger.debug("[Bridge] 数据库中无终末地抽卡记录 (uid=%s)", uid)
-                return
-
-            from ..gacha.endfield_analysis import (
-                db_to_endfield_records,
-                build_overview as build_endfield_overview,
-                build_six_star_history,
-                build_pool_analysis as build_endfield_pool_analysis,
-            )
-
-            records = db_to_endfield_records(db_rows)
-            if not records:
-                logger.debug("[Bridge] 终末地 raw_json 解析失败，跳过")
-                return
-
-            overview = build_endfield_overview(records)
-            raw_pools = build_endfield_pool_analysis(records)
-            history = build_six_star_history(records)
-
-            pools = []
-            for pool_name, pool_data in raw_pools.items():
-                pools.append({
-                    "pool_name": pool_name,
-                    "total_pulls": pool_data.get("total", 0),
-                    "six_star_count": pool_data.get("six_star_count", 0),
-                    "six_star_rate": f"{pool_data.get('six_star_pct', 0):.1f}%",
-                    "high_rarity_history": pool_data.get("six_star_list", []),
-                })
-
-            self.emit_event("endfield_gacha", overview=overview, pools=pools, history=history)
-            logger.info("[Bridge] 终末地抽卡分析完成(DB): records=%d pools=%d", len(records), len(pools))
-        except Exception as exc:
-            logger.exception("[Bridge] 从数据库加载终末地抽卡失败")
-            self.emit_event("toast", message=f"加载失败: {exc}", color="#b04b44")
-
-    def _fetch_endfield_gacha_by_token_backend(self):
-        """用 user 填写的 token 直接拉取终末地抽卡记录并入库。
-
-        流程：app_config.json[endfield_gacha] → clients.endfield_gacha.fetch_gacha_records
-        → gacha.endfield_analysis.load_records_from_dict → DB upsert → emit endfield_gacha。
-
-        凭据安全：token 仅在内存中传递给客户端，日志只输出脱敏长度。
-        """
-        try:
-            from ..settings import manager as cfg_manager
-            from ..clients import endfield_gacha
-            from ..gacha.endfield_analysis import (
-                load_records_from_dict,
-                build_overview as build_endfield_overview,
-                build_six_star_history,
-                build_pool_analysis as build_endfield_pool_analysis,
-                endfield_to_db_records,
-            )
-
-            cfg = cfg_manager.load(force=True)
-            gacha_cfg = cfg.get("endfield_gacha") or {}
-            token = str(gacha_cfg.get("token") or "").strip()
-            uid = str(gacha_cfg.get("uid") or "").strip()
-            provider = str(gacha_cfg.get("provider") or "hypergryph").strip()
-            server_id = str(gacha_cfg.get("server_id") or "1").strip() or "1"
-
-            if not token:
-                self.emit_event(
-                    "toast",
-                    message="终末地抽卡 Token 为空，请先填写",
-                    color="#b04b44",
-                )
-                return
-            if not uid:
-                self.emit_event(
-                    "toast",
-                    message="终末地 UID 为空，请先填写",
-                    color="#b04b44",
-                )
-                return
-
-            logger.info(
-                "[Bridge] 终末地抽卡 token 同步开始: provider=%s uid=%s token_len=%d",
-                provider, uid, len(token),
-            )
-            self.emit_event(
-                "toast",
-                message="正在通过 token 同步终末地抽卡记录...",
-                color="#295d86",
-            )
-
-            api_data = endfield_gacha.fetch_gacha_records(
-                token=token, uid=uid, provider=provider, server_id=server_id,
-            )
-            stats = endfield_gacha.summarize_records(api_data)
-            logger.info(
-                "[Bridge] 终末地 API 抓取完成: char=%d weapon=%d total=%d",
-                stats["character_records"], stats["weapon_records"],
-                stats["total_records"],
-            )
-
-            if stats["total_records"] == 0:
-                self.emit_event(
-                    "toast",
-                    message="未抓到任何抽卡记录（可能 token 过期或无数据）",
-                    color="#b66f1f",
-                )
-                return
-
-            records = load_records_from_dict(api_data)
-            db_records = endfield_to_db_records(records, uid)
-
-            db = self._get_preference_db()
-            # 先把 DB 里 endfield 旧 uid（含历史遗留的 uid=""）迁移到本次的真实 uid，
-            # 这样旧记录的 record_id 也会被改写成 endfield_<uid>_<ts>_<seq> 形式，
-            # 后续 upsert 能与本次新拉取的记录正确合并去重。
-            self._migrate_endfield_uids_to(db, uid)
-            import_id = db.start_gacha_import({
-                "game_code": "endfield",
-                "uid": uid,
-                "source_path": f"token_sync:{provider}",
-                "source_hash": "",
-                "uigf_version": "",
-                "export_app": "endfield-gacha (token sync)",
-                "export_app_version": "",
-                "export_timestamp": "",
-                "lang": "zh-cn",
-                "timezone": "8",
-                "total_records": len(records),
-                "notes": f"Token sync provider={provider} server_id={server_id}",
-            })
-            upsert_stats = db.upsert_gacha_records("endfield", uid, import_id, db_records)
-            logger.info(
-                "[Bridge] 终末地抽卡已写入数据库: uid=%s total=%d inserted=%d updated=%d",
-                uid, upsert_stats["total_count"], upsert_stats["inserted_count"],
-                upsert_stats["updated_count"],
-            )
-
-            overview = build_endfield_overview(records)
-            raw_pools = build_endfield_pool_analysis(records)
-            history = build_six_star_history(records)
-            pools = []
-            for pool_name, pool_data in raw_pools.items():
-                pools.append({
-                    "pool_name": pool_name,
-                    "total_pulls": pool_data.get("total", 0),
-                    "six_star_count": pool_data.get("six_star_count", 0),
-                    "six_star_rate": f"{pool_data.get('six_star_pct', 0):.1f}%",
-                    "high_rarity_history": pool_data.get("six_star_list", []),
-                })
-            self.emit_event("endfield_gacha", overview=overview, pools=pools, history=history)
-            self.emit_event(
-                "toast",
-                message=(
-                    f"终末地抽卡同步完成：共 {stats['total_records']} 条 "
-                    f"(角色 {stats['character_records']} / 武器 {stats['weapon_records']})"
-                ),
-                color="#2f7d4a",
-            )
-        except Exception as exc:
-            # EndfieldGachaError 与其他异常都走这里，避免 NameError（import 失败时
-            # except 子句引用未定义的名字会再次抛错）
-            from ..clients.endfield_gacha import EndfieldGachaError
-            if isinstance(exc, EndfieldGachaError):
-                logger.warning("[Bridge] 终末地抽卡 token 同步失败: %s", exc)
-            else:
-                logger.exception("[Bridge] 终末地抽卡 token 同步异常")
-            self.emit_event(
-                "toast",
-                message=f"同步失败: {exc}",
-                color="#b04b44",
-            )
+    @staticmethod
+    def _extract_task_counts(*args, **kwargs):
+        from .bridge_backends.daily_progress import _extract_task_counts as _impl
+        return _impl(*args, **kwargs)
+
+    def _inject_external_log_progress(self, *args, **kwargs):
+        from .bridge_backends.daily_progress import _inject_external_log_progress as _impl
+        return _impl(self, *args, **kwargs)
+
+    def _ensure_baijing_placeholder(self, *args, **kwargs):
+        from .bridge_backends.daily_progress import _ensure_baijing_placeholder as _impl
+        return _impl(self, *args, **kwargs)
+
+    def _load_gacha_accounts_backend(self, *args, **kwargs):
+        from .bridge_backends.gacha import _load_gacha_accounts_backend as _impl
+        return _impl(self, *args, **kwargs)
+
+    def _load_gacha_analysis_backend(self, *args, **kwargs):
+        from .bridge_backends.gacha import _load_gacha_analysis_backend as _impl
+        return _impl(self, *args, **kwargs)
+
+    def _import_gacha_backend(self, *args, **kwargs):
+        from .bridge_backends.gacha import _import_gacha_backend as _impl
+        return _impl(self, *args, **kwargs)
+
+    def _import_hoyogacha_db_backend(self, *args, **kwargs):
+        from .bridge_backends.gacha import _import_hoyogacha_db_backend as _impl
+        return _impl(self, *args, **kwargs)
+
+    def _load_nikki_gacha_backend(self, *args, **kwargs):
+        from .bridge_backends.gacha import _load_nikki_gacha_backend as _impl
+        return _impl(self, *args, **kwargs)
+
+    def _load_wuwa_daily_backend(self, *args, **kwargs):
+        from .bridge_backends.gacha import _load_wuwa_daily_backend as _impl
+        return _impl(self, *args, **kwargs)
+
+    def _load_wuwa_gacha_backend(self, *args, **kwargs):
+        from .bridge_backends.gacha import _load_wuwa_gacha_backend as _impl
+        return _impl(self, *args, **kwargs)
+
+    def _import_wuwa_gacha_from_json_backend(self, *args, **kwargs):
+        from .bridge_backends.gacha import _import_wuwa_gacha_from_json_backend as _impl
+        return _impl(self, *args, **kwargs)
+
+    def _load_endfield_gacha_backend(self, *args, **kwargs):
+        from .bridge_backends.gacha import _load_endfield_gacha_backend as _impl
+        return _impl(self, *args, **kwargs)
+
+    def _migrate_endfield_uids_to(self, *args, **kwargs):
+        from .bridge_backends.gacha import _migrate_endfield_uids_to as _impl
+        return _impl(self, *args, **kwargs)
+
+    def _load_endfield_db_backend(self, *args, **kwargs):
+        from .bridge_backends.gacha import _load_endfield_db_backend as _impl
+        return _impl(self, *args, **kwargs)
+
+    def _fetch_endfield_gacha_by_token_backend(self, *args, **kwargs):
+        from .bridge_backends.gacha import _fetch_endfield_gacha_by_token_backend as _impl
+        return _impl(self, *args, **kwargs)
 
     # ═══════════════════════════════════════════════════════════════
     #  Credentials backend (app_config.json)
@@ -5322,8 +3889,8 @@ class UiBridge(QObject):
                     item["state"] = state
             self._queue_list_json = json.dumps(items, ensure_ascii=False)
             self.queueListChanged.emit(self._queue_list_json)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[Bridge] 推送队列列表失败: %s", exc)
 
     def _update_gacha_accounts(self, accounts: List[Dict]):
         self._gacha_accounts_json = json.dumps(accounts, ensure_ascii=False)

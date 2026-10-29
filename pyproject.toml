@@ -1,0 +1,22 @@
+# 项目工具配置。
+# 运行时依赖的唯一来源仍是 requirements.txt（以及由环境冻结出的 requirements.lock），
+# 这里不声明 [project].dependencies，避免出现第三份依赖清单。
+# 开发工具安装：uv pip install --python .venv/Scripts/python.exe -r requirements-dev.txt
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# 缓存统一放 data/cache，避免在仓库根目录堆 .pytest_cache 文件夹
+cache_dir = "data/cache/pytest"
+
+[tool.ruff]
+line-length = 140
+target-version = "py310"
+cache-dir = "data/cache/ruff"
+# flet/ 内嵌第三方框架、%TEMP%/ 为参考项目副本、artifacts/ 为本地证据与真机脚本
+exclude = [".venv", "flet", "%TEMP%", "artifacts", "tools/flet", "ui/flet", "ui/flet_app.py", "tests/suite_*.py"]
+
+[tool.ruff.lint]
+# 先只开能兜住 AGENTS.md 硬规则的窄集合：语法错误、未定义名、裸 except。
+# 宽捕获（BLE001）噪音太大，暂不启用；静默 pass 由评审规则约束。
+select = ["E9", "F821", "F822", "F823", "E722"]

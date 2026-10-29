@@ -75,6 +75,7 @@ def _parse_token(raw: str) -> str:
             if content:
                 return str(content)
     except (json.JSONDecodeError, TypeError, AttributeError):
+        # 返回体不是预期 JSON 结构，按原始文本返回
         pass
     return raw
 

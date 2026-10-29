@@ -163,8 +163,8 @@ def _record_failure(logger, step_name: str, message: str, hwnd: int) -> None:
             ocr_results=ocr_results,
             extra={"kind": "genshin_enter_main"},
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[原神启动器] 记录失败诊断异常 %s: %s", step_name, exc)
 
 
 def _claim_welkin(logger, hwnd: int, scales, confidences) -> None:

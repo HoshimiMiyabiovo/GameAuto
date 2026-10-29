@@ -22,10 +22,16 @@ app_config.json.bak*
 # 共享默认流程定义在 flow_configs.example.json，首次运行自动复制。
 flow_configs.json
 
-# Logs and artifacts
+# Runtime data（2026-10-29 起统一在 data/：logs / artifacts / cache / workflow.sqlite3）
+/data/
+# 兼容旧版本残留（迁移脚本执行前的目录）
 logs/
 artifacts/
 *.log
+
+# Test / lint caches（配置已重定向到 data/cache，这里兜底旧版本）
+.pytest_cache/
+.ruff_cache/
 
 # Database
 *.sqlite3

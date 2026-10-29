@@ -42,6 +42,7 @@ class WebLogHandler(logging.Handler):
                 _log_seq_buffer.append(_log_seq)
                 _log_wait.notify_all()
         except Exception:
+            # 日志 handler 自身失败不能再写日志，避免递归
             pass
 
 def get_log_cursor() -> int:
@@ -108,7 +109,7 @@ def _get_log_file_path():
     try:
         from game_auto.settings.manager import get_log_config
         cfg = get_log_config()
-        d = str(cfg.get("dir", "logs"))
+        d = str(cfg.get("dir", "data/logs"))
         f = str(cfg.get("file", "auto_runner.log"))
         from pathlib import Path
         p = Path(d) / f if not Path(d).is_absolute() and not Path(f).is_absolute() else Path(f)

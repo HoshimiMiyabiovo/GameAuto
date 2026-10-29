@@ -4,10 +4,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 import time
 from typing import Dict, Optional
+
+LOGGER = logging.getLogger("GameAutomation.WebUI")
 
 from fastapi import HTTPException, Request
 
@@ -32,8 +35,8 @@ def _load_section() -> dict:
     if isinstance(sec.get("password_hash"), str) and sec["password_hash"].startswith("dpapi:"):
         try:
             sec["password_hash"] = unprotect(sec["password_hash"])
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("[WebUI][Auth] password_hash 解密失败，按未登录处理: %s", exc)
     return sec
 
 def _save_section(sec: dict):
@@ -44,8 +47,8 @@ def _save_section(sec: dict):
         if sec_available():
             try:
                 to_save["password_hash"] = protect(str(to_save["password_hash"]))
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.warning("[WebUI][Auth] password_hash 加密失败，将按明文 hash 落盘: %s", exc)
     cfg[WEBUI_SECTION] = to_save
     cfg_manager.save(cfg)
 
@@ -67,8 +70,8 @@ def ensure_default_account():
         try:
             sec["password_hash"] = protect(ph)
             _save_section(sec)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("[WebUI][Auth] 旧明文 password_hash 加密迁移失败: %s", exc)
 
 def set_account(username: str, password: str):
     username = str(username or "").strip()

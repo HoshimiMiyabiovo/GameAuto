@@ -82,8 +82,8 @@ def _detect_log_date(path: Path) -> Optional[str]:
                 m = re.match(r"^(\d{4}-\d{2}-\d{2}) ", line)
                 if m:
                     return m.group(1)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.debug("[ok-ww] 读取日志日期失败: %s", exc)
     return None
 
 

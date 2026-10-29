@@ -170,8 +170,8 @@ class GenericWorkflowRunner:
                     pt = pyautogui.locateCenterOnScreen(image_path, region=region) if region else pyautogui.locateCenterOnScreen(image_path)
                     if pt:
                         return (pt.x, pt.y)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self.logger.debug("[等待图片] 定位失败 %s: %s", image_path, exc)
             time.sleep(0.4)
         self.logger.warning(f"等待图片超时: {image_path}")
         return None

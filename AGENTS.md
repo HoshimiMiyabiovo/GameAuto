@@ -21,6 +21,7 @@ This file mirrors important repository-level development notes inside the projec
 - Prefer logs at user action boundaries and IO boundaries: start, key step, success summary, failure reason.
 - Do not write full secrets such as cookies or tokens into logs. Use masked account identifiers or short summaries instead.
 - **日志长期保留，不自动删除**：`logs/auto_runner.log` 按天轮转，`log.backup_count=0` 表示永久保留历史文件；禁止把默认值改回正数或新增日志清理逻辑。看门狗 dump 超过 5MB 只归档为带时间戳的副本，不覆盖旧内容。
+- **禁止无说明的 `except Exception: pass`**：预期异常用窄类型并写明原因；非预期异常至少记 `logger.debug`；只有日志/信号基础设施自身失败才允许静默，且必须注释说明（2026-10-28 已清理 123 处）。
 
 ## 凭据 DPAPI 加密（2026-10-25 起含 phone）
 
@@ -854,20 +855,27 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
   「+」按钮位置由「重置」OCR 位置 + 0.1225 倍窗宽偏移推算，不写死坐标。
   `_return_to_task_panel` 返回顺序：已在面板→主界面重开「任务」→ 退出确认框点「确认」→
   页面左上角「返回」按钮（fx<0.2,fy<0.15 区域）→ ESC，最多 5 层。
-- **场景退出登记表已扩到 7 个场景**（`SCENE_RULES`，2026-10-27 失败取证驱动补登记）：
+- **场景退出登记表已扩到 8 个场景**（`SCENE_RULES`，2026-10-27 / 10-29 失败取证驱动补登记）：
   原有 过场遮罩/茶憩摘要/关注特写/休息室 之外，新增 **烙痕详情**（特质提升/烙痕等级；
   10-27 10:18 实锤 +1/确认都点中了、等级提升都出了，只因页面不在登记表里恢复认不出，
   连环拖死茶憩和叶脉联结）、**茶憩房间**（茶憩纪念函/飞镖/棒球 并集——10:22 当帧 OCR
   只认出房间陈设，纪念函没进识别结果；话题名"古典余温"每日轮换不能当特征）、
-  **有猫零售**（有猫精选/精选礼包/有猫推荐；10-26 20:10 当帧流程漂进零售页认不出）。
+  **有猫零售**（有猫精选/精选礼包/有猫推荐；10-26 20:10 当帧流程漂进零售页认不出）、
+  **计划等级提升**（2026-10-29 20:12 取证：叶脉联结「16 计划等级提升」整屏动画，
+  点屏幕中心继续；规则带 `exact_only`——OCR 匹配是双向子串，旧页面的「等级提升」
+  会反向命中「计划等级提升」，必须只允许"候选 ⊆ OCR 文本"）。
+  2026-10-29 20:03 再补：技能同调页签的烙痕详情没有「特质提升/烙痕等级」，特征加
+  「漫巡属性」「烙痕唤醒」（「基础属性」「技能同调」太通用，不用）。
   烙痕详情/有猫零售 = 点左上「返回」即走（共享 `_exit_via_top_left_back`）；
   茶憩房间 = 返回 → 确认框（与休息室同交互），退出后回休息室由下一轮恢复接手；
   烙痕详情返回后的列表页无独占特征，如实报 unknown 交通用兜底。
   照证据补登记的闭环继续有效：`未匹配任何已知场景` 的当帧文字就是候选特征来源。
-  回归 `artifacts/test_baijing_scene_registry_20261026.py`（新增 [4.5] 节 9 项 + 顺序断言 7 条）。
+  回归 `tests/suite_baijing_scene_registry_20261026.py`（[4.5] 节含今日新增 4 项 + 顺序断言 8 条）。
 - **午后茶憩「前往」任务已自动化**（`_handle_tea_break_task`，同日用户 7 张截图实测）：
   点行内「前往」（关键词「午后茶」，OCR 常把"歇"认成"憩"）→「是否前往茶憩?」确定
   (0.62,0.63) → 角色选择页（今日可邀份额）点首个角色 (0.41,0.42) → 茶憩场景喝茶 →
+  （2026-10-29 20:06 补：休息室入口改为 OCR 优先点卡片文字「午后茶憩」，识别不到
+  再退回固定比例 REST_ROOM_TEA_ENTRY；当天固定比例点完没进茶憩，场景/摘要证据规则不变）→
   等待 10s 后再来一杯（共 2 轮）→「茶憩结束」摘要随意点击 → 休息室「返回」→「确认」→
   主界面。喝茶/再来一杯是场景内动态交互（截图未捕捉按钮形态），OCR 轮询文字点击，
   轮询不到只记警告不盲点 3D 场景；话题菜单（选择话题）出现时点第一个话题兜底。
@@ -1230,10 +1238,10 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
   `storage/cache/config_backups/<game>/<file>.<时间>.bak`；同目录临时文件 +
   `os.replace` 原子替换；脚本/游戏进程运行中拒绝写入；未知字段/越界值拒绝。
   JSON 会按 indent=2 重排，但只影响被写的文件。
-- **第二期**：崩铁 March7th `config.yaml`、绝区零 ZZZ OneDragon
-  `config/01/one_dragon/charge_plan.yml` + `team.yml`。YAML 必须用 `ruamel.yaml`
-  保留注释/顺序，**禁止用 PyYAML dump**（会重排 45KB 配置并丢注释）；依赖需同时
-  更新 `requirements.txt` 和 `services/dependency_manager.py`。
+- **第二期（2026-10-29 已完成，见文末「刷本配置第二期」）**：崩铁 March7th
+  `config.yaml`、绝区零 ZZZ OneDragon `config/01/one_dragon/charge_plan.yml`
+  + `config/01/team.yml`。YAML 必须用 `ruamel.yaml` 保留注释/顺序，
+  **禁止用 PyYAML dump**（会重排 45KB 配置并丢注释）。
 - **回归**：`artifacts/test_stamina_configs_20261028.py`（5 个真实配置临时副本读写、
   备份、非法值/未知字段拒绝、运行中拒绝、bridge 槽接线、Main/QML 接线）；
   `StaminaConfigView.qml` 已用 offscreen + stub bridge 实例化验证。
@@ -1272,3 +1280,127 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
   会丢个人开关）。这是拆分换来的代价，别再把个人开关提交回仓库。
 - **回归**：`artifacts/test_flow_config_split_20261028.py`（缺失复制/已有不覆盖/
   加载器回退/GUI 只写本地/example 安全默认/接线）。
+
+## 工程化基线（2026-10-29 起）
+
+- **测试目录**：纯逻辑回归套件统一在 `tests/suite_*.py`（26 个，从 `artifacts/test_*.py`
+  迁入，文件名日期后缀不变；本文旧段里出现的 `artifacts/test_xxx_日期.py` 按此映射到
+  `tests/suite_xxx_日期.py`）。一键执行：
+  `.venv\Scripts\python.exe -m pytest tests -q`（`tests/test_suites.py` 逐个子进程跑，
+  隔离各套件的 monkeypatch；新增套件按 `suite_*.py` 命名即自动纳入）。
+- **artifacts/ 留什么**：截图证据 + 依赖本机日志/游戏配置/真实屏幕的真机脚本
+  （如 wool_claim_logs、wool_flow_fixes、stamina_configs、genshin/starrail_launcher 的
+  app_config 断言）。纯逻辑测试不要再往 artifacts 放。
+- **依赖单一来源**：`requirements.txt` 是唯一人工清单，`services/dependency_manager.py`
+  运行时解析它（import 名例外表 `IMPORT_NAME_BY_PACKAGE`），**不要再硬编码第二份包列表**。
+  新增依赖只改 requirements.txt，然后在本机验证并运行
+  `.venv\Scripts\python.exe tools\refresh_requirements_lock.py` 刷新 `requirements.lock`。
+- **锁文件**：`requirements.lock` 是已验证环境的精确快照（含 `onnxruntime-gpu`，
+  **绝不含 CPU 版 onnxruntime**——会让 RapidOCR 静默降级）。安装必须 `--no-deps` 回放。
+- **安装入口**：统一 `setup_deps.bat`（普通权限；检测到管理员会用 explorer 降权重启）。
+  GUI/CLI 启动**只检查不安装**，缺包提示运行 setup_deps.bat。**禁止**恢复启动时提权
+  pip install（`run_full_dependency_check` 已无 auto_install 参数）。
+- **静态检查**：`pyproject.toml` 配 ruff 窄规则（E9/F821/F822/F823/E722），
+  开发工具在 `requirements-dev.txt`；`pyproject.toml` 不放运行时依赖，避免第三份清单。
+- **Bridge 拆分**：每日进度与抽卡后台逻辑在 `ui/bridge_backends/{daily_progress,gacha}.py`，
+  UiBridge 上保留 `*args` 薄包装；QML 槽签名不变（83 个）。新逻辑不要再往 bridge.py 堆。
+- **run_flow 拆分**：内建动作分发 `_dispatch_step_action`、失败取证
+  `_collect_failure_evidence` 已抽成模块函数；动作清单统一用 `_BUILTIN_ACTIONS`
+  （新增内建动作只改这一处）。
+
+## 刷本配置第二期（YAML：崩铁 March7th / 绝区零 OneDragon，2026-10-29）
+
+- **适配器**：`services/stamina_configs/march7th.py`（`game_key=honkai_sr`）与
+  `zzz_one_dragon.py`（`game_key=zzz`），注册后刷本配置页自动出 7 张卡
+  （第一期 5 个 JSON + 本期 2 个 YAML）。
+- **YAML 读写**：`yaml_adapter.py` 基于 **ruamel.yaml round-trip**，固定
+  `mapping=2 / sequence=2 / offset=0`（这两个脚本是"顶层列表不缩进"风格）。
+  **禁止用 PyYAML dump**——注释会丢、整份文件会重排。实测：charge_plan.yml
+  无改动往返 0 行差异；March7th config.yaml 仅一条折叠 URL 合并为单行。
+- **March7th 字段**（`<March7th 根>/config.yaml`；根目录从
+  `apps.HonkaiStarRail.launcher_options` 中含 March7th 的启动器推导）：
+  power_enable / power_plan_keep / instance_type（5 种副本）/ 每种类型的
+  副本名与连续次数（`depends_on` 只显示选中类型，路径按类型固定，避免
+  "改类型同时改名"写错槽位）/ 自动切队伍与队伍编号 / 历战余响开关与开始星期 /
+  燃料与后备开拓力 / 沉浸器合成上限。**不暴露 `power_plan` 三元组列表**
+  （结构复杂，改坏会中断一条龙计划）。
+- **OneDragon 字段**（`<OD 根>/config/01/one_dragon/charge_plan.yml`；根目录优先取
+  `apps.ZenlessZoneZero._discovery.monitors.*.log_dir` 的父目录，兜底解析
+  ScriptChainer 的 `config/script_chain/*.yml` 的 script_path）：
+  use_coupon / 首个计划的 plan_times / predefined_team_idx（下拉显示
+  `config/01/team.yml` 的编队名）/ auto_battle_config / level / card_num /
+  notorious_hunt_buff_num。**不改 mission/tab/category 与 history_list**。
+- **安全**：写入仍走"运行中拒绝（process_names 含脚本和游戏）→ 备份到
+  `storage/cache/config_backups/<game>/` → 临时文件 + os.replace"；
+  `FieldSpec.options` 非空时 str 值必须命中（`_coerce` 新增校验），
+  未知字段/越界 int 一律 ConfigError。
+- **依赖**：`ruamel.yaml>=0.18` 已进 requirements.txt 与 requirements.lock
+  （import 映射 `ruamel.yaml → ruamel`，dependency_manager 自动识别）。
+- **回归**：`tests/suite_stamina_configs_phase2_20261029.py`（合成 YAML：
+  读写/注释保留/只改目标值/备份/运行中拒绝/非法枚举/越界/空计划/
+  两种根目录解析/往返零差异/注册表）。实机只读验证：March7th 24 字段、
+  OneDragon 7 字段均能从真实配置读出。
+
+## 异环 2026-10-29 两次失败：标题页「进入游戏」没人点
+
+- **现象**：10:24 与 11:48 两次 ok-nte 运行，日常任务逐个恰好 10 分钟超时，
+  报 `主界面检测失败`，异象家具跳过；GameAuto 日志复核改判失败
+  （flow_failures #104）。
+- **根因链**（三件事叠加）：
+  1. 游戏进程已存在且停在标题页——ok-nte 自己的失败截图
+     `ok-nte/.../screenshots/2026-10-29_11-59-31-627_..._daily_anomaly_original.png`
+     画面底部就是「进入游戏」；
+  2. ok-nte 的 LauncherTask 发现 HTGame.exe 已存在就跳过"启动器→进入游戏"
+     流程，直接切窗口识别；
+  3. GameAuto 的 `post_launch_ocr_flow` 在 app_config 里是空串（默认 nte_start），
+     而且即使启用，`_run_nte_ocr_click` 在游戏进程存在时也会直接跳过——
+     三方都不点按钮。
+- **修复（2026-10-29）**：新增 `runtime/nte_launcher.ensure_game_main` +
+  默认配置 `apps.NevernessToEverness.post_launch_ensure_main = "nte"`。
+  `execute_task` 启动 ok-nte 后调用：游戏未运行 → 放行（交给 ok-nte 启动）；
+  找不到「进入游戏」→ 视为已在主界面/加载中，零点击放行；找到 → 点击并等
+  按钮消失；一直不消失 → 提前失败并清理进程（不再白跑 45 分钟）。
+  模板 `模板/异环-进入游戏.png` 在真实标题页帧上峰值 0.9988 @(960,933)，
+  OCR 兜底 0.792 @(960,932)。
+- **回归**：`tests/suite_nte_ensure_main_20261029.py`（未运行放行/标题页点击/
+  按钮不消失失败/已在主界面零点击/停止/点击异常/默认配置/控制器接线/模板存在）。
+- **注意**：`post_launch_ocr_flow` 仍保持本地空值（用户配置），本次兜底不依赖它。
+
+## 运行时数据目录（2026-10-29 起）
+
+- 所有运行时数据统一放 `data/`：
+  - `data/logs/`：auto_runner.log、看门狗 dump；
+  - `data/artifacts/`：失败截图、白荆验证图、本地真机脚本；
+  - `data/cache/`：第三方配置备份、各接口缓存、月度重跑队列；
+  - `data/workflow.sqlite3`：本机偏好与运行数据库（含 WAL 文件）。
+- 根目录只保留源码、资源（`模板/`、`click_sequences/`）、配置与文档。
+- 一次性迁移脚本：`tools/migrate_data_layout_20261029.py`（关闭 GUI/CLI 后运行；
+  会同步把 app_config 的 `log.dir` 改成 `data/logs`，并修正本地 artifacts 脚本的相对路径）。
+- 本文旧段落里出现的 `logs/…`、`artifacts/…`、`storage/cache/…`、根目录
+  `workflow.sqlite3` 一律按新的 `data/` 路径理解。`storage/` 目录现在只放
+  SQLite 访问层代码，不再存缓存。
+
+## WorkBuddy 2026-10-29：验证假失败 + 误关进程
+
+- **现象**：WoolFlow 两次（10:14、20:16）都报 `WORKBUDDY ❌`。20:16 日志显示
+  步骤 1-6 全部命中并点击，步骤 7「确认今日已领取」连续 3 次超时。
+- **根因**：
+  1. 点完「立即领取」后加油站页会关闭（10-27 已知），重新导航的步骤 5/6
+     用模板匹配，`hy4-Buddy加油站菜单.png` 同时命中聊天侧栏的促销卡
+     「做任务赢积分好礼」——失败截图左下角就是这张卡；点它不会打开加油站页，
+     于是验证步找不到「今日已领取」→ **假失败**（领取动作本身大概率已成功）；
+  2. 收尾 `_close_wool_flow` 只认 `close_process_on_finish`，WorkBuddy 即使
+     `close_process_on_fail=false` 仍被强制关闭（它是用户日常聊天软件，
+     本地配置的 finish 还被误设成 true）。
+- **修复**：
+  - 步骤 2/6 改为**纯 OCR** 定位「Buddy加油站」（去掉 template、
+    `enable_ocr_fallback=true`、`on_fail=retry_prev` 回退重点头像）。
+    OCR 实测：菜单行 0.81；侧栏促销卡文本是「连登抽取Buddy周边」，
+    不会命中「Buddy加油站」，不会再点错。
+  - WORKBUDDY / QODER 的 `close_process_on_finish`、`close_process_on_fail`
+    全部 false（本地 + example 同步）。
+  - `_close_wool_flow(logger, flow_key, cfg, ok)`：成功看 finish、失败看 fail。
+- **回归**：`tests/suite_wool_workbuddy_20261029.py`（7 步 OCR 配置、
+  两个软件关闭开关、收尾四种组合）。
+- **待实机确认**：20:16 那次点击「立即领取」后页面关闭，是否真的到账需要
+  下次运行用「今日已领取」验证；若仍失败，先看新截图再改。

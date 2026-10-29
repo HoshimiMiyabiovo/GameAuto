@@ -8,10 +8,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from .base import FieldSpec, JsonConfigAdapter, script_root
+
+LOGGER = logging.getLogger("GameAutomation.StaminaConfig")
 
 # 与体力/刷本直接相关的一条龙任务
 STAMINA_TASKS = ("每日地脉花", "自动地脉花", "自动秘境", "自动幽境危战")
@@ -42,8 +45,8 @@ class BetterGIConfigAdapter(JsonConfigAdapter):
                         break
                 if name and name not in names:
                     names.append(name)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("[刷本配置] 读取 BetterGI BOSS 选项失败，使用内置列表: %s", exc)
         if names:
             return tuple(names)
         return (
@@ -72,8 +75,8 @@ class BetterGIConfigAdapter(JsonConfigAdapter):
 
         try:
             walk(json.loads(path.read_text(encoding="utf-8-sig")))
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("[刷本配置] 读取 BetterGI 秘境选项失败，使用内置列表: %s", exc)
         if names:
             return tuple(sorted(names))
         return ("荒坠的圣迹", "无光的深都", "山风的荆冕")

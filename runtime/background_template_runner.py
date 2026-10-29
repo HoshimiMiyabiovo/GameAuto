@@ -23,14 +23,17 @@ def run_cj_background(
 WOOL_FLOW_KEYS: List[str] = ["MINIMAX", "WORKBUDDY", "TRAE", "QODER"]
 
 
-def _close_wool_flow(logger: logging.Logger, flow_key: str, cfg) -> bool:
-    """薅羊毛子流程收尾：成功失败都关掉对应软件（含子进程），避免残留窗口挡住下一个任务。
+def _close_wool_flow(logger: logging.Logger, flow_key: str, cfg, ok: bool) -> bool:
+    """薅羊毛子流程收尾：按配置关闭对应软件（含子进程），避免残留窗口挡住下一个任务。
 
-    默认关闭；flow_configs.json 里 close_process_on_finish=false 可单独保留不关。
+    成功看 close_process_on_finish、失败看 close_process_on_fail（都默认 True）。
+    2026-10-29 修正：原实现只认 finish 开关，WorkBuddy 配置 fail=false 仍被关掉——
+    它是用户日常聊天软件，必须尊重失败时"保留进程"的配置。
     """
     cfg = cfg or {}
-    if not bool(cfg.get("close_process_on_finish", True)):
-        logger.info("[%s] 配置为不关闭程序，保留进程", flow_key)
+    key = "close_process_on_finish" if ok else "close_process_on_fail"
+    if not bool(cfg.get(key, True)):
+        logger.info("[%s] 配置为不关闭程序，保留进程（%s）", flow_key, "成功" if ok else "失败")
         return False
 
     from .foreground_flow_runner import close_flow_processes
@@ -69,7 +72,7 @@ def run_wool_flow_background(logger: logging.Logger, flow_keys: List[str]) -> Tu
             continue
         ran_any = True
         ok, msg = run_flow(logger, flow_key)
-        closed = _close_wool_flow(logger, flow_key, cfg)
+        _close_wool_flow(logger, flow_key, cfg, ok)
         # 每日进度仅需精简状态，详细 msg 已在日志中，避免卡片文字过长
         messages.append(f"{flow_key} {'✅' if ok else '❌'}")
         if not ok:

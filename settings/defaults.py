@@ -268,6 +268,10 @@ DEFAULT_APPS = {
         "script_process_name": "ok-nte.exe",
         "game": {"process_name": "HTGame.exe"},
         "post_launch_ocr_flow": "nte_start",
+        # ok-nte 的 LauncherTask 只在游戏进程不存在时才走"启动器→进入游戏"；
+        # 游戏被玩家留在标题页时它会直接切窗口识别，导致每个任务 10 分钟超时
+        # （2026-10-29 两次实战）。启动脚本后补一步：看到「进入游戏」就点掉。
+        "post_launch_ensure_main": "nte",
         # 异环冷启动（官方启动器 NTEGame.exe 更新/检查 + HTGame 拉起）实测可达 8 分钟，
         # 大更新 far 不止。launch 只管"没动静"的情况；更新中另有 update 预算
         # （见 _wait_for_game_process_snapshot），更新完继续跑日常，不跳过。

@@ -368,6 +368,7 @@ def import_hoyogacha_db(
             tmp.unlink(missing_ok=True)
             tmp.parent.rmdir()
         except OSError:
+            # 临时目录可能被其他进程占用，忽略清理失败
             pass
 
     if allowed_game_codes is not None:

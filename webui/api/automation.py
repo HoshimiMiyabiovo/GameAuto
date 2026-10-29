@@ -71,8 +71,8 @@ def status(request: Request):
         if br is not None and getattr(br, "_controller", None) is not None:
             if bool(getattr(br._controller, "stop_current_task", False)):
                 stop_req = True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[WebUI] 读取共享控制器停止标志失败: %s", exc)
     etag_base = {
         "running": st.get("running", False),
         "stop_requested": stop_req,
@@ -139,8 +139,8 @@ def run(payload: dict):
             br.emit_event("queue_list", items=q_items)
             br.emit_event("running", value=True)
             br.emit_event("status", title="正在运行", body="WebUI 发起任务", tone="running")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[WebUI] 同步 GUI 运行状态失败: %s", exc)
 
     def _bg():
         try:
@@ -156,8 +156,8 @@ def run(payload: dict):
                         br.emit_event("queue_state", app_key=app_key, state="运行中")
                         br.emit_event("queue_list_update", app_key=app_key, state="运行中")
                         br.emit_event("status", title="正在运行", body=f"正在执行: {disp}", tone="running")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[WebUI] 同步 GUI 队列状态失败: %s", exc)
 
             def on_after(res):
                 ak = getattr(res, "app_key", "") or ""
@@ -173,8 +173,8 @@ def run(payload: dict):
                         q_state = "已完成" if ws_state == "completed" else "失败" if ws_state == "failed" else "待执行" if ws_state == "pending" else "跳过" if ws_state == "skipped" else "已停止"
                         br.emit_event("queue_state", app_key=ak, state=q_state)
                         br.emit_event("queue_list_update", app_key=ak, state=q_state)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[WebUI] 同步 GUI 队列完成状态失败: %s", exc)
 
             hooks = TaskBatchHooks(on_before_app=lambda k, d, s: on_before(k, d, s), on_after_app=lambda r: on_after(r))
             result = run_task_batch(ctrl, target, force_rerun=force, hooks=hooks)
@@ -192,8 +192,8 @@ def run(payload: dict):
                 br = get_active_bridge()
                 if br is not None:
                     br.emit_event("finished", toast=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WebUI] 通知 GUI 任务结束失败: %s", exc)
 
     threading.Thread(target=_bg, daemon=True).start()
     return {"ok": True, "started": [f"{a[0]}:{a[1] or ''}" for a in target]}
@@ -209,8 +209,8 @@ def stop():
         if br is not None and getattr(br, "_controller", None) is not None:
             try:
                 br._controller.stop_current_task = True
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WebUI] 同步 GUI 控制器停止标志失败: %s", exc)
             # 若共享状态仍为 running，也标记为停止
             try:
                 from game_auto.webui.state import update_queue_state
@@ -220,10 +220,10 @@ def stop():
                 cur = st.get("current") or {}
                 if cur.get("app_key"):
                     update_queue_state(cur["app_key"], "stopped", "用户停止")
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as exc:
+                logger.debug("[WebUI] 标记队列停止状态失败: %s", exc)
+    except Exception as exc:
+        logger.debug("[WebUI] 停止 GUI 侧控制器失败: %s", exc)
     logger.info("[WebUI][运行] 收到停止请求")
     return {"ok": True}
 

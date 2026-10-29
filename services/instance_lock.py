@@ -104,8 +104,8 @@ def _release_instance_lock(lock_path: Path) -> None:
             _lock_handle.seek(0)
             try:
                 msvcrt.locking(_lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
-            except OSError:
-                pass
+            except OSError as exc:
+                _logger.debug("[实例锁] 解锁失败（进程退出时会自动释放）: %s", exc)
             _lock_handle.close()
             _lock_handle = None
         existing_pid = _read_existing_pid(lock_path)

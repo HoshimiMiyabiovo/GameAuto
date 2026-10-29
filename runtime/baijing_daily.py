@@ -227,7 +227,13 @@ FOCUS_MODE_REGION = (0.70, 0.0, 1.0, 0.25)       # 「退出关注」在右上�
 # 烙痕详情页：记忆烙痕经验任务的强化画面。10-27 10:18 取证实锤：+1/确认都点中
 # 了（画面出现"等级提升"），但页面不在登记表里 → 恢复认不出 → 连环拖死茶憩/
 # 叶脉联结。特征取详情页独占的页签文字。
-MEMORY_DETAIL_MARKERS = ("特质提升", "烙痕等级")
+# 2026-10-29 20:03 取证帧（强化烙痕·技能同调页签）没有「特质提升/烙痕等级」，
+# 只有页签「基础属性｜漫巡属性｜漫巡技能｜烙痕唤醒｜技能同调」→ 补两个独占页签。
+# 「基础属性」「技能同调」比较通用，不用；「漫巡属性」「烙痕唤醒」只在详情页出现。
+MEMORY_DETAIL_MARKERS = ("特质提升", "烙痕等级", "漫巡属性", "烙痕唤醒")
+# 叶脉联结计划升级的整屏动画：2026-10-29 20:12 取证帧只有「16｜计划等级提升」，
+# 点击屏幕任意位置继续，不处理会一直挡着下面的页面。
+LEVEL_UP_MARKERS = ("计划等级提升",)
 # 茶憩 3D 房间：任务流程用「茶憩纪念函」当进场特征，但 10-27 10:22 的当帧
 # OCR 只认出房间常驻陈设（飞镖/棒球），纪念函没进识别结果——登记表用并集兜底，
 # 任意命中即判茶憩房间（话题名"古典余温"每日轮换，不能当特征）。
@@ -1460,6 +1466,7 @@ def _pick_result(
     frac_region: Optional[Tuple[float, float, float, float]] = None,
     min_conf: float = SCENE_OCR_MIN_CONF,
     exclude=(),
+    exact_only: bool = False,
 ) -> Optional[Dict]:
     """在已取到的 OCR 结果里挑一条命中（规则同 `_ocr_best_match`，但不再截屏）。
 
@@ -1497,7 +1504,10 @@ def _pick_result(
                 if conf > best_exact_conf:
                     best_exact, best_exact_conf = r, conf
                 break
-            if target in tnorm or (tnorm in target and len(tnorm) >= 2):
+            # exact_only：只认「候选文字 ⊆ OCR 文本」，禁止反向包含。
+            # 用于「计划等级提升」这类长特征——普通子串匹配会让旧页面的
+            # 「等级提升」短文字误命中，进而点错屏幕。
+            if target in tnorm or (not exact_only and tnorm in target and len(tnorm) >= 2):
                 if conf > best_sub_conf:
                     best_sub, best_sub_conf = r, conf
                 break
@@ -1511,6 +1521,17 @@ def _scene_exit_overlay(logger: logging.Logger, hwnd, results, stop_check=None) 
         return False
     _pyautogui_click_guarded(*hit["center"])
     logger.info(f"[白荆回廊·日常] 场景退出·过场遮罩：点「点击屏幕继续」@ {hit['center']}")
+    time.sleep(1.2)
+    return True
+
+
+def _scene_exit_level_up(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
+    """计划等级提升整屏动画：点屏幕中心继续（多级连升时恢复循环会再点一次）。"""
+    hit = _pick_result(logger, hwnd, results, LEVEL_UP_MARKERS, min_conf=0.55)
+    if not hit:
+        return False
+    _click_ratio(logger, hwnd, (0.5, 0.5), "计划等级提升（点击继续）")
+    logger.info(f"[白荆回廊·日常] 场景退出·计划等级提升：点击继续（命中 {hit['text']!r}）")
     time.sleep(1.2)
     return True
 
@@ -1625,6 +1646,8 @@ def _scene_exit_cat_retail(logger: logging.Logger, hwnd, results, stop_check=Non
 # 并在 artifacts/test_baijing_scene_registry_20261026.py 补一条用例锁住顺序。
 SCENE_RULES = (
     {"name": "过场遮罩", "markers": ("点击屏幕继续",), "min_conf": 0.5, "exit": _scene_exit_overlay},
+    {"name": "计划等级提升", "markers": LEVEL_UP_MARKERS, "min_conf": 0.55,
+     "exact_only": True, "exit": _scene_exit_level_up},
     {"name": "茶憩摘要", "markers": TEA_SUMMARY_MARKERS, "min_conf": 0.55, "exit": _scene_exit_tea_summary},
     {"name": "关注特写", "markers": FOCUS_MODE_MARKERS, "min_conf": 0.55, "exit": _scene_exit_focus},
     {"name": "休息室", "markers": REST_ROOM_MARKERS, "min_conf": 0.55, "exit": _scene_exit_rest_room},
@@ -1638,7 +1661,9 @@ def _match_scene_rule(logger: logging.Logger, hwnd, results: List[Dict]):
     """按登记表顺序找第一个命中的场景，返回 (规则, 命中项)；都没有返回 (None, None)。"""
     for rule in SCENE_RULES:
         hit = _pick_result(
-            logger, hwnd, results, rule["markers"], min_conf=rule.get("min_conf", SCENE_OCR_MIN_CONF)
+            logger, hwnd, results, rule["markers"],
+            min_conf=rule.get("min_conf", SCENE_OCR_MIN_CONF),
+            exact_only=bool(rule.get("exact_only", False)),
         )
         if hit:
             return rule, hit
@@ -1971,7 +1996,14 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
         # 2026-10-26 12:50 进一步实锤：休息室里要点右下「午后茶憩」立牌卡；
         # 旧实现点左下第一个角色头像，进入的是「关注」特写镜头，茶憩场景永远等不到。
         logger.info("[白荆回廊·日常] 检测到休息室，点击右下「午后茶憩」入口")
-        _click_ratio(logger, hwnd, REST_ROOM_TEA_ENTRY, "休息室「午后茶憩」立牌卡")
+        # OCR 优先点卡片上的「午后茶憩」文字：10-29 20:04 固定比例点击后没进茶憩，
+        # 房间布局随角色/镜头变化时比例会偏；识别不到文字再退回固定比例。
+        entry_hit = _ocr_best_match(logger, ("午后茶憩",), hwnd, min_conf=0.55)
+        if entry_hit:
+            _pyautogui_click_guarded(*entry_hit["center"])
+            logger.info(f"[白荆回廊·日常] 点击休息室「午后茶憩」文字 @ {entry_hit['center']}")
+        else:
+            _click_ratio(logger, hwnd, REST_ROOM_TEA_ENTRY, "休息室「午后茶憩」立牌卡")
         time.sleep(2.0)
         role_page = _wait_page_markers(
             logger, hwnd, TEA_SELECT_MARKERS, timeout=TEA_SELECT_TIMEOUT_SEC, stop_check=stop_check
@@ -2633,8 +2665,8 @@ def _handle_friend_gift_popup(logger: logging.Logger, hwnd, stop_check=None) -> 
             if any(_normalize_text(k) in joined for k in FRIEND_POPUP_FAILURE_TEXTS):
                 failed = True
                 logger.warning("[白荆回廊·日常] 好友赠礼弹窗出现失败提示，赠送可能未成功")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[白荆回廊·日常] 好友赠礼弹窗识别失败: %s", exc)
         if _dismiss_overlay(logger, hwnd):
             popup_seen = True
             time.sleep(0.8)

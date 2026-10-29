@@ -64,6 +64,7 @@ def _stop_log_listener():
         try:
             listener.stop()
         except Exception:
+            # 日志监听器正在退出，不能再写日志，否则可能递归
             pass
 
 
@@ -101,6 +102,7 @@ class AutomationController:
             try:
                 handler.close()
             except Exception:
+                # 日志 handler 自身关闭失败，不能写日志
                 pass
         formatter = logging.Formatter(
             '[%(asctime)s.%(msecs)03d] [%(levelname)-8s] %(name)s:%(funcName)s:%(lineno)d - %(message)s',
@@ -124,6 +126,7 @@ class AutomationController:
             try:
                 _LOG_LISTENER.stop()
             except Exception:
+                # 日志监听器自身停止失败，不能写日志
                 pass
             _LOG_LISTENER = None
         log_queue: "queue.Queue" = queue.Queue(-1)
@@ -426,8 +429,8 @@ class AutomationController:
                                 f"[{app_name}] 游戏正在更新，按更新预算等待"
                                 f"（最长 {update_timeout // 60} 分钟），更新完继续跑")
                             updating_announced = True
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self.logger.debug("[%s] 检查更新状态失败: %s", app_name, exc)
 
             updating = last_update_seen and (now - last_update_seen) <= 180
             limit = update_timeout if updating else timeout
@@ -737,7 +740,7 @@ class AutomationController:
         try:
             self.logger.debug(f"启动特殊程序: {config['launcher']}")
             subprocess.Popen(
-                f'cmd /c start "" "{config['launcher']}"',
+                f'cmd /c start "" "{config["launcher"]}"',
                 shell=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -1136,6 +1139,7 @@ class AutomationController:
                     if "launcher" in fl and fl.endswith(".exe"):
                         candidate_names.add(fl)
             except OSError:
+                # 游戏目录不可读时保留已有候选，跳过目录扫描
                 pass
 
         # 既无候选名又无游戏目录可扫，直接返回避免空转
@@ -1332,6 +1336,26 @@ class AutomationController:
 
             self._click_game_window_after_launch(launch_config, game_display)
 
+            if launch_config.get("post_launch_ensure_main") == "nte":
+                # 2026-10-29 事故：游戏被留在标题页时 ok-nte 不会点「进入游戏」，
+                # 每个任务 10 分钟超时后报"主界面检测失败"。这里提前点掉或诚实失败。
+                from .nte_launcher import ensure_game_main
+
+                self.logger.info(f"[{game_display}] 启动后检查游戏是否停留在「进入游戏」界面...")
+                try:
+                    entered, enter_msg = ensure_game_main(
+                        self.logger, stop_check=lambda: self.stop_current_task
+                    )
+                except Exception as exc:
+                    entered, enter_msg = True, f"检查异常，按原流程继续: {exc}"
+                if not entered:
+                    self.logger.error(f"[{game_display}] {enter_msg}")
+                    self._kill_related_processes(
+                        config, include_script=True, runtime_processes=runtime_processes
+                    )
+                    return False, enter_msg, 0
+                self.logger.info(f"[{game_display}] {enter_msg}")
+
             if launch_config.get("post_launch_ocr_flow") == "nte_start":
                 self.logger.info(f"[{game_display}] 启动后 OCR 点击启动 ok-nte 任务...")
                 run_nte_post_launch_ocr_click(launch_config, self.logger)
@@ -1345,8 +1369,8 @@ class AutomationController:
                 # 兜底清理残留（full_flow 已尽力关闭，这里仅清 script/launcher）
                 try:
                     self._kill_related_processes(config, script_pid, runtime_processes=runtime_processes)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self.logger.warning("[%s] 兜底清理残留进程失败: %s", game_display, exc)
                 if self.stop_current_task:
                     status = "用户终止"
                     self.logger.info(f"\n{'='*40}\n[{game_display}] 任务结束: {status} (脚本: {script_display}, 运行时间: {duration//60}分{duration%60}秒)\n{'='*40}")
