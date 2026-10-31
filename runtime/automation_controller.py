@@ -10,6 +10,7 @@ import pyautogui
 import win32gui
 import win32process
 from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
 from typing import Tuple, Optional, Dict, List
 
 from .foreground_flow_runner import run_flow
@@ -481,6 +482,117 @@ class AutomationController:
                 continue
             self.logger.info(f"{reason}: {proc_name} (PID: {proc.pid})")
             ProcessSupervisor.safe_kill_process(proc.pid)
+
+    def _script_install_roots(self, config: dict, script_choice: Optional[str] = None) -> List[str]:
+        """收集脚本安装目录，用于启动前清掉包装器/子进程残留。"""
+        exes: List[str] = []
+        discovery = config.get("_discovery") if isinstance(config.get("_discovery"), dict) else {}
+        for value in (
+            config.get("script_exe_path"),
+            config.get("launcher"),
+            discovery.get("script_exe_path"),
+            discovery.get("launcher"),
+        ):
+            if value:
+                exes.append(str(value))
+        for option in config.get("launcher_options") or []:
+            if not isinstance(option, dict):
+                continue
+            if script_choice and option.get("name") != script_choice:
+                continue
+            for key in ("launcher", "script_exe_path"):
+                if option.get(key):
+                    exes.append(str(option[key]))
+
+        roots: List[str] = []
+        for exe in exes:
+            path = os.path.abspath(exe)
+            root = path if os.path.isdir(path) else os.path.dirname(path)
+            # 防御：拒绝盘符根/过短路径，避免把整个盘当安装目录清
+            if not root or len(Path(root).parts) < 2:
+                continue
+            if root not in roots:
+                roots.append(root)
+        return roots
+
+    def _kill_processes_under_roots(
+        self,
+        roots: List[str],
+        reason: str,
+        *,
+        skip_pids: Optional[set] = None,
+    ) -> List[int]:
+        """终止可执行文件位于指定安装目录下的进程（含 pythonw 等子进程）。"""
+        if not roots:
+            return []
+        skip_pids = set(skip_pids or ())
+        norm_roots = []
+        for root in roots:
+            try:
+                norm_roots.append(os.path.normcase(os.path.abspath(root)).rstrip("\\") + "\\")
+            except OSError:
+                continue
+        if not norm_roots:
+            return []
+
+        killed: List[int] = []
+        for proc in psutil.process_iter(["pid", "name", "exe"]):
+            try:
+                info = proc.info or {}
+                pid = info.get("pid")
+                exe = str(info.get("exe") or "")
+                if not pid or pid in skip_pids or not exe:
+                    continue
+                norm_exe = os.path.normcase(os.path.abspath(exe))
+                if not any(norm_exe.startswith(root) for root in norm_roots):
+                    continue
+            except (psutil.Error, OSError):
+                continue
+            self.logger.info(f"{reason}: {info.get('name')} (PID: {pid}, {exe})")
+            ProcessSupervisor.safe_kill_process(pid)
+            killed.append(pid)
+            skip_pids.add(pid)
+        return killed
+
+    def _cleanup_stale_script_before_launch(
+        self,
+        config: dict,
+        game_display: str,
+        script_choice: Optional[str] = None,
+    ):
+        """所有脚本任务启动前统一清一次：进程名 + 启动器 + 安装目录内残留。"""
+        skip_pids = {os.getpid()}
+        try:
+            for parent in psutil.Process(os.getpid()).parents():
+                skip_pids.add(parent.pid)
+        except (psutil.Error, OSError):
+            pass
+
+        script_process_name = str(config.get("script_process_name", "") or "").strip()
+        if script_process_name and not self._is_wrapper_process_name(script_process_name):
+            self._kill_processes_by_name(
+                script_process_name,
+                f"终止已有脚本进程: {script_process_name}",
+                exact_name=True,
+                skip_pids=skip_pids,
+            )
+        elif script_process_name:
+            self.logger.warning(
+                f"[{game_display}] 脚本进程 {script_process_name} 为包装器进程，跳过按名清理以免误杀"
+            )
+
+        # 启动器与附加清理清单（cleanup_processes / cleanup_cmd_patterns）
+        self._kill_related_processes(config, None, include_game=False, include_script=False)
+
+        roots = self._script_install_roots(config, script_choice)
+        killed = self._kill_processes_under_roots(
+            roots, f"[{game_display}] 终止脚本安装目录残留进程", skip_pids=skip_pids
+        )
+        self.logger.info(
+            f"[{game_display}] 启动前清理完成: 安装目录 {roots or '无'}，额外终止 {len(killed)} 个进程"
+        )
+        if killed:
+            time.sleep(0.5)
 
     def _run_prelaunch_flow(self, config: dict, game_display: str) -> Tuple[bool, str]:
         flow_key = config.get("prelaunch_flow")
@@ -1257,16 +1369,9 @@ class AutomationController:
                 if raw_game_process:
                     self.logger.warning(f"[{game_display}] 当前 game.process_name 为包装器进程 {raw_game_process}，跳过启动前清理以避免误杀")
 
-            # 终止已有脚本进程（避免 ok-nte 等工具因旧进程残留导致更新失败/无法启动）
-            script_process_name = str(config.get("script_process_name", "") or "").strip()
-            if script_process_name and not self._is_wrapper_process_name(script_process_name):
-                self._kill_processes_by_name(
-                    script_process_name,
-                    f"终止已有脚本进程: {script_process_name}",
-                    exact_name=True,
-                )
-            elif script_process_name:
-                self.logger.warning(f"[{game_display}] 脚本进程 {script_process_name} 为包装器进程，跳过启动前清理以避免误杀")
+            # 终止已有脚本进程与安装目录残留：pyappify 的 pythonw 子进程按名杀不到，
+            # 残留会导致 ok-nte 自更新被“仍在运行”挡住。所有脚本任务启动前统一清理。
+            self._cleanup_stale_script_before_launch(config, game_display, script_choice)
 
             prelaunch_ok, prelaunch_message = self._run_prelaunch_flow(config, game_display)
             if not prelaunch_ok:

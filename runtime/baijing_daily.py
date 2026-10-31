@@ -173,6 +173,9 @@ MEMORY_LIST_CLICK_CANDIDATES = (
 # 详情页「强化烙痕」按钮的 OCR 兜底区域（右下角）。模板失配时用文字确认，
 # OCR 常把「烙痕」认成「熔垣」，两个词都收。
 MEMORY_ENHANCE_BTN_REGION = (0.55, 0.75, 1.00, 1.00)
+# 「指定等级」行：截图上重置中心 (1189,669)/1919x1079 ≈ (0.620,0.620)，
+# OCR 置信度长期只有 0.55（阈值 0.55 边缘），限定区域 + 0.45 阈值降低漏检。
+MEMORY_RESET_REGION = (0.55, 0.58, 0.68, 0.66)
 MEMORY_ENHANCE_TEXTS = ("强化烙痕", "强化熔垣")
 # 「+」按钮相对「重置」的水平偏移（占窗口宽度比例；实测 1425-1190=235px @1919 宽）
 PLUS_BUTTON_DX_RATIO = 0.1225
@@ -234,6 +237,13 @@ MEMORY_DETAIL_MARKERS = ("特质提升", "烙痕等级", "漫巡属性", "烙痕
 # 叶脉联结计划升级的整屏动画：2026-10-29 20:12 取证帧只有「16｜计划等级提升」，
 # 点击屏幕任意位置继续，不处理会一直挡着下面的页面。
 LEVEL_UP_MARKERS = ("计划等级提升",)
+# 烙痕列表页：2026-10-30 10:25 取证（记忆烙痕任务从详情返回后卡在这里）。
+# 独占特征取顶部工具栏；左上「返回」回任务面板。
+MEMORY_LIST_MARKERS = ("前往技能列表", "只看红点", "排序与筛选")
+# 定巡之礼活动弹窗：2026-10-30 10:35 取证（流程漂进活动页认不出）。
+# 没有「返回」，右上角有红色 X；坐标按 1919x1079 截图换算。
+EVENT_DIALOG_MARKERS = ("定巡之礼",)
+EVENT_DIALOG_CLOSE = (0.913, 0.239)
 # 茶憩 3D 房间：任务流程用「茶憩纪念函」当进场特征，但 10-27 10:22 的当帧
 # OCR 只认出房间常驻陈设（飞镖/棒球），纪念函没进识别结果——登记表用并集兜底，
 # 任意命中即判茶憩房间（话题名"古典余温"每日轮换，不能当特征）。
@@ -1397,13 +1407,29 @@ def _on_memory_detail_page(logger: logging.Logger, hwnd) -> bool:
     return False
 
 
-def _find_plus_button(logger: logging.Logger, hwnd) -> Optional[Tuple[int, int]]:
-    """定位强化弹窗里的「+」按钮：由 OCR 到的「重置」位置 + 固定水平偏移推算。
+def _find_plus_button(
+    logger: logging.Logger, hwnd, anchor: Optional[Tuple[int, int]] = None
+) -> Optional[Tuple[int, int]]:
+    """定位强化弹窗里的「+」按钮：由「重置」位置 + 固定水平偏移推算。
 
-    实测布局 [重置][Lv.输入][+][最大]，+ 在重置右侧约 0.1225 倍窗宽处，同行。
-    不写死绝对坐标，随窗口分辨率缩放。
+    2026-10-30 用户截图实测定标（`docs/refs/baijing_memory_enhance_20261030.png`，
+    1919x1079）：「指定等级」行布局 [重置][Lv][+][最大]，重置中心 (1189,669)、
+    最大中心 (1529,670)、+ 中心约 (1424,669)——+ 与重置同行、右移 0.1225 倍窗宽。
+    点完重置后第二次 OCR 可能认不出「重置」（当日 0.56 低置信度），因此调用方
+    传入刚点过的重置坐标（anchor）直接推算，不再依赖第二次 OCR；无 anchor 时才
+    重新 OCR。
     """
-    hit = _ocr_best_match(logger, ("重置",), hwnd, min_conf=0.55)
+    if anchor:
+        region = _window_region(hwnd)
+        if not region:
+            return None
+        cx = int(anchor[0] + PLUS_BUTTON_DX_RATIO * region[2])
+        cy = int(anchor[1])
+        logger.info(f"[白荆回廊·日常] 按「重置」锚点推算「+」按钮 @ ({cx},{cy})")
+        return (cx, cy)
+    hit = _ocr_best_match(
+        logger, ("重置",), hwnd, frac_region=MEMORY_RESET_REGION, min_conf=0.45
+    )
     if not hit:
         return None
     region = _window_region(hwnd)
@@ -1604,8 +1630,24 @@ def _exit_via_top_left_back(logger: logging.Logger, hwnd, results, scene_name: s
 
 
 def _scene_exit_memory_detail(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """烙痕详情页：点「返回」回烙痕列表；列表页没有独占特征，剩余层级交给通用兜底。"""
+    """烙痕详情页：点「返回」回烙痕列表；列表页也有登记，下一轮会继续退回任务面板。"""
     return _exit_via_top_left_back(logger, hwnd, results, "烙痕详情")
+
+
+def _scene_exit_memory_list(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
+    """烙痕列表页：点左上「返回」回任务面板。"""
+    return _exit_via_top_left_back(logger, hwnd, results, "烙痕列表")
+
+
+def _scene_exit_event_dialog(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
+    """定巡之礼等活动弹窗：点右上角 X 关闭（没有「返回」按钮）。"""
+    hit = _pick_result(logger, hwnd, results, EVENT_DIALOG_MARKERS, min_conf=0.55)
+    if not hit:
+        return False
+    _click_ratio(logger, hwnd, EVENT_DIALOG_CLOSE, "定巡之礼右上关闭")
+    logger.info(f"[白荆回廊·日常] 场景退出·定巡之礼：关闭弹窗（命中 {hit['text']!r}）")
+    time.sleep(1.2)
+    return True
 
 
 def _scene_exit_tea_room(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
@@ -1648,10 +1690,12 @@ SCENE_RULES = (
     {"name": "过场遮罩", "markers": ("点击屏幕继续",), "min_conf": 0.5, "exit": _scene_exit_overlay},
     {"name": "计划等级提升", "markers": LEVEL_UP_MARKERS, "min_conf": 0.55,
      "exact_only": True, "exit": _scene_exit_level_up},
+    {"name": "定巡之礼", "markers": EVENT_DIALOG_MARKERS, "min_conf": 0.55, "exit": _scene_exit_event_dialog},
     {"name": "茶憩摘要", "markers": TEA_SUMMARY_MARKERS, "min_conf": 0.55, "exit": _scene_exit_tea_summary},
     {"name": "关注特写", "markers": FOCUS_MODE_MARKERS, "min_conf": 0.55, "exit": _scene_exit_focus},
     {"name": "休息室", "markers": REST_ROOM_MARKERS, "min_conf": 0.55, "exit": _scene_exit_rest_room},
     {"name": "烙痕详情", "markers": MEMORY_DETAIL_MARKERS, "min_conf": 0.55, "exit": _scene_exit_memory_detail},
+    {"name": "烙痕列表", "markers": MEMORY_LIST_MARKERS, "min_conf": 0.55, "exit": _scene_exit_memory_list},
     {"name": "茶憩房间", "markers": TEA_ROOM_REGISTRY_MARKERS, "min_conf": 0.55, "exit": _scene_exit_tea_room},
     {"name": "有猫零售", "markers": CAT_RETAIL_MARKERS, "min_conf": 0.55, "exit": _scene_exit_cat_retail},
 )
@@ -1907,14 +1951,30 @@ def _handle_memory_exp_task(logger: logging.Logger, hwnd, stop_check=None) -> bo
         _return_to_task_panel(logger, hwnd, stop_check=stop_check)
         return False
     # 3) 重置 → +1 → 确认
-    reset = _ocr_best_match(logger, ("重置",), hwnd, min_conf=0.55)
+    reset = _ocr_best_match(
+        logger, ("重置",), hwnd, frac_region=MEMORY_RESET_REGION, min_conf=0.45
+    )
+    reset_anchor = None
     if reset:
+        reset_anchor = (int(reset["center"][0]), int(reset["center"][1]))
         _pyautogui_click_guarded(*reset["center"])
         logger.info(f"[白荆回廊·日常] 点击「重置」@ {reset['center']}")
         time.sleep(0.8)
-    plus_pos = _find_plus_button(logger, hwnd)
+        # 2026-10-30 10:25 实测：点重置后强化弹窗消失（OCR 区域 34→30，
+        # 随后露出烙痕详情）。弹窗不在时绝不能按偏移盲点 +，否则点到详情页。
+        if not _wait_page_markers(
+            logger, hwnd, MEMORY_DIALOG_MARKERS, timeout=2.0, stop_check=stop_check
+        ):
+            logger.warning("[白荆回廊·日常] 重置后强化弹窗消失，停止（不盲点 +）")
+            _record_step_failure(
+                logger, hwnd, "记忆烙痕强化", "重置后强化弹窗消失（重置=%s）" % (reset_anchor,)
+            )
+            _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+            return False
+    plus_pos = _find_plus_button(logger, hwnd, anchor=reset_anchor)
     if not plus_pos:
         logger.warning("[白荆回廊·日常] 未找到「+」按钮")
+        _record_step_failure(logger, hwnd, "记忆烙痕强化", "未找到「+」按钮（重置=%s）" % (reset_anchor,))
         _return_to_task_panel(logger, hwnd, stop_check=stop_check)
         return False
     _pyautogui_click_guarded(plus_pos[0], plus_pos[1])

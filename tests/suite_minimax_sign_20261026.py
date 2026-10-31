@@ -7,7 +7,8 @@
   实测 conf=0.9477（兜底阈值 0.88）→ 假阳性 → 流程报"已签到"但实际没签。
 
 断言：
-  1. 配置：步骤4 目标文案 = 签到得；步骤5 用 ui_text 且不再引用 ui_template
+  1. 配置：步骤4 目标文案包含 签到得（2026-10-31 起为候选列表 + smart 排序）；
+     步骤5 用 ui_text 且不再引用 ui_template
   2. 接口日志有 signin/claim 200 → 判成功
   3. 无日志 + UI OCR 出现「今日已签到」→ 判成功
   4. 无日志 + UI 只有「签到得 ⊙ 400」→ **必须判失败**（防假阳性回归）
@@ -46,7 +47,9 @@ def test_config():
     step4 = by_name.get("点击签到得按钮")
     check("步骤4 存在", step4 is not None, list(by_name))
     if step4:
-        check("步骤4 目标文案 = 签到得", step4.get("target_text") == "签到得", step4.get("target_text"))
+        targets = step4.get("target_text")
+        target_list = targets if isinstance(targets, list) else [targets]
+        check("步骤4 目标文案包含 签到得", "签到得" in target_list, targets)
         check("步骤4 走 OCR 兜底", step4.get("enable_ocr_fallback") is True)
         check("步骤4 仍可选（已签到时跳过）", step4.get("optional_if_missing") is True)
 

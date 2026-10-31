@@ -73,6 +73,7 @@ class FieldSpec:
     options: Tuple[str, ...] = ()
     option_labels: Tuple[str, ...] = ()
     depends_on: Optional[Tuple[str, Tuple[str, ...]]] = None
+    readonly: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -90,6 +91,7 @@ class FieldSpec:
                 {"key": self.depends_on[0], "values": list(self.depends_on[1])}
                 if self.depends_on else None
             ),
+            "readonly": self.readonly,
         }
 
 
@@ -120,6 +122,8 @@ def _set_path(data: Any, path: Tuple[str, ...], value: Any) -> None:
 
 
 def _coerce(spec: FieldSpec, raw: Any) -> Any:
+    if spec.readonly:
+        raise ConfigError(f"{spec.label} 是只读字段，不能修改")
     if spec.kind == "bool":
         if isinstance(raw, bool):
             return raw

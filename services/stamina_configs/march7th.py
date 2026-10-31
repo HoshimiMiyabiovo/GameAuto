@@ -13,11 +13,15 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .base import ConfigError, FieldSpec
 from .yaml_adapter import YamlConfigAdapter
+
+LOGGER = logging.getLogger("GameAutomation.StaminaConfig")
 
 INSTANCE_TYPES: Tuple[str, ...] = ("拟造花萼（金）", "拟造花萼（赤）", "凝滞虚影", "侵蚀隧洞", "饰品提取")
 ECHO_TYPE = "历战余响"
@@ -26,6 +30,68 @@ DAY_LABELS = ("周一", "周二", "周三", "周四", "周五", "周六", "周�
 TEAM_OPTIONS = tuple(str(i) for i in range(1, 11))
 TEAM_LABELS = tuple(f"队伍 {i}" for i in range(1, 11))
 IMMERSIFIER_LIMIT_OPTIONS = tuple(str(i) for i in range(0, 9))
+
+
+def _menu_label(name: str, desc: str) -> str:
+    """下拉显示名：副本名 + 产出/推荐角色，过长截断避免弹层过宽。"""
+    desc = (desc or "").strip()
+    if not desc:
+        return name
+    if len(desc) > 24:
+        desc = f"{desc[:24]}…"
+    return f"{name}（{desc}）"
+
+
+def _name_choices(
+    entries: List[Tuple[str, str]], current: str
+) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """把名单外的当前值补进选项，保证旧配置仍可回显并保存。
+
+    名单文件缺失时返回空选项（退回手填），不能把"当前值"当成唯一合法值。
+    """
+    if not entries:
+        return (), ()
+    names = [name for name, _ in entries]
+    labels = [_menu_label(name, desc) for name, desc in entries]
+    if current and current not in names:
+        names.insert(0, current)
+        labels.insert(0, f"{current}（当前配置）")
+    return tuple(names), tuple(labels)
+
+
+def load_instance_menu(config_path: Optional[Path]) -> Dict[str, List[Tuple[str, str]]]:
+    """读取 March7th 自带的副本名单（assets/config/instance_names.json）。
+
+    返回 {副本类型: [(副本名, 说明), ...]}，顺序与脚本内一致；文件缺失或
+    解析失败返回空表，字段退回手填，避免配置页整体不可用。
+    """
+    if config_path is None:
+        return {}
+    menu_path = Path(config_path).parent / "assets" / "config" / "instance_names.json"
+    try:
+        data = json.loads(menu_path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        LOGGER.debug("[刷本配置] 读取崩铁副本名单失败，副本名改用手填: %s", exc)
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    menu: Dict[str, List[Tuple[str, str]]] = {}
+    for instance, items in data.items():
+        if not isinstance(items, dict):
+            continue
+        entries = [(str(name), str(desc)) for name, desc in items.items()]
+        if entries:
+            menu[str(instance)] = entries
+    return menu
+
+
+def _current_instance_name(data: Dict[str, Any], instance: str) -> str:
+    """读取当前配置里的副本名，用于把名单外的旧值补进下拉。"""
+    node = data.get("config")
+    names = node.get("instance_names") if isinstance(node, dict) else None
+    if not isinstance(names, dict):
+        return ""
+    return str(names.get(instance) or "").strip()
 
 
 def find_march7th_root(app_config: Dict[str, Any]) -> Path:
@@ -72,11 +138,19 @@ class March7thConfigAdapter(YamlConfigAdapter):
                       allow_empty=False, options=INSTANCE_TYPES,
                       help="决定下面哪一组副本名/次数生效"),
         ]
+        menu = load_instance_menu(self._files.get("config"))
+        echo_names, echo_labels = _name_choices(
+            menu.get(ECHO_TYPE) or [], _current_instance_name(data, ECHO_TYPE))
         for instance in INSTANCE_TYPES:
+            entries = menu.get(instance) or []
+            names, labels = _name_choices(entries, _current_instance_name(data, instance))
             fields.append(FieldSpec(
                 f"name:{instance}", f"{instance} 副本名", "str", "config",
                 ("instance_names", instance),
-                help="与脚本内副本名一致；「无」表示不刷该类型",
+                help=("下拉选择；「无」表示不刷该类型" if entries
+                      else "与脚本内副本名一致；「无」表示不刷该类型"),
+                options=names,
+                option_labels=labels,
                 depends_on=("instance_type", (instance,)),
             ))
             fields.append(FieldSpec(
@@ -100,7 +174,10 @@ class March7thConfigAdapter(YamlConfigAdapter):
                       options=DAY_OPTIONS, option_labels=DAY_LABELS,
                       help="该天起的一周内执行历战余响"),
             FieldSpec(f"name:{ECHO_TYPE}", "历战余响副本名", "str", "config",
-                      ("instance_names", ECHO_TYPE)),
+                      ("instance_names", ECHO_TYPE),
+                      help=("下拉选择；「无」表示不刷该类型"
+                            if echo_names else "与脚本内副本名一致；「无」表示不刷该类型"),
+                      options=echo_names, option_labels=echo_labels),
             FieldSpec(f"count:{ECHO_TYPE}", "历战余响次数", "int", "config",
                       ("instance_names_challenge_count", ECHO_TYPE), min_value=0, max_value=99),
             FieldSpec("use_fuel", "使用燃料", "bool", "config", ("use_fuel",),

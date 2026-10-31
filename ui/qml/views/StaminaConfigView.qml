@@ -100,7 +100,7 @@ Item {
                     color: "#2c241d"
                 }
                 HusText {
-                    text: "第一期：原神 / 鸣潮 / 终末地 / 异环 / 暖暖。只改白名单字段，保存前自动备份；脚本或游戏运行中禁止写入。脚本自己的 UI 改了配置后请点「刷新」同步；保存只提交本页改过的字段。"
+                    text: "第一期：原神 / 鸣潮 / 终末地 / 异环 / 暖暖；第二期：崩铁 / 绝区零。只改白名单字段，保存前自动备份；脚本或游戏运行中禁止写入。绝区零 OneDragon 不支持多账户，固定使用 config/01。脚本自己的 UI 改了配置后请点「刷新」同步；保存只提交本页改过的字段。"
                     font.pixelSize: Math.round(12 * root.fs)
                     color: "#6d6257"
                     wrapMode: Text.Wrap
@@ -202,6 +202,7 @@ Item {
                                         allowEmpty: f.allow_empty !== false,
                                         valueText: (v === null || v === undefined) ? "" : String(v),
                                         boolValue: boolValue,
+                                        readonly: !!f.readonly,
                                         dirty: false
                                     })
                                 }
@@ -220,7 +221,7 @@ Item {
 
                             HusText {
                                 visible: gameCard.locked
-                                text: "脚本/游戏正在运行，暂不允许修改；先结束运行再保存。"
+                                text: "脚本/游戏正在运行，暂不允许修改。已经全部关闭的话，点右上角「刷新」重新检测；仍锁着说明有相关进程没退出。"
                                 color: "#b66f1f"
                                 font.pixelSize: Math.round(12 * root.fs)
                                 wrapMode: Text.Wrap
@@ -346,9 +347,18 @@ Item {
                                                 Layout.fillWidth: true
                                             }
 
+                                            HusText {
+                                                visible: model.readonly === true
+                                                text: model.valueText || "（无）"
+                                                font.pixelSize: Math.round(12 * root.fs)
+                                                color: "#2c241d"
+                                                wrapMode: Text.Wrap
+                                                Layout.fillWidth: true
+                                            }
+
                                             HusSelect {
                                                 id: fieldSelect
-                                                visible: model.kind !== "list" && fieldCell.fieldOptions.length > 0
+                                                visible: !model.readonly && model.kind !== "list" && fieldCell.fieldOptions.length > 0
                                                 Layout.fillWidth: true
                                                 enabled: !gameCard.locked
                                                 clearEnabled: false
@@ -405,7 +415,8 @@ Item {
                                             }
 
                                             HusInput {
-                                                visible: model.kind === "list" || fieldCell.fieldOptions.length === 0
+                                                visible: !model.readonly
+                                                         && (model.kind === "list" || fieldCell.fieldOptions.length === 0)
                                                 Layout.fillWidth: true
                                                 enabled: !gameCard.locked
                                                 placeholderText: model.kind === "int"

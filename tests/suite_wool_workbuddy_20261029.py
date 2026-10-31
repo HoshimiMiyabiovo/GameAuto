@@ -56,11 +56,14 @@ def test_config():
             check(f"{name} {label} OCR 定位 Buddy加油站", s.get("target_text") == "Buddy加油站")
             check(f"{name} {label} 启用 OCR", s.get("enable_ocr_fallback") is True)
             check(f"{name} {label} 失败回退上一步", s.get("on_fail") == "retry_prev")
-        check(f"{name} WORKBUDDY 成功后不关程序", wb.get("close_process_on_finish") is False)
-        check(f"{name} WORKBUDDY 失败后不关程序", wb.get("close_process_on_fail") is False)
         qoder = cfg.get("QODER") or {}
-        check(f"{name} QODER 成功后不关程序", qoder.get("close_process_on_finish") is False)
-        check(f"{name} QODER 失败后不关程序", qoder.get("close_process_on_fail") is False)
+        if name.endswith("example.json"):
+            # 共享示例保持安全默认；本地配置由用户自己勾选，不强制
+            check(f"{name} WORKBUDDY 默认不关", wb.get("close_process_on_finish") is False)
+            check(f"{name} QODER 默认不关", qoder.get("close_process_on_finish") is False)
+        else:
+            check(f"{name} WORKBUDDY 关闭开关为布尔", isinstance(wb.get("close_process_on_finish"), bool))
+            check(f"{name} QODER 关闭开关为布尔", isinstance(qoder.get("close_process_on_finish"), bool))
 
 
 def test_close_logic():
@@ -70,25 +73,34 @@ def test_close_logic():
     orig = ffr.close_flow_processes
     ffr.close_flow_processes = lambda logger, key, process_names=None: calls.append(key)
     try:
-        cfg_wb = {"window_process_names": ["WorkBuddy.exe"], "close_process_on_finish": False, "close_process_on_fail": False}
-        btr._close_wool_flow(logger, "WORKBUDDY", cfg_wb, True)
-        btr._close_wool_flow(logger, "WORKBUDDY", cfg_wb, False)
-        check("WorkBuddy 成功/失败都保留", calls == [], calls)
+        cfg_wb_keep = {"window_process_names": ["WorkBuddy.exe"], "close_process_on_finish": False, "close_process_on_fail": False}
+        btr._close_wool_flow(logger, "WORKBUDDY", cfg_wb_keep, True)
+        btr._close_wool_flow(logger, "WORKBUDDY", cfg_wb_keep, False)
+        check("WorkBuddy 配置保留时不关", calls == [], calls)
+        cfg_wb_close = {"window_process_names": ["WorkBuddy.exe"], "close_process_on_finish": True, "close_process_on_fail": False}
+        btr._close_wool_flow(logger, "WORKBUDDY", cfg_wb_close, True)
+        check("WorkBuddy 用户勾选关闭时执行关闭", calls == ["WORKBUDDY"], calls)
+        calls.clear()
 
         cfg_mm = {"window_process_names": ["MiniMax.exe"], "close_process_on_finish": True, "close_process_on_fail": True}
         btr._close_wool_flow(logger, "MINIMAX", cfg_mm, True)
         btr._close_wool_flow(logger, "MINIMAX", cfg_mm, False)
         check("MiniMax 成功/失败都关闭", calls == ["MINIMAX", "MINIMAX"], calls)
+        calls.clear()
 
         cfg_q = {"window_process_names": ["Qoder.exe"], "close_process_on_finish": False, "close_process_on_fail": False}
         btr._close_wool_flow(logger, "QODER", cfg_q, True)
-        check("Qoder 成功保留", calls == ["MINIMAX", "MINIMAX"], calls)
+        check("Qoder 配置保留时不关", calls == [], calls)
+        cfg_q_close = {"window_process_names": ["Qoder.exe"], "close_process_on_finish": True, "close_process_on_fail": False}
+        btr._close_wool_flow(logger, "QODER", cfg_q_close, True)
+        check("Qoder 用户勾选关闭时执行关闭", calls == ["QODER"], calls)
+        calls.clear()
 
         cfg_only_fail = {"window_process_names": ["X.exe"], "close_process_on_finish": True, "close_process_on_fail": False}
         btr._close_wool_flow(logger, "X", cfg_only_fail, False)
-        check("失败且 fail=false 不关闭", calls == ["MINIMAX", "MINIMAX"], calls)
+        check("失败且 fail=false 不关闭", calls == [], calls)
         btr._close_wool_flow(logger, "X", cfg_only_fail, True)
-        check("成功且 finish=true 关闭", calls[-1] == "X", calls)
+        check("成功且 finish=true 关闭", calls == ["X"], calls)
     finally:
         ffr.close_flow_processes = orig
 
@@ -98,6 +110,12 @@ def main():
     test_close_logic()
     src = (PROJECT_ROOT / "runtime" / "background_template_runner.py").read_text(encoding="utf-8")
     check("调用方把 ok 传给收尾", "_close_wool_flow(logger, flow_key, cfg, ok)" in src)
+    runner_src = (PROJECT_ROOT / "runtime" / "foreground_flow_runner.py").read_text(encoding="utf-8")
+    check("run_flow 不再硬拦截关闭开关", "PROTECTED_CLOSE_FLOWS" not in runner_src)
+    bridge_src = (PROJECT_ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    check("GUI 允许用户勾选关闭", "拒绝开启受保护软件的自动关闭" not in bridge_src)
+    qml = (PROJECT_ROOT / "ui" / "qml" / "views" / "WoolView.qml").read_text(encoding="utf-8")
+    check("QML 开关可用", "受保护（不自动关闭）" not in qml and "saveWoolFlowCloseOnFinish" in qml)
     print("-" * 60)
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} -> {FAILURES}")

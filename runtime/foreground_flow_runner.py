@@ -815,11 +815,19 @@ def _ocr_locate_in_window(
     target_text: Any,
     min_confidence: float = 0.5,
     search_region: Optional[Tuple[int, int, int, int]] = None,
+    exclude_texts: Optional[List[str]] = None,
+    match_mode: Optional[str] = None,
+    anchor: Any = None,
+    near: Optional[Dict] = None,
+    ambiguous_action: str = "warn",
+    debug_tag: Optional[str] = None,
+    save_debug: bool = False,
 ) -> Optional[Tuple[int, int]]:
     """
     使用OCR在窗口中定位目标文字（备选方案）。
     返回窗口局部坐标或None。
     search_region: 屏幕坐标的局部搜索区域 (left, top, width, height)，限制OCR搜索范围
+    match_mode / anchor / near: 结构化匹配配置（精确>前缀>子串 + 锚点几何）
     """
     if not HAS_OCR:
         return None
@@ -839,6 +847,13 @@ def _ocr_locate_in_window(
                 hwnd=None,
                 region=search_region,
                 min_confidence=min_confidence,
+                exclude_texts=exclude_texts,
+                match_mode=match_mode or "legacy",
+                anchor=anchor,
+                near=near,
+                ambiguous_action=ambiguous_action,
+                debug_tag=debug_tag,
+                save_debug=save_debug,
             )
         else:
             result = ocr_find_any_text(
@@ -846,6 +861,13 @@ def _ocr_locate_in_window(
                 logger=logger,
                 hwnd=hwnd,
                 min_confidence=min_confidence,
+                exclude_texts=exclude_texts,
+                match_mode=match_mode or "legacy",
+                anchor=anchor,
+                near=near,
+                ambiguous_action=ambiguous_action,
+                debug_tag=debug_tag,
+                save_debug=save_debug,
             )
         if not result:
             return None
@@ -874,11 +896,19 @@ def _locate_with_ocr_fallback(
     confidences,
     enable_ocr: bool = True,
     local_region: Optional[Tuple[int, int, int, int]] = None,
+    exclude_texts: Optional[List[str]] = None,
+    match_mode: Optional[str] = None,
+    anchor: Any = None,
+    near: Optional[Dict] = None,
+    ambiguous_action: str = "warn",
+    debug_tag: Optional[str] = None,
+    save_debug: bool = False,
 ) -> Tuple[Optional[Tuple[int, int]], str]:
     """
     模板匹配+OCR联合定位。
     返回：(窗口局部坐标, 方法: "template" | "ocr" | None)
     local_region: 屏幕坐标的局部搜索区域，限制OCR搜索范围防止页面其他内容干扰
+    match_mode / anchor / near: 结构化匹配配置（精确>前缀>子串 + 锚点几何）
     """
     target_candidates = _resolve_target_text_candidates(template_path, target_text)
     target_label = _display_target_text(target_candidates, os.path.basename(template_path or ""))
@@ -889,7 +919,19 @@ def _locate_with_ocr_fallback(
         return center, "template"
 
     if enable_ocr and target_candidates:
-        center = _ocr_locate_in_window(logger, hwnd, target_candidates, search_region=local_region)
+        center = _ocr_locate_in_window(
+            logger,
+            hwnd,
+            target_candidates,
+            search_region=local_region,
+            exclude_texts=exclude_texts,
+            match_mode=match_mode,
+            anchor=anchor,
+            near=near,
+            ambiguous_action=ambiguous_action,
+            debug_tag=debug_tag,
+            save_debug=save_debug,
+        )
         if center:
             logger.info(f"[{target_label}] OCR匹配成功 @ {center}")
             return center, "ocr"
@@ -1659,6 +1701,8 @@ def _collect_failure_evidence(
                 "step_action": action,
                 "target_texts": target_texts if step_enable_ocr else [],
                 "template": template or "",
+                "ocr_match_mode": str(step.get("ocr_match_mode") or ""),
+                "ocr_anchor": step.get("ocr_anchor"),
                 "max_attempts": max_attempts,
                 "kind": "flow_step",
             },
@@ -1793,6 +1837,10 @@ def run_flow(
 
     scales = cfg.get("match_scales", [1.0, 1.25, 0.8])
     confidences = cfg.get("match_confidences", [0.9, 0.85, 0.8])
+    # 流程级 OCR 匹配策略：默认 legacy（旧行为）；smart 按 精确>前缀>子串 排序。
+    # 步骤级 ocr_match_mode 可覆盖。anchor/near 见 ocr_click_tester.ocr_find_any_text。
+    flow_ocr_match_mode = str(cfg.get("ocr_match_mode", "") or "").strip().lower()
+    flow_ocr_debug = bool(cfg.get("ocr_debug_snapshot", False))
     steps = cfg.get("steps", [])
     if not steps:
         if close_on_exit:
@@ -1816,6 +1864,16 @@ def run_flow(
             template = step.get("template", "")
             process_name = step.get("process_name", "")
             target_texts = _resolve_target_text_candidates(template, step.get("target_text", name), fallback_text=name)
+            step_exclude_texts = _normalize_target_text_candidates(step.get("ocr_exclude_texts"))
+            step_ocr_match_mode = step.get("ocr_match_mode", step.get("match_mode"))
+            if step_ocr_match_mode is None:
+                step_ocr_match_mode = flow_ocr_match_mode
+            step_ocr_match_mode = str(step_ocr_match_mode or "").strip().lower()
+            step_ocr_anchor = step.get("ocr_anchor", step.get("anchor"))
+            step_ocr_near = step.get("ocr_near", step.get("near"))
+            step_ocr_ambiguous = str(step.get("ocr_ambiguous", "warn") or "warn").strip().lower()
+            step_ocr_debug = bool(step.get("ocr_debug_snapshot", flow_ocr_debug))
+            step_ocr_debug_tag = f"{flow_key}_s{step_no}_{name}"
             target_text = target_texts[0] if target_texts else str(name)
             target_label = _display_target_text(target_texts, target_text)
             step_enable_ocr = bool(step.get("enable_ocr_fallback", enable_ocr or _template_has_ocr_memory(template)))
@@ -1848,10 +1906,18 @@ def run_flow(
 
             local_region = step_local_region.get(i)
 
+            ocr_strategy_note = ""
+            if step_ocr_match_mode and step_ocr_match_mode != "legacy":
+                ocr_strategy_note += f" [OCR模式: {step_ocr_match_mode}]"
+            if step_ocr_anchor:
+                ocr_strategy_note += " [锚点已配置]"
+            if step_ocr_near:
+                ocr_strategy_note += " [几何约束已配置]"
             logger.info(
                 f"[{flow_key}] 步骤{step_no}: {name} ({action}) [目标文字: \"{target_label}\"] "
                 f"[当前尝试: {step_attempts.get(i, 0) + 1}] "
                 f"[搜索范围: {search_scope}] [OCR备选: {'启用' if step_enable_ocr else '禁用'}]"
+                f"{ocr_strategy_note}"
             )
 
             end = time.time() + timeout_sec
@@ -1922,6 +1988,13 @@ def run_flow(
                                 hwnd=None,
                                 target_text=target_texts,
                                 search_region=screen_region,
+                                exclude_texts=step_exclude_texts,
+                                match_mode=step_ocr_match_mode,
+                                anchor=step_ocr_anchor,
+                                near=step_ocr_near,
+                                ambiguous_action=step_ocr_ambiguous,
+                                debug_tag=step_ocr_debug_tag,
+                                save_debug=step_ocr_debug,
                             )
                             if center:
                                 logger.info(f"[{target_label}] 全屏OCR匹配成功 @ {center}")
@@ -1936,6 +2009,13 @@ def run_flow(
                             confidences=confidences,
                             enable_ocr=step_enable_ocr,
                             local_region=local_region,
+                            exclude_texts=step_exclude_texts,
+                            match_mode=step_ocr_match_mode,
+                            anchor=step_ocr_anchor,
+                            near=step_ocr_near,
+                            ambiguous_action=step_ocr_ambiguous,
+                            debug_tag=step_ocr_debug_tag,
+                            save_debug=step_ocr_debug,
                         )
                     if center:
                         break

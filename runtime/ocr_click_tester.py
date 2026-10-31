@@ -1,17 +1,18 @@
 import os
 import re
 import time
+import math
 import ctypes
 import ctypes.wintypes
 import logging
 import shutil
 import sqlite3
-from typing import Optional, Tuple, List, Dict
+from typing import Any, Optional, Tuple, List, Dict
 import threading
 
 import pyautogui
 import win32gui
-from PIL import ImageOps, ImageEnhance, ImageDraw, Image
+from PIL import ImageOps, ImageEnhance, ImageDraw, Image, ImageFont
 import numpy as np
 from ..settings.paths import OCR_DEBUG_DIR, TEMPLATES_DIR, TESSDATA_DIR, TESSERACT_EXE, WORKFLOW_DB_PATH as PROJECT_WORKFLOW_DB_PATH
 
@@ -272,6 +273,471 @@ def _ensure_tesseract_cmd(logger: logging.Logger) -> bool:
 
 def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", "", text or "").lower()
+
+
+# ── OCR 结构化匹配（2026-10-31）──────────────────────────────────────────────
+# 旧实现是「目标按配置顺序、结果按 OCR 顺序，先命中先返回」的子串匹配：
+# MiniMax「签到得」会先撞上卡片宣传语「连续签到得更多积分」，点进文案中间，
+# 真正的按钮从未被点到。堆排除词治标不治本，这里把「选哪个框」拆成三层：
+#   匹配等级（精确 > 前缀 > 子串 > OCR 漏字反向）→ 锚点几何 → 置信度。
+# exclude_texts 仍保留，但只作为最后兜底，不再承担主要识别逻辑。
+_MATCH_TIER_EXACT = 4
+_MATCH_TIER_PREFIX = 3
+_MATCH_TIER_SUBSTRING = 2
+_MATCH_TIER_REVERSE = 1
+_MATCH_TIER_LABELS = {
+    _MATCH_TIER_EXACT: "exact",
+    _MATCH_TIER_PREFIX: "prefix",
+    _MATCH_TIER_SUBSTRING: "substring",
+    _MATCH_TIER_REVERSE: "reverse",
+}
+_MATCH_MODES = ("legacy", "smart", "exact", "prefix", "substring")
+_OCR_DEBUG_ENV = "GAMEAUTO_OCR_DEBUG"
+_DEBUG_SAVE_INTERVAL_SEC = 5.0
+_last_debug_save: Dict[str, float] = {}
+_near_without_anchor_warned = set()
+
+
+def _normalize_match_mode(mode: Any) -> str:
+    value = str(mode or "").strip().lower()
+    return value if value in _MATCH_MODES else "legacy"
+
+
+def _ocr_match_tier(text_norm: str, target_norm: str, mode: str = "smart") -> int:
+    """返回文本与目标文字的匹配等级；0 表示不匹配。等级越大越可信。"""
+    if not text_norm or not target_norm:
+        return 0
+    if text_norm == target_norm:
+        return _MATCH_TIER_EXACT
+    if mode == "exact":
+        return 0
+    if text_norm.startswith(target_norm):
+        return _MATCH_TIER_PREFIX
+    if mode == "prefix":
+        return 0
+    if target_norm in text_norm:
+        return _MATCH_TIER_SUBSTRING
+    if mode == "substring":
+        return 0
+    # 反向匹配：OCR 漏字时（target=进入脱机, OCR=脱机）仍可命中。
+    # 放在最低等级，避免它抢走真正包含目标词的候选。
+    if text_norm in target_norm and len(text_norm) >= max(2, len(target_norm) // 2):
+        return _MATCH_TIER_REVERSE
+    return 0
+
+
+def _normalize_anchor(anchor: Any) -> Tuple[List[str], bool]:
+    """解析 ocr_anchor：支持字符串 / 列表 / {"text(s)": [...], "required": bool}。"""
+    required = False
+    raw = anchor
+    if isinstance(anchor, dict):
+        required = bool(anchor.get("required", False))
+        raw = anchor.get("texts")
+        if not raw:
+            raw = anchor.get("text")
+    values = raw if isinstance(raw, (list, tuple, set)) else [raw]
+    texts: List[str] = []
+    seen = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        texts.append(text)
+    return texts, required
+
+
+def _normalize_near(near: Any) -> Dict[str, Any]:
+    """解析 ocr_near 几何约束：direction / max_distance / max_dx / min_dy。"""
+    if not isinstance(near, dict):
+        return {}
+    direction = str(near.get("direction") or "near").strip().lower()
+    if direction not in ("near", "below", "above"):
+        direction = "near"
+    config: Dict[str, Any] = {"direction": direction}
+    for key in ("max_distance", "max_dx", "min_dy"):
+        value = near.get(key)
+        if isinstance(value, (int, float)) and float(value) > 0:
+            config[key] = float(value)
+    return config
+
+
+def _result_center(result: Dict) -> Optional[Tuple[float, float]]:
+    center = result.get("center")
+    if center is not None:
+        try:
+            return float(center[0]), float(center[1])
+        except (TypeError, ValueError, IndexError):
+            pass
+    box = result.get("box")
+    if box is not None and len(box) >= 4:
+        try:
+            return (float(box[0]) + float(box[2])) / 2.0, (float(box[1]) + float(box[3])) / 2.0
+        except (TypeError, ValueError, IndexError):
+            return None
+    return None
+
+
+def _center_distance(a: Dict, b: Dict) -> Optional[float]:
+    ca, cb = _result_center(a), _result_center(b)
+    if ca is None or cb is None:
+        return None
+    return math.hypot(ca[0] - cb[0], ca[1] - cb[1])
+
+
+def _pick_anchor_item(items: List[Dict], anchor_norms: List[str]) -> Optional[Dict]:
+    """在可用结果里选锚点：匹配等级优先，其次置信度，再次锚点配置顺序。"""
+    best = None
+    best_key = None
+    for item in items:
+        # 锚点可以同时是「被排除的候选」：MiniMax 的锚点「连续签到」正好出现在
+        # 宣传语「连续签到得更多积分」里，排除词要挡住它被点击，但不能挡住它
+        # 当几何参考，否则锚点永远找不到、几何过滤形同虚设。
+        if item.get("status") not in ("filtered", "excluded"):
+            continue
+        for order, anchor_norm in enumerate(anchor_norms):
+            tier = _ocr_match_tier(item["text_norm"], anchor_norm, "smart")
+            if tier <= 0:
+                continue
+            key = (tier, item["confidence"], -order)
+            if best_key is None or key > best_key:
+                best_key = key
+                best = item
+    return best
+
+
+def _near_violation(result: Dict, anchor_result: Dict, near: Dict[str, Any], distance: Optional[float]) -> str:
+    """检查候选相对锚点是否满足几何约束；返回空串表示通过。"""
+    if distance is None:
+        return "缺少坐标"
+    ca, cb = _result_center(result), _result_center(anchor_result)
+    if ca is None or cb is None:
+        return "缺少坐标"
+    dx = ca[0] - cb[0]
+    dy = ca[1] - cb[1]
+    min_dy = float(near.get("min_dy") or 4.0)
+    direction = near.get("direction") or "near"
+    if direction == "below" and dy < min_dy:
+        return f"不在锚点下方(dy={dy:.0f})"
+    if direction == "above" and -dy < min_dy:
+        return f"不在锚点上方(dy={dy:.0f})"
+    max_dx = float(near.get("max_dx") or 0.0)
+    if max_dx > 0 and abs(dx) > max_dx:
+        return f"水平超出锚点(dx={dx:.0f}>{max_dx:.0f})"
+    max_distance = float(near.get("max_distance") or 0.0)
+    if max_distance > 0 and distance > max_distance:
+        return f"超出锚点距离({distance:.0f}>{max_distance:.0f})"
+    return ""
+
+
+def _rank_ocr_candidates(
+    results: List[Dict],
+    candidates: List[str],
+    mode: str,
+    min_confidence: float,
+    exclude_texts: Optional[List[str]] = None,
+    anchor_texts: Optional[List[str]] = None,
+    anchor_required: bool = False,
+    near: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[Dict], Dict[str, Any]]:
+    """对全量 OCR 结果做结构化排序。
+
+    返回 (最优候选 item, 元信息)。item 形如：
+        {"result": OCR结果, "text", "confidence", "tier", "target_idx",
+         "score", "distance", "status", "reason"}
+    status: filtered/matched/excluded/low_conf/near_rejected/anchor_missing/
+            not_target/duplicate_target/empty。
+    """
+    normalized_targets = [
+        (idx, target, _normalize_text(target))
+        for idx, target in enumerate(candidates or [])
+        if _normalize_text(target)
+    ]
+    excluded = [_normalize_text(t) for t in (exclude_texts or []) if _normalize_text(t)]
+    anchor_norms = [_normalize_text(t) for t in (anchor_texts or []) if _normalize_text(t)]
+    near_cfg = near or {}
+
+    items: List[Dict] = []
+    for result in results or []:
+        try:
+            confidence = float(result.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        text = str(result.get("text") or "")
+        text_norm = _normalize_text(text)
+        item = {
+            "result": result,
+            "text": text,
+            "text_norm": text_norm,
+            "confidence": confidence,
+            "tier": 0,
+            "target_idx": -1,
+            "score": 0.0,
+            "distance": None,
+            "status": "filtered",
+            "reason": "",
+        }
+        if not text_norm:
+            item["status"] = "empty"
+        elif confidence < min_confidence:
+            item["status"] = "low_conf"
+        elif any(term in text_norm for term in excluded):
+            item["status"] = "excluded"
+        items.append(item)
+
+    anchor_item = _pick_anchor_item(items, anchor_norms) if anchor_norms else None
+
+    for item in items:
+        if item["status"] != "filtered":
+            continue
+        if anchor_norms and anchor_item is None and anchor_required:
+            item["status"] = "anchor_missing"
+            item["reason"] = "锚点文字未找到"
+            continue
+        if anchor_item is not None:
+            item["distance"] = _center_distance(item["result"], anchor_item["result"])
+            if near_cfg:
+                reason = _near_violation(item["result"], anchor_item["result"], near_cfg, item["distance"])
+                if reason:
+                    item["status"] = "near_rejected"
+                    item["reason"] = reason
+                    continue
+        best_tier = 0
+        best_idx = -1
+        for idx, _target, target_norm in normalized_targets:
+            tier = _ocr_match_tier(item["text_norm"], target_norm, mode)
+            if tier > best_tier:
+                best_tier = tier
+                best_idx = idx
+        if best_tier <= 0:
+            item["status"] = "not_target"
+            continue
+        item["tier"] = best_tier
+        item["target_idx"] = best_idx
+        # 等级压倒一切（tier*100000），同等级内锚点距离优先、置信度其次。
+        # 目标顺序只做极小权重，避免多个同分候选时随机漂移。
+        score = best_tier * 100000.0 + item["confidence"] * 100.0 - best_idx * 5.0
+        if anchor_item is not None and item["distance"] is not None:
+            max_distance = float(near_cfg.get("max_distance") or 0.0)
+            if max_distance > 0:
+                score += max(0.0, max_distance - item["distance"]) / max_distance * 3000.0
+            else:
+                score += max(0.0, 3000.0 - item["distance"])
+        item["score"] = score
+        item["status"] = "matched"
+
+    # 同一个 OCR 文本框可能同时命中多个目标文案，只保留分数最高的一条，
+    # 否则歧义检测会把同一个框误报成两个候选。
+    best_by_key: Dict[Tuple[str, int, int], Dict] = {}
+    for item in items:
+        if item["status"] != "matched":
+            continue
+        center = _result_center(item["result"])
+        if center is None:
+            key = (item["text_norm"], 0, 0)
+        else:
+            key = (item["text_norm"], int(center[0] // 8), int(center[1] // 8))
+        previous = best_by_key.get(key)
+        if previous is None or item["score"] > previous["score"]:
+            if previous is not None:
+                previous["status"] = "duplicate_target"
+                previous["reason"] = "同一文本框命中多个候选"
+            best_by_key[key] = item
+        else:
+            item["status"] = "duplicate_target"
+            item["reason"] = "同一文本框命中多个候选"
+
+    scored = sorted(
+        best_by_key.values(),
+        key=lambda item: (-item["score"], -item["confidence"], item["target_idx"]),
+    )
+
+    ambiguous: List[Dict] = []
+    if scored:
+        top = scored[0]
+        for other in scored[1:]:
+            if other["tier"] != top["tier"]:
+                break
+            distance = _center_distance(other["result"], top["result"])
+            if distance is not None and distance > 40 and abs(other["score"] - top["score"]) <= 200:
+                ambiguous.append(other)
+
+    meta = {
+        "items": items,
+        "scored": scored,
+        "ambiguous": ambiguous,
+        "anchor_item": anchor_item,
+        "mode": mode,
+        "anchor_texts": anchor_texts or [],
+        "near": near_cfg,
+        "exclude_texts": exclude_texts or [],
+    }
+    return (scored[0] if scored else None), meta
+
+
+def _log_candidate_ranking(
+    logger: logging.Logger,
+    candidates: List[str],
+    meta: Dict[str, Any],
+    chosen: Optional[Dict],
+) -> None:
+    """输出候选排序。命中时 INFO 打前 5 条；未命中时 DEBUG，避免轮询刷屏。"""
+    anchor_item = meta.get("anchor_item")
+    anchor_desc = "未找到"
+    if anchor_item is not None:
+        anchor_desc = f"\"{anchor_item['text']}\"@{anchor_item['result'].get('center')}"
+    scored = meta.get("scored") or []
+    level = logger.info if chosen is not None else logger.debug
+    level(
+        "[OCR匹配] 候选排序（模式=%s 锚点=%s 目标=%s）",
+        meta.get("mode"),
+        anchor_desc,
+        " / ".join(candidates),
+    )
+    for pos, item in enumerate(scored[:5], 1):
+        distance = f"{item['distance']:.0f}" if item["distance"] is not None else "-"
+        level(
+            "  #%d \"%s\" conf=%.2f tier=%s dist=%s score=%.0f%s",
+            pos,
+            item["text"],
+            item["confidence"],
+            _MATCH_TIER_LABELS.get(item["tier"], item["tier"]),
+            distance,
+            item["score"],
+            "  <== 选中" if item is chosen else "",
+        )
+    # 第 6 条起只在 debug 里输出，保证「全量候选」可回查又不刷 INFO 日志。
+    for pos, item in enumerate(scored[5:], 6):
+        distance = f"{item['distance']:.0f}" if item["distance"] is not None else "-"
+        logger.debug(
+            "  #%d \"%s\" conf=%.2f tier=%s dist=%s score=%.0f",
+            pos,
+            item["text"],
+            item["confidence"],
+            _MATCH_TIER_LABELS.get(item["tier"], item["tier"]),
+            distance,
+            item["score"],
+        )
+    for item in meta.get("items") or []:
+        if item["status"] in ("matched", "filtered"):
+            continue
+        distance = f"{item['distance']:.0f}" if item.get("distance") is not None else "-"
+        logger.debug(
+            "  [%s] \"%s\" conf=%.2f dist=%s%s",
+            item["status"],
+            item["text"],
+            item["confidence"],
+            distance,
+            f" ({item['reason']})" if item.get("reason") else "",
+        )
+    if chosen is None:
+        status_counts: Dict[str, int] = {}
+        for item in meta.get("items") or []:
+            status = item["status"]
+            if status == "matched":
+                continue
+            status_counts[status] = status_counts.get(status, 0) + 1
+        logger.debug("[OCR匹配] 未选中候选状态统计: %s", status_counts)
+
+
+def _debug_overlay_enabled() -> bool:
+    return os.environ.get(_OCR_DEBUG_ENV, "0") == "1"
+
+
+def _load_debug_font(size: int):
+    for path in ("C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf"):
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _save_match_debug(
+    screenshot,
+    meta: Dict[str, Any],
+    candidates: List[str],
+    tag: Optional[str],
+    force: bool = False,
+    chosen_override: Optional[Dict] = None,
+) -> Optional[str]:
+    """把当帧 OCR 框、状态、分数画在截图上，供调参定位（失败不抛异常）。"""
+    if screenshot is None:
+        return None
+    key = str(tag or "ocr_match")
+    now = time.time()
+    if not force and now - _last_debug_save.get(key, 0.0) < _DEBUG_SAVE_INTERVAL_SEC:
+        return None
+    _last_debug_save[key] = now
+    try:
+        os.makedirs(PROJECT_OCR_DEBUG_DIR, exist_ok=True)
+        base = screenshot.convert("RGBA")
+        header_h = 42
+        band = Image.new("RGBA", base.size, (0, 0, 0, 0))
+        band_draw = ImageDraw.Draw(band)
+        band_draw.rectangle((0, 0, base.width, header_h), fill=(0, 0, 0, 185))
+        base = Image.alpha_composite(base, band)
+        draw = ImageDraw.Draw(base)
+        font = _load_debug_font(14)
+        small = _load_debug_font(12)
+        anchor_text = "/".join(meta.get("anchor_texts") or []) or "-"
+        line1 = f"{key}  mode={meta.get('mode')}  anchor={anchor_text}"
+        line2 = "target=" + " / ".join(candidates)
+        draw.text((6, 2), line1[:120], fill=(255, 255, 255), font=font)
+        draw.text((6, 21), line2[:120], fill=(170, 215, 255), font=small)
+
+        chosen = chosen_override or (meta.get("scored")[0] if meta.get("scored") else None)
+        anchor_item = meta.get("anchor_item")
+        colors = {
+            "matched": (0, 170, 255),
+            "excluded": (255, 70, 70),
+            "low_conf": (150, 150, 150),
+            "near_rejected": (255, 0, 255),
+            "anchor_missing": (255, 70, 70),
+            "duplicate_target": (130, 130, 130),
+            "not_target": (90, 90, 90),
+            "empty": (90, 90, 90),
+            "filtered": (120, 200, 120),
+        }
+        for item in meta.get("items") or []:
+            box = item["result"].get("box")
+            if box is None or len(box) < 4:
+                continue
+            try:
+                x1, y1, x2, y2 = [int(float(v)) for v in box[:4]]
+            except (TypeError, ValueError):
+                continue
+            color = colors.get(item["status"], (120, 120, 120))
+            width = 2
+            label = f"{item['status']} \"{item['text']}\" ({item['confidence']:.2f})"
+            if item is chosen:
+                color, width = (0, 255, 0), 4
+                label = (
+                    f"CHOSEN \"{item['text']}\" ({item['confidence']:.2f}) "
+                    f"{_MATCH_TIER_LABELS.get(item['tier'], item['tier'])} s={item['score']:.0f}"
+                )
+            elif item is anchor_item:
+                color, width = (255, 165, 0), 3
+                label = f"ANCHOR \"{item['text']}\" ({item['confidence']:.2f})"
+            if item.get("distance") is not None:
+                label += f" d={item['distance']:.0f}"
+            if item.get("reason"):
+                label += f" {item['reason']}"
+            draw.rectangle((x1, y1, x2, y2), outline=color, width=width)
+            draw.text((x1, max(header_h, y1 - 16)), label[:90], fill=color, font=small)
+            if item is chosen:
+                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                draw.line((cx - 14, cy, cx + 14, cy), fill=(0, 255, 0), width=3)
+                draw.line((cx, cy - 14, cx, cy + 14), fill=(0, 255, 0), width=3)
+
+        safe_tag = re.sub(r'[\\/:*?"<>|\s]+', "_", key)[:80] or "ocr"
+        out = os.path.join(PROJECT_OCR_DEBUG_DIR, f"ocr_match_{safe_tag}_{int(now * 1000)}.jpg")
+        base.convert("RGB").save(out, quality=82)
+        _LOGGER.info(f"[OCR标注] 候选标注图已保存: {out}")
+        return out
+    except Exception as exc:
+        _LOGGER.debug("[OCR标注] 保存候选标注图失败: %s", exc)
+        return None
 
 
 def _center_from_box(left: int, top: int, width: int, height: int) -> Tuple[int, int]:
@@ -984,14 +1450,15 @@ def run_xm_seer_test(logger: logging.Logger, exe_path: str) -> bool:
     return True
 
 
-def ocr_window_content(
+def _ocr_scan(
     logger: logging.Logger,
     hwnd: Optional[int] = None,
     region: Optional[Tuple[int, int, int, int]] = None,
-) -> List[Dict]:
-    """
-    对窗口或区域进行OCR识别，返回详细的识别结果列表。
-    每个结果包含：text（文字）、confidence（置信度）、box（坐标框）、center（中心点）
+) -> Tuple[List[Dict], Optional[Image.Image], Optional[Tuple[int, int, int, int]]]:
+    """执行一次 OCR，返回 (识别结果, 实际截图, 实际识别区域)。
+
+    box 是截图局部坐标，center 已换算成屏幕绝对坐标；截图供结构化匹配的
+    标注图使用。其余防护逻辑与旧 ocr_window_content 完全一致：
 
     区域优先级（重要）：
         region（调用方显式指定的局部区域）> hwnd 对应窗口区域 > 全屏
@@ -1000,7 +1467,7 @@ def ocr_window_content(
 
     窗口不可用时的行为（2026-10-17 起，重要）：
         传了 hwnd 但窗口最小化/已关闭 → 先尝试 SW_RESTORE 还原；还原失败 →
-        打 ERROR 并返回空列表，**不再回退全屏识别**。
+        打 ERROR 并返回空结果，**不再回退全屏识别**。
         旧行为（安静回退全屏）闯过大祸：全屏把日志窗口文字卷进来 → 假命中 →
         "自己干扰自己"。返回空让上层按"未匹配"处理，步骤重试时
         run_flow 的 _refresh_flow_window 会重新枚举窗口，比全屏瞎认更正确。
@@ -1026,7 +1493,7 @@ def ocr_window_content(
                     f"还原失败，拒绝回退全屏识别，本次返回空结果"
                     f"（上层将按未匹配重试，并借 _refresh_flow_window 重新枚举窗口）"
                 )
-            return []
+            return [], None, None
     else:
         current_region = None
 
@@ -1045,7 +1512,7 @@ def ocr_window_content(
                         f"置顶后仍不可见，本次拒绝识别（返回空结果），"
                         f"避免把遮挡窗口的文字当成目标"
                     )
-                    return []
+                    return [], None, None
 
     # 防护3：无任何区域约束时说明本次是全屏识别，日志/其他窗口的内容会全部进来。
     # 这是历史上"自己干扰自己"的直接成因，必须显式留痕（节流）。
@@ -1107,7 +1574,7 @@ def ocr_window_content(
                     if len(results) <= 5:  # 只在数量少时输出详细信息
                         for i, r in enumerate(results):
                             logger.debug(f"  [{i+1}] \"{r['text']}\" ({r['confidence']:.2f}) @ {r['center']}")
-                    return _check_log_contamination(logger, results)
+                    return _check_log_contamination(logger, results), screenshot, current_region
         except Exception as e:
             logger.debug(f"RapidOCR识别失败: {str(e)}")
 
@@ -1153,7 +1620,17 @@ def ocr_window_content(
                 logger.warning("后续将仅使用 RapidOCR 进行识别")
                 _tesseract_error_logged = True
 
-    return _check_log_contamination(logger, results)
+    return _check_log_contamination(logger, results), screenshot, current_region
+
+
+def ocr_window_content(
+    logger: logging.Logger,
+    hwnd: Optional[int] = None,
+    region: Optional[Tuple[int, int, int, int]] = None,
+) -> List[Dict]:
+    """对窗口/区域做一次 OCR，只返回识别结果（防护逻辑见 _ocr_scan）。"""
+    results, _screenshot, _region = _ocr_scan(logger, hwnd=hwnd, region=region)
+    return results
 
 
 def ocr_find_any_text(
@@ -1162,32 +1639,188 @@ def ocr_find_any_text(
     hwnd: Optional[int] = None,
     region: Optional[Tuple[int, int, int, int]] = None,
     min_confidence: float = 0.5,
+    exclude_texts: Optional[List[str]] = None,
+    match_mode: str = "legacy",
+    anchor: Any = None,
+    near: Optional[Dict[str, Any]] = None,
+    ambiguous_action: str = "warn",
+    debug_tag: Optional[str] = None,
+    save_debug: bool = False,
 ) -> Optional[Dict]:
     """抄 ok-script match=[...]：单次 OCR 统一过滤多候选，避免每候选截一次屏。
 
-    返回首个命中的结果 dict（含 matched_target），未命中返回 None。
+    match_mode:
+        legacy（默认）：目标按配置顺序、结果按 OCR 顺序，先命中先返回
+            （兼容旧流程，存在「签到得」撞宣传语的问题）。
+        smart：精确 > 前缀 > 子串 > OCR 漏字反向，再按锚点距离/置信度排序。
+        exact / prefix / substring：只允许对应的匹配等级，更严格。
+    anchor / near:
+        anchor 先找锚点文字（字符串、列表或 {"texts": [...], "required": bool}），
+        near 支持 {"direction": "below|above|near", "max_distance", "max_dx", "min_dy"}。
+        配了锚点时默认只考虑满足几何约束的候选；锚点找不到时默认回退全量
+        （required=true 则直接判未匹配）。
+    exclude_texts:
+        命中这些子串的结果先剔除，仅作最后兜底。
+    debug_tag / save_debug:
+        保存一张候选标注图（所有 OCR 框 + 状态 + 分数 + 选中框）到 data/artifacts/ocr_debug。
+        GAMEAUTO_OCR_DEBUG=1 可全局开启；歧义时无论开关都会保存一张。
     """
     candidates = [str(t or "").strip() for t in (target_texts or []) if str(t or "").strip()]
     if not candidates:
         return None
-    normalized = [_normalize_text(t) for t in candidates]
-    results = ocr_window_content(logger, hwnd=hwnd, region=region)
-    for idx, target_normalized in enumerate(normalized):
-        for r in results:
-            text_normalized = _normalize_text(r["text"])
-            if r["confidence"] < min_confidence:
-                continue
-            if target_normalized in text_normalized:
-                logger.info(f"[OCR匹配] ✅ 找到 \"{candidates[idx]}\" -> \"{r['text']}\" ({r['confidence']:.2f}) @ {r['center']}")
-                return {**r, "matched_target": candidates[idx]}
-            if (
-                text_normalized in target_normalized
-                and len(text_normalized) >= max(2, len(target_normalized) // 2)
-            ):
-                logger.info(f"[OCR匹配] ✅ 找到 \"{candidates[idx]}\" -> \"{r['text']}\" ({r['confidence']:.2f}) @ {r['center']}")
-                return {**r, "matched_target": candidates[idx]}
-    logger.debug(f"[OCR匹配] 未找到: {candidates} (扫描了 {len(results)} 个区域)")
-    return None
+    mode = _normalize_match_mode(match_mode)
+    anchor_texts, anchor_required = _normalize_anchor(anchor)
+    near_cfg = _normalize_near(near)
+    if near_cfg and not anchor_texts:
+        # 同一份配置在步骤搜索循环里会反复进来，只告警一次，避免每秒刷日志
+        warn_key = repr(near)
+        if warn_key not in _near_without_anchor_warned:
+            _near_without_anchor_warned.add(warn_key)
+            logger.warning("[OCR匹配] ocr_near 已配置但没有 ocr_anchor，几何约束无法生效（已忽略）")
+        near_cfg = {}
+    if (anchor_texts or near_cfg) and mode == "legacy":
+        # 配了锚点/几何约束却仍按「先命中先返回」等于没配，自动升级为结构化排序
+        mode = "smart"
+
+    results, screenshot, _scan_region = _ocr_scan(logger, hwnd=hwnd, region=region)
+
+    if mode == "legacy":
+        normalized = [_normalize_text(t) for t in candidates]
+        excluded = [_normalize_text(t) for t in (exclude_texts or []) if str(t or "").strip()]
+        if excluded:
+            filtered = []
+            for r in results:
+                text_normalized = _normalize_text(r["text"])
+                if any(term and term in text_normalized for term in excluded):
+                    logger.debug(f"[OCR匹配] 跳过排除词命中: \"{r['text']}\"")
+                    continue
+                filtered.append(r)
+            results = filtered
+        found = None
+        matched_target = None
+        for idx, target_normalized in enumerate(normalized):
+            for r in results:
+                text_normalized = _normalize_text(r["text"])
+                if r["confidence"] < min_confidence:
+                    continue
+                if target_normalized in text_normalized:
+                    found, matched_target = r, candidates[idx]
+                    break
+                if (
+                    text_normalized in target_normalized
+                    and len(text_normalized) >= max(2, len(target_normalized) // 2)
+                ):
+                    found, matched_target = r, candidates[idx]
+                    break
+            if found is not None:
+                break
+        if found is None:
+            logger.debug(f"[OCR匹配] 未找到: {candidates} (扫描了 {len(results)} 个区域)")
+        # legacy 也支持候选标注：用 smart 视角把全量候选和分数画出来，
+        # 但选中框仍然是 legacy 实际命中的那个（避免调试图与实际行为不一致）。
+        debug_image = None
+        if save_debug or _debug_overlay_enabled():
+            debug_meta = _rank_ocr_candidates(
+                results,
+                candidates,
+                "smart",
+                min_confidence,
+                exclude_texts=exclude_texts,
+            )[1]
+            chosen_item = None
+            if found is not None:
+                chosen_item = next(
+                    (item for item in debug_meta["items"] if item["result"] is found),
+                    None,
+                )
+                if chosen_item is None:
+                    chosen_item = {
+                        "result": found,
+                        "text": str(found.get("text") or ""),
+                        "confidence": float(found.get("confidence") or 0.0),
+                        "tier": 0,
+                        "target_idx": -1,
+                        "score": 0.0,
+                        "distance": None,
+                        "status": "matched",
+                        "reason": "legacy",
+                    }
+                    debug_meta["items"].append(chosen_item)
+            debug_image = _save_match_debug(
+                screenshot,
+                debug_meta,
+                candidates,
+                debug_tag,
+                chosen_override=chosen_item,
+            )
+        if found is not None:
+            logger.info(
+                f"[OCR匹配] ✅ 找到 \"{matched_target}\" -> \"{found['text']}\" "
+                f"({found['confidence']:.2f}) @ {found['center']} [模式=legacy]"
+            )
+            return {**found, "matched_target": matched_target, "debug_image": debug_image}
+        return None
+
+    chosen, meta = _rank_ocr_candidates(
+        results,
+        candidates,
+        mode=mode,
+        min_confidence=min_confidence,
+        exclude_texts=exclude_texts,
+        anchor_texts=anchor_texts,
+        anchor_required=anchor_required,
+        near=near_cfg,
+    )
+    _log_candidate_ranking(logger, candidates, meta, chosen)
+
+    should_save_debug = bool(save_debug or _debug_overlay_enabled() or meta["ambiguous"])
+    debug_image = None
+    if should_save_debug:
+        debug_image = _save_match_debug(
+            screenshot,
+            meta,
+            candidates,
+            debug_tag,
+            force=bool(meta["ambiguous"]),
+        )
+
+    if meta["ambiguous"] and chosen is not None:
+        others = " / ".join(
+            f"\"{item['text']}\"@{item['result'].get('center')}" for item in meta["ambiguous"]
+        )
+        logger.warning(
+            f"[OCR匹配] ⚠️ 候选歧义：\"{chosen['text']}\"@{chosen['result'].get('center')} "
+            f"与 {others} 等级/分数接近，已按分数选择前者"
+            + (f"（标注图: {debug_image}）" if debug_image else "")
+        )
+        if str(ambiguous_action or "").strip().lower() == "fail":
+            logger.warning("[OCR匹配] 候选歧义且配置为 fail，放弃本次匹配（不瞎点）")
+            return None
+
+    if chosen is None:
+        logger.debug(
+            f"[OCR匹配] 未找到: {candidates} (扫描了 {len(results)} 个区域，模式={mode})"
+        )
+        return None
+
+    matched = {
+        **chosen["result"],
+        "matched_target": candidates[chosen["target_idx"]],
+        "match_mode": mode,
+        "match_tier": _MATCH_TIER_LABELS.get(chosen["tier"], str(chosen["tier"])),
+        "score": chosen["score"],
+        "ambiguous": bool(meta["ambiguous"]),
+        "debug_image": debug_image,
+    }
+    anchor_item = meta.get("anchor_item")
+    if anchor_item is not None:
+        matched["anchor_center"] = anchor_item["result"].get("center")
+    logger.info(
+        f"[OCR匹配] ✅ 找到 \"{candidates[chosen['target_idx']]}\" -> \"{chosen['text']}\" "
+        f"({chosen['confidence']:.2f}) @ {chosen['result'].get('center')} "
+        f"[模式={mode} 等级={matched['match_tier']}]"
+    )
+    return matched
 
 
 def ocr_find_text(

@@ -113,6 +113,12 @@ class Screen:
         elif self.state == "level_up":
             # 2026-10-29 20:12 取证帧：整屏「16 计划等级提升」，点任意处继续
             data = {"计划等级提升": (960, 500)}
+        elif self.state == "memory_list":
+            # 2026-10-30 10:25 取证帧：烙痕列表（前往技能列表/只看红点/排序与筛选）+ 左上返回
+            data = {"前往技能列表": (760, 58), "只看红点": (900, 58), "排序与筛选": (1500, 58), "返回": BACK_XY}
+        elif self.state == "event_dialog":
+            # 2026-10-30 10:35 取证帧：定巡之礼活动弹窗，右上角 X
+            data = {"定巡之礼": (500, 200)}
         elif self.state == "tea_room":
             # 2026-10-27 10:22 取证帧：房间常驻陈设（飞镖/棒球）+ 话题名 + 左上返回
             data = {"茶憩纪念函": (900, 800), "飞镖": (1725, 573), "棒球": (1719, 419), "返回": BACK_XY}
@@ -158,6 +164,10 @@ class Screen:
         elif self.state == "memory_detail_v2" and _near((x, y), BACK_XY):
             self.state = "blank"
         elif self.state == "level_up" and _near((x, y), (960, 540)):
+            self.state = "main"
+        elif self.state == "memory_list" and _near((x, y), BACK_XY):
+            self.state = "panel"
+        elif self.state == "event_dialog" and _near((x, y), (1752, 258)):
             self.state = "main"
         elif self.state == "tea_room" and _near((x, y), BACK_XY):
             # 与休息室同一套离开交互：返回 → 确认框
@@ -285,6 +295,37 @@ def test_new_scenes_20261027():
           "漫巡属性" in bd.MEMORY_DETAIL_MARKERS and "烙痕唤醒" in bd.MEMORY_DETAIL_MARKERS,
           bd.MEMORY_DETAIL_MARKERS)
 
+    # 2026-10-30 用户实拍弹窗定标 docs/refs/baijing_memory_enhance_20261030.png：
+    # 「指定等级」行 [重置][Lv][+][最大]，重置 (1189,669)、+ 约 (1424,669)。
+    # 有重置锚点时直接推算 +，不再依赖第二次 OCR。
+    orig_region, orig_ocr = bd._window_region, bd._ocr_best_match
+    bd._window_region = lambda hwnd: (0, 0, 1919, 1079)
+    def _boom(*a, **k):
+        raise AssertionError("有锚点时不应再 OCR")
+    bd._ocr_best_match = _boom
+    try:
+        pos = bd._find_plus_button(LOG, 1, anchor=(1189, 669))
+    finally:
+        bd._window_region, bd._ocr_best_match = orig_region, orig_ocr
+    check("重置锚点推算 + 按钮（截图定标）", pos == (1424, 669), pos)
+    check("参考截图已入库", (PROJECT_ROOT / "docs" / "refs" / "baijing_memory_enhance_20261030.png").is_file())
+    check("重置 OCR 限定在指定等级行", bd.MEMORY_RESET_REGION == (0.55, 0.58, 0.68, 0.66))
+    src = (PROJECT_ROOT / "runtime" / "baijing_daily.py").read_text(encoding="utf-8")
+    check("重置后弹窗消失时不盲点 +", "重置后强化弹窗消失，停止（不盲点 +）" in src)
+
+    # 2026-10-30 10:25：烙痕列表页（记忆烙痕返回后卡住）
+    scr = Screen(state="memory_list")
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="t-memory-list"))
+    check("memory_list → 状态 panel", state == "panel", state)
+    check("memory_list 点了左上返回", BACK_XY in scr.clicks, scr.clicks)
+
+    # 2026-10-30 10:35：定巡之礼活动弹窗，点右上 X
+    scr = Screen(state="event_dialog")
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="t-event"))
+    check("event_dialog → 状态 main", state == "main", state)
+    check("event_dialog 点了右上关闭", any(_near(c, (1752, 258)) for c in scr.clicks), scr.clicks)
+    check("event_dialog 零 ESC", scr.esc == 0, scr.esc)
+
 
 # ── 5. 一轮只截一次屏 ─────────────────────────────────────────────
 def test_single_ocr_per_round():
@@ -325,8 +366,9 @@ def test_stuck_scene_evidence():
 # ── 8. 登记表顺序 ─────────────────────────────────────────────────
 def test_rule_order():
     print("[8] 登记表顺序：面板特征优先，绝不在任务面板上点「返回」")
-    check("规则顺序", [r["name"] for r in bd.SCENE_RULES] == ["过场遮罩", "计划等级提升", "茶憩摘要", "关注特写",
-                                                              "休息室", "烙痕详情", "茶憩房间", "有猫零售"],
+    check("规则顺序", [r["name"] for r in bd.SCENE_RULES] == ["过场遮罩", "计划等级提升", "定巡之礼", "茶憩摘要",
+                                                              "关注特写", "休息室", "烙痕详情", "烙痕列表",
+                                                              "茶憩房间", "有猫零售"],
           [r["name"] for r in bd.SCENE_RULES])
     check("休息室特征不含「午后茶憩」（任务行也有这四个字）",
           "午后茶憩" not in bd.REST_ROOM_MARKERS, bd.REST_ROOM_MARKERS)

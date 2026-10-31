@@ -171,6 +171,19 @@ This file mirrors important repository-level development notes inside the projec
 - 回归测试：`artifacts/test_ocr_guard_20261017.py`（7 个用例：干净零误剔 / 污染剔除 / 单条也剔 / 死窗口不抓屏 / 还原成功后继续 / 显式 region 优先）。改这块代码后必须跑。
 - 模板匹配路径 `_locate_template_in_window` 本来就是 `rect=None → return None`，没有全屏洞，别改出洞来。
 
+### OCR 结构化匹配：不要靠堆排除词 (2026-10-31)
+
+**背景**：MiniMax 步骤4 目标「签到得」按旧逻辑（目标顺序 + OCR 顺序，先命中先返回）子串命中卡片宣传语「连续签到得更多积分」，点在文案中间，接口日志里根本没有 `signin/claim`。当天先加了 `ocr_exclude_texts`，但每遇到一句宣传语就要加一个排除词，不可持续。
+
+- **匹配质量分层**（`runtime/ocr_click_tester.py` 的 `_rank_ocr_candidates`）：精确 > 前缀 > 子串 > OCR 漏字反向；同等级再按锚点距离、置信度、目标顺序排。`ocr_find_any_text` 默认仍是 `legacy`（旧行为，避免影响未迁移流程），步骤/流程配 `ocr_match_mode: "smart"` 才启用排序；`exact` / `prefix` / `substring` 是更严格的子集。
+- **锚点与几何**：步骤字段 `ocr_anchor`（字符串 / 列表 / `{"texts": [...], "required": bool}`）+ `ocr_near`（`direction: below|above|near`、`max_distance`、`max_dx`、`min_dy`）。先找锚点，再只接受满足方向/距离的候选；锚点找不到时默认回退全量，`required=true` 则直接判未匹配。`ocr_near` 没有 `ocr_anchor` 会被忽略并只告警一次。MiniMax 用「连续签到」锚点 + `direction=below, max_distance=500`，按钮在文案下方，宣传语与锚点同点被方向过滤。
+- **歧义**：同等级、同分数附近且相距 >40px 的多个候选会打 `⚠️ 候选歧义` 告警并保存标注图；默认仍按分数选，`ocr_ambiguous: "fail"` 可改成宁可不点。**禁止**用"多候选就随机/瞎点"兜底。
+- **候选标注图**：`ocr_debug_snapshot: true`（步骤级）或 `GAMEAUTO_OCR_DEBUG=1`（全局）时，把当帧所有 OCR 框、状态（chosen/anchor/excluded/near_rejected/...）、tier、距离、分数画到 `data/artifacts/ocr_debug/ocr_match_<tag>_<时间>.jpg`；同一 tag 5 秒内最多一张，歧义时强制保存。未命中也会存图，先看图再改配置。
+- **`_ocr_scan` 数据缝**：单次 OCR 返回 `(结果, 实际截图, 区域)`，`box` 是截图局部坐标、`center` 已换算屏幕绝对坐标；`ocr_window_content` 仍是只返回结果的薄包装，旧调用方不受影响。测试要 mock 扫描时 patch **`_ocr_scan`**，只 patch `ocr_window_content` 拦不住 `ocr_find_any_text`。
+- **已迁移**：`flow_configs(.example).json` 的 MINIMAX / WORKBUDDY 流程级 `ocr_match_mode: "smart"`；MiniMax 步骤4 锚点几何 + 标注图，WorkBuddy 步骤2/6/7（导航与「今日已领取」验证）开标注图。其他流程保持 legacy，验证稳定后再逐步迁移。
+- **范围限制**：anchor/near 只作用于步骤的首次匹配（click_template / wait_template）；`confirm_type=disappear/text_change` 仍走旧的全量确认逻辑，目前迁移的两个流程都用 `confirm_type=none`，不冲突。
+- 回归：`tests/suite_ocr_structured_match_20261031.py`（legacy 撞词复现 / smart 前缀优先 / 锚点方向距离 / required / exact/prefix/substring/reverse / 排除词 / 歧义与 fail / 标注图与节流 / runner 透传 / 两份配置迁移）；旧 `tests/suite_minimax_ocr_exclude_20261031.py` 已改为 patch `_ocr_scan`。
+
 ### 流程结束关闭进程 (重要)
 
 - `runtime/foreground_flow_runner.py` 的 `close_flow_processes(logger, flow_key, pid, process_names)` 是统一收口：先按 PID 杀**整棵进程树**（`ProcessSupervisor.safe_kill_process`），再按 `window_process_names` **按名兜底**清残留。
@@ -180,7 +193,7 @@ This file mirrors important repository-level development notes inside the projec
 - **例外**：`stop_after_step` 提前返回（XM 后台流程跑到"运行中确认"）**不会**关闭进程 —— 挂机类流程要继续跑。
 - 薅羊毛集合（`background_template_runner.run_wool_background`）对每个子流程额外兜底关闭，默认关闭、`close_process_on_finish=false` 才保留，日志尾缀 `（已关闭程序）` / `（程序保留）`。集合含 `WOOL_FLOW_KEYS = MINIMAX / WORKBUDDY / TRAE / QODER`。
 - **假成功事故（2026-10-21 WorkBuddy，用户怒点）**：`optional_if_missing: true` 的步骤找不到元素时**直接跳过并报成功**——WorkBuddy 流程 11 秒没等到「立即领取」按钮（单实例应用，用户旧会话的加油站弹窗早已自动消失）→ 跳过 → 报 ✅ 实际没领。**规则：optional 的点击/等待步后面必须跟一个非 optional 的验证步**（确认达成态，如 MINIMAX 的「今日已签到」二步结构），否则弹窗不在时无法区分"已领取"和"没领到"。
-- **绝不能杀用户正在用的软件（同日事故）**：WorkBuddy 是用户的日常聊天软件（GUI 还常从其进程树外启动，`_protected_pids` 护不住），`close_process_on_finish/fail` 必须 `false`。TRAE/QODER 是同类 IDE，用户可在 GUI 薅羊毛页自行勾选关闭，但**默认建议 false**；给正在使用的聊天/IDE 类软件开自动关闭前必须先确认。
+- **用户正在用的软件：默认不关，但尊重显式勾选**：WorkBuddy 是日常聊天软件（GUI 还常从其进程树外启动，`_protected_pids` 护不住），默认 `close_process_on_finish/fail=false`；TRAE/QODER 是同类 IDE，默认建议 false。**但用户可以在 GUI 薅羊毛页显式勾选「完成后关闭」，勾选后必须执行**——2026-10-30 用户明确要求关 WorkBuddy/Qoder，曾加过 `PROTECTED_CLOSE_FLOWS` 硬保护并锁 QML，已按要求撤掉。禁止再用代码拦截用户的显式关闭选择。
 - **弹窗是自动轮换的展示卡（2026-10-21 用户截图三连修正）**：WorkBuddy「Buddy加油站 每日可领 100 积分」弹窗为左下角**轮换 carousel**，至少三张卡（加油站→积分包购买→做任务赚积分），所以「立即领取」按钮**只有轮到的那个间隙可见**。展示一段时间后会整体退场，**悬停不唤回、二次启动不重弹**（单实例）。靠它领不可靠——用户提的"延迟太高点错"在轮换场景下是真实风险（匹配→点击间隙卡片转走），仅靠确认失败重试兜底不够。
 - **常驻入口（2026-10-21 用户指点，流程已重构走这条）**：**左下角头像 → 菜单「Buddy加油站」→ 加油站页面**（可领时显示「立即领取」，已领显示「今日已领取」，积分余额在头像菜单里可见）。头像菜单任何时候都能打开，不依赖轮换弹窗。流程七步：点头像（`模板/hy4-左下角头像.png`，OCR 关）→ 点菜单行（`模板/hy4-Buddy加油站菜单.png`，OCR 兜底）→ 等「立即领取」（optional）→ 点领取+确认（optional）→ **再点头像（optional）→ 再点菜单行（optional）→ 确认「今日已领取」（非 optional，导航失败就老实 ❌）**。
 - **领取后加油站页面会整个关闭（2026-10-27 实锤，假失败事故）**：10-27 流程点完「立即领取」（领取成功）后页面退回底下的聊天窗口，验证步在 74 秒里扫了 15+ 轮都找不到「今日已领取」→ 判 ❌，用户实看已领取。修复即在点击与验证之间插两个 optional 重新导航步——页面还开着时头像被盖住、超时跳过，验证照常命中；页面关了则重新进站再看。**不能**删掉非 optional 验证步来"修"这个问题（会退回 10-21 假成功事故）。
@@ -201,8 +214,8 @@ This file mirrors important repository-level development notes inside the projec
 - `flow_configs.json` MINIMAX/TRAE 末步 `action=wool_verify_log`
   （`runtime/wool_claim_logs.py`）：只读当天日志，找不到领取记录就 ❌，
   不回退成假成功；MiniMax 额外用「今日已签到」模板兜底（已签到当天不会重复发 claim）。
-- WorkBuddy `close_process_on_finish/fail` 必须是 false（2026-10-24 复查发现
-  配置曾被设成 true，已改回）。回归 `artifacts/test_wool_claim_logs_20261024.py`。
+- WorkBuddy 默认 `close_process_on_finish/fail=false`；用户显式勾选「完成后关闭」时按其选择执行
+  （2026-10-30 修正，不再硬拦截）。回归 `tests/suite_wool_claim_logs_20261024.py`（本机真机脚本）。
 
 ### 薅羊毛 2026-10-25 三连 ❌：UI 确认比实际动作更脆弱
 
@@ -249,7 +262,8 @@ This file mirrors important repository-level development notes inside the projec
   点击领取（optional）→ **`qoder_verify_claim` 非 optional 日志核验**。
   核验读取最新 `main.log` 的 `[Campaign]` 状态：`CLAIMED/claimable=false` 才算成功，
   `CLAIMABLE/claimable=true` 或读不到状态一律失败。**禁止再靠三步全 optional 静默报成功**。
-- **`close_process_on_finish/fail` 必须 false**：Qoder 是用户日常 IDE，绝不能关。
+- **默认 `close_process_on_finish/fail=false`**：Qoder 是用户日常 IDE；用户可在 GUI 薅羊毛页
+  显式勾选「完成后关闭」（2026-10-30 明确要求），勾选后必须执行，不要用代码硬拦截。
   `reuse_existing_window=true`：已在跑就复用窗口不新拉进程。
 - **2026-10-24 事故（用户实锤）**：12:21（薅羊毛）和 12:53（QoderFlow）两次 QODER
   流程都没找到「领取」→ 三步 optional 全跳过 → 报 ✅，并且
@@ -712,9 +726,12 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
 
 ### 无限暖暖进入主界面 (2026-10-22)
 
-- `apps.InfinityNikki.prelaunch_flow = "NikkiLauncher"`：先跑前置流程再启动 whimbox。
-  启动器是叠纸 `launcher.exe`（窗口标题「无限暖暖」、窗口进程 `xstarter.exe`，
-  1280x720 实测 OCR「启动游戏」conf 0.80），不是 `run_one_dragon.bat`。
+- **默认不接线（2026-10-22 验证后的决定）**：`settings/defaults.py` 的 InfinityNikki
+  不配 `prelaunch_flow`，一条龙直接拉 whimbox，由 whimbox 自己启动游戏。
+  `NikkiLauncher` 流程定义保留在 `flow_configs.json`，需要时手动在 app_config 里加
+  `"prelaunch_flow": "NikkiLauncher"` 再启用。启动器是叠纸 `launcher.exe`（窗口标题
+  「无限暖暖」、窗口进程 `xstarter.exe`，1280x720 实测 OCR「启动游戏」conf 0.80），
+  不是 `run_one_dragon.bat`。
 - 流程只有一步 `action=nikki_enter_game`（`runtime/nikki_launcher.py`）：
   启动器「启动游戏/更新/运行中」→ 等 `X6Game-Win64-Shipping.exe` 窗口 →
   登录页 OCR「点击进入游戏/确认/登录」→ 加载小月卡/道具弹窗 →
@@ -852,10 +869,12 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
   →「重置」→「+」一次 →「确认」→ 等级提升动画「点击屏幕继续」→ `_return_to_task_panel`
   逐层返回任务面板。新模板 `模板/白荆回廊-强化烙痕按钮.png`（匹配 conf=1.000；
   注意按钮是"烙痕"不是"熔垣"，低分辨率图样字易看错，用户 2026-10-18 指正）；
-  「+」按钮位置由「重置」OCR 位置 + 0.1225 倍窗宽偏移推算，不写死坐标。
+  「+」按钮位置由「重置」OCR 位置 + 0.1225 倍窗宽偏移推算（**已用用户
+  2026-10-30 截图定标，参考图 `docs/refs/baijing_memory_enhance_20261030.png`：
+  1919x1079 下重置 (1189,669)、最大 (1529,670)、+ 约 (1424,669)，同一行**）。
   `_return_to_task_panel` 返回顺序：已在面板→主界面重开「任务」→ 退出确认框点「确认」→
   页面左上角「返回」按钮（fx<0.2,fy<0.15 区域）→ ESC，最多 5 层。
-- **场景退出登记表已扩到 8 个场景**（`SCENE_RULES`，2026-10-27 / 10-29 失败取证驱动补登记）：
+- **场景退出登记表已扩到 10 个场景**（`SCENE_RULES`，2026-10-27 / 10-29 / 10-30 失败取证驱动补登记）：
   原有 过场遮罩/茶憩摘要/关注特写/休息室 之外，新增 **烙痕详情**（特质提升/烙痕等级；
   10-27 10:18 实锤 +1/确认都点中了、等级提升都出了，只因页面不在登记表里恢复认不出，
   连环拖死茶憩和叶脉联结）、**茶憩房间**（茶憩纪念函/飞镖/棒球 并集——10:22 当帧 OCR
@@ -866,11 +885,15 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
   会反向命中「计划等级提升」，必须只允许"候选 ⊆ OCR 文本"）。
   2026-10-29 20:03 再补：技能同调页签的烙痕详情没有「特质提升/烙痕等级」，特征加
   「漫巡属性」「烙痕唤醒」（「基础属性」「技能同调」太通用，不用）。
+  2026-10-30 再补：**烙痕列表**（「前往技能列表/只看红点/排序与筛选」，点左上返回；
+  记忆烙痕从详情返回后卡在这里）、**定巡之礼**活动弹窗（无「返回」，点右上 X，
+  比例 (0.913,0.239)；10-30 10:35 流程漂进活动页认不出）。
   烙痕详情/有猫零售 = 点左上「返回」即走（共享 `_exit_via_top_left_back`）；
   茶憩房间 = 返回 → 确认框（与休息室同交互），退出后回休息室由下一轮恢复接手；
   烙痕详情返回后的列表页无独占特征，如实报 unknown 交通用兜底。
   照证据补登记的闭环继续有效：`未匹配任何已知场景` 的当帧文字就是候选特征来源。
-  回归 `tests/suite_baijing_scene_registry_20261026.py`（[4.5] 节含今日新增 4 项 + 顺序断言 8 条）。
+  回归 `tests/suite_baijing_scene_registry_20261026.py`（[4.5] 节含 10-29/10-30 新增 6 项 +
+  顺序断言 10 条）。
 - **午后茶憩「前往」任务已自动化**（`_handle_tea_break_task`，同日用户 7 张截图实测）：
   点行内「前往」（关键词「午后茶」，OCR 常把"歇"认成"憩"）→「是否前往茶憩?」确定
   (0.62,0.63) → 角色选择页（今日可邀份额）点首个角色 (0.41,0.42) → 茶憩场景喝茶 →
@@ -1217,6 +1240,30 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
   2026-10-27 的 activity/daily 记录已补正为 `100/100（实得 105）`，原值备份在
   `storage/cache/daily_progress_baijing_20261027_backup.json`。
 
+#### 2026-10-30 只有 90/100：茶憩一直没成，这次记忆烙痕也失败
+
+- **三天对比**：10-27/28/29 都是 10/16、实得 105（100 封顶），未完成项都包含
+  `tea_break / gallery_tour / excellent_road / skill_upgrade / kill_60 / restroom_mini_game`
+  ——**茶憩从来没有真正完成过**，能满是因为「记忆烙痕 +15」把 90 补到 105。
+  10-30 记忆烙痕也失败 → 9/16、90/100。
+- **记忆烙痕失败点（10-30 10:25）**：详情页点「强化烙痕」→ 弹窗出现
+  （OCR「强化费用」）→ 点「重置」(0.56) → 1.7 秒后 `_find_plus_button` 再 OCR
+  「重置」时认不出 → 「未找到 + 按钮」→ 提前返回；随后卡在未登记的**烙痕列表**
+  → 场景恢复 unknown。两天前的同样流程第二次 OCR 还能以 0.57-0.62 认出「重置」。
+- **截图定标（2026-10-30 用户实拍）**：`docs/refs/baijing_memory_enhance_20261030.png`
+  （1919x1079）确认「指定等级」行布局 `[重置][Lv][+][最大]`：重置 (1189,669)、
+  最大 (1529,670)、**+ 约 (1424,669)**，与重置同一行、右移 0.1225 倍窗宽。
+  今天的失败不是坐标错，而是点完重置后**第二次 OCR 认不出「重置」**（0.56 低置信度）
+  → + 推算失败。修复：调用方传刚点过的重置坐标作 anchor，直接推算 +，
+  不再依赖第二次 OCR；OCR 失败仍补 `_record_step_failure` 截图。
+  烙痕列表已登记，恢复不会卡死。
+  回归 `tests/suite_baijing_scene_registry_20261026.py`（截图定标 anchor 用例 +
+  "参考截图已入库"断言）。
+- **流程教训**：用户发的界面截图必须存进 `docs/refs/` 并在 AGENTS 引用路径，
+  不能只在聊天里看一眼——否则后续只能靠偏移/猜，迟早点错。
+- **茶憩仍未打通**：10-30 10:27 OCR 命中「午后茶憩」0.77 并点击，28 秒后仍在
+  休息室；入口点击需专项排查，别标成功。
+
 ## 第三方脚本体力刷本配置（2026-10-28 第一期）
 
 - **页面**：`ui/qml/views/StaminaConfigView.qml`，Main.qml 侧栏「脚本刷本配置」→
@@ -1324,12 +1371,19 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
   "改类型同时改名"写错槽位）/ 自动切队伍与队伍编号 / 历战余响开关与开始星期 /
   燃料与后备开拓力 / 沉浸器合成上限。**不暴露 `power_plan` 三元组列表**
   （结构复杂，改坏会中断一条龙计划）。
-- **OneDragon 字段**（`<OD 根>/config/01/one_dragon/charge_plan.yml`；根目录优先取
+- **OneDragon 字段**（`<OD 根>/config/01/one_dragon/charge_plan.yml`；
+  **仅支持单账户，固定 `config/01`，不支持多账户**；根目录优先取
   `apps.ZenlessZoneZero._discovery.monitors.*.log_dir` 的父目录，兜底解析
   ScriptChainer 的 `config/script_chain/*.yml` 的 script_path）：
-  use_coupon / 首个计划的 plan_times / predefined_team_idx（下拉显示
-  `config/01/team.yml` 的编队名）/ auto_battle_config / level / card_num /
-  notorious_hunt_buff_num。**不改 mission/tab/category 与 history_list**。
+  use_coupon / 首个计划的 **plan_target（刷本目标，可直接改）** / plan_times /
+  predefined_team_idx（下拉显示 `config/01/team.yml` 的编队名）/
+  auto_battle_config / level / card_num / notorious_hunt_buff_num。
+  2026-10-31 起旧只读 `plan_summary` 换成 `plan_target` 下拉：选项来自
+  `<OD 根>/assets/game_data/compendium_data.yml` 的「训练」页签，值是
+  `分类|任务类型|关卡`，标签保留原名并附图鉴显示名（如「升温测试（火属性）」）；
+  保存时拆回 `tab_name=训练 / category_name / mission_type_name / mission_name`，
+  无任务类型/关卡的分类（合成电池、专业挑战室 boss）写空/None。图鉴文件缺失时
+  自动退回只读 `plan_summary`，不暴露可手填的复合值。**不改 history_list**。
 - **安全**：写入仍走"运行中拒绝（process_names 含脚本和游戏）→ 备份到
   `storage/cache/config_backups/<game>/` → 临时文件 + os.replace"；
   `FieldSpec.options` 非空时 str 值必须命中（`_coerce` 新增校验），
@@ -1338,8 +1392,10 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
   （import 映射 `ruamel.yaml → ruamel`，dependency_manager 自动识别）。
 - **回归**：`tests/suite_stamina_configs_phase2_20261029.py`（合成 YAML：
   读写/注释保留/只改目标值/备份/运行中拒绝/非法枚举/越界/空计划/
-  两种根目录解析/往返零差异/注册表）。实机只读验证：March7th 24 字段、
-  OneDragon 7 字段均能从真实配置读出。
+  两种根目录解析/往返零差异/注册表/`plan_target` 下拉与回显/图鉴外目标拒绝/
+  合成电池写空/图鉴缺失退回只读/单账户固定 config01）。实机只读验证：
+  March7th 24 字段、OneDragon 7 字段均能从真实配置读出；真实图鉴生成 77 个
+  刷本目标选项，当前计划回显为「实战模拟室 / 代理人技能 / 升温测试（火属性）」。
 
 ## 异环 2026-10-29 两次失败：标题页「进入游戏」没人点
 
@@ -1397,9 +1453,12 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
     `enable_ocr_fallback=true`、`on_fail=retry_prev` 回退重点头像）。
     OCR 实测：菜单行 0.81；侧栏促销卡文本是「连登抽取Buddy周边」，
     不会命中「Buddy加油站」，不会再点错。
-  - WORKBUDDY / QODER 的 `close_process_on_finish`、`close_process_on_fail`
-    全部 false（本地 + example 同步）。
-  - `_close_wool_flow(logger, flow_key, cfg, ok)`：成功看 finish、失败看 fail。
+  - WORKBUDDY / QODER 默认 false（example 保持安全默认）；**用户可在 GUI 自行勾选
+    「完成后关闭」**。2026-10-30 用户明确要求关闭这两个软件，本地配置已按选择设为
+    `finish=true / fail=false`；曾加的 `PROTECTED_CLOSE_FLOWS` 硬保护与 QML 锁定已撤销，
+    禁止再用代码拦截用户选择。
+  - `_close_wool_flow(logger, flow_key, cfg, ok)`：成功看 finish、失败看 fail，
+    WorkBuddy 失败时仍按 `fail=false` 保留进程。
 - **回归**：`tests/suite_wool_workbuddy_20261029.py`（7 步 OCR 配置、
   两个软件关闭开关、收尾四种组合）。
 - **待实机确认**：20:16 那次点击「立即领取」后页面关闭，是否真的到账需要
