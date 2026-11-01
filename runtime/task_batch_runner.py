@@ -36,6 +36,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .automation_controller import GAME_UPDATING_SKIP
 from .background_template_runner import (
+    is_monthly_flow_done,
     run_cj_background,
     run_genshin_monthly_background,
     run_hsr_monthly_background,
@@ -112,6 +113,70 @@ class _StopFlagAdapter:
 
 # 白荆回廊一条龙：主流程结束（停在主界面）后追加执行的每周点击序列
 BAIJING_WEEKLY_SEQUENCE = "白荆回廊-每周商店购买"
+
+# 每月商店流程：月初随对应游戏的日常一起跑，用户不必再单独勾
+# HsrMonthlyFlow / ZzzMonthlyFlow / GenshinMonthlyFlow。
+# 成功后 background runner 写 monthly_flow:<FLOW>=YYYY-MM，当月不再重复；
+# 失败不写标记，下一次批次自动重试（与白荆每周序列、暖暖晶石兑换同一套语义）。
+_MONTHLY_FLOW_BY_APP: Dict[str, Tuple[str, str]] = {
+    "HonkaiStarRail": ("HSR_MONTHLY", "崩铁每月商店"),
+    "ZenlessZoneZero": ("ZZZ_MONTHLY", "绝区零每月商店"),
+    "GenshinImpact": ("GENSHIN_MONTHLY", "原神每月商店"),
+}
+
+
+def _run_pending_monthly_flow(controller, app_key: str) -> Optional[Tuple[str, bool]]:
+    """该游戏本月还没买月商店时补跑一次，返回 (报告行, 是否成功)。
+
+    已买过、或该游戏没有月商店流程时返回 None（只读一次 task_meta，零成本）。
+    刻意排在该游戏的日常任务之后：日常脚本退出时游戏已关，月度流程自己
+    启动客户端，不抢窗口；月初第一次批次多一次启动，当月其余日子不触发。
+    """
+    entry = _MONTHLY_FLOW_BY_APP.get(app_key)
+    if entry is None or controller.stop_current_task:
+        return None
+    flow_key, label = entry
+    if is_monthly_flow_done(flow_key):
+        return None
+
+    # 维护/更新窗口内不启动客户端：月度采购可以顺延到下一次批次，
+    # 别在关服时把 launcher 白开一遍（也不写标记，下次自动重试）。
+    try:
+        from ..services.game_update_calendar import get_maintenance_state
+
+        maintenance = get_maintenance_state(app_key)
+    except Exception as exc:  # noqa: BLE001 - 日历模块不可用就当没维护，不影响采购
+        controller.logger.debug("[%s] 维护状态检查失败: %s", label, exc)
+        maintenance = None
+    if maintenance:
+        controller.logger.info("[%s] 游戏维护中，本月采购顺延到下次批次", label)
+        return None
+
+    controller.logger.info("[%s] 本月还没买，随日常自动补跑一次", label)
+    try:
+        if flow_key == "HSR_MONTHLY":
+            ok, msg = run_hsr_monthly_background(controller.logger)
+        elif flow_key == "ZZZ_MONTHLY":
+            ok, msg = run_zzz_monthly_background(controller.logger)
+        else:
+            ok, msg = run_genshin_monthly_background(controller.logger)
+    except Exception as exc:  # noqa: BLE001 - 月商店失败不能拖垮当天一条龙
+        controller.logger.warning("[%s] 执行异常: %s", label, exc)
+        return (f"{label:20} ❌ 执行异常: {exc}", False)
+    return (f"{label:20} {'✅' if ok else '❌'} {msg}", ok)
+
+
+def _append_monthly_report(
+    controller, app_key: str, report: List[str], warnings: List[str]
+) -> None:
+    """跑月商店并把结果写进批次报告/警告（供 run_task_batch 的两条出口复用）。"""
+    monthly = _run_pending_monthly_flow(controller, app_key)
+    if monthly is None:
+        return
+    line, ok = monthly
+    report.append(line)
+    if not ok:
+        warnings.append(line)
 
 
 def run_weekly_click_sequence(
@@ -348,7 +413,8 @@ def _verify_script_log_result(app_key: str, effective_script_choice: Optional[st
     否则边角任务（如异象家具）一挂就会触发整轮重试，而领取类任务不可重入，
     重跑反而把已领取项全判失败（2026-10-03 事故）。
     无任务可判时沿用旧逻辑（parser 自带的 is_all_success）。
-    终末地额外把当日 API 侧关键进度（日活跃）合并进记录，见 _load_api_key_progress_tasks。
+    终末地/鸣潮额外把当日 API 侧关键进度（日活跃/今日活跃）合并进记录，
+    前提是复核前已查过 API（见 _auto_query_daily_progress 的预查询）。
     返回失败原因字符串则改判，返回 None 保持原判。
     """
     try:
@@ -369,6 +435,11 @@ def _verify_script_log_result(app_key: str, effective_script_choice: Optional[st
             from ..services.ok_ww_daily_parser import parse_latest_ok_ww_log
             data = parse_latest_ok_ww_log()
             tag = "ok-ww"
+            if data is not None:
+                # 与终末地同口径：官方「今日活跃」是核心判定，库里已有 API
+                # 任务时（预查询已写）关键计数说了算，脚本边角失败不改判。
+                data.setdefault("tasks", []).extend(
+                    _load_api_key_progress_tasks("wuwa", logger))
         elif app_key == "ArknightsEndfield":
             from ..services.ok_ef_daily_parser import parse_latest_ok_ef_report
             data = parse_latest_ok_ef_report()
@@ -463,6 +534,25 @@ def ensure_qbittorrent_running(controller) -> bool:
             return False
     controller.logger.debug("qBittorrent 已在运行")
     return True
+
+
+# API 权威的游戏：官方活跃度是每日完成的核心口径。这些游戏在日志复核前
+# 必须先查一次 API，否则复核时数据库里没有当天 API 任务，日志里的边角失败
+# 会把「日活跃 100/100」的当天判死（2026-10-31 终末地实锤）。
+API_PROGRESS_GAMES = frozenset({"wuwa", "endfield", "nte"})
+
+
+def _should_auto_query_api_progress(state: str, game_key: str, stopped: bool = False) -> bool:
+    """任务结束后是否查询每日 API。
+
+    success 一律查；failed/warning 只查 API 权威的游戏（鸣潮/终末地/异环）；
+    skipped（维护跳过等）与用户停止不查，避免写入过期快照。
+    """
+    if stopped:
+        return False
+    if state == "success":
+        return True
+    return state in ("failed", "warning") and game_key in API_PROGRESS_GAMES
 
 
 def _auto_query_daily_progress(controller, game_key: str, display_name: str) -> None:
@@ -572,13 +662,8 @@ def _run_single_task(
                 success, message = run_wool_background(controller.logger)
             elif app_key == "QoderFlow":
                 success, message = run_wool_flow_background(controller.logger, ["QODER"])
-            elif app_key == "HsrMonthlyFlow":
-                success, message = run_hsr_monthly_background(controller.logger)
-            elif app_key == "ZzzMonthlyFlow":
-                success, message = run_zzz_monthly_background(controller.logger)
-            elif app_key == "GenshinMonthlyFlow":
-                success, message = run_genshin_monthly_background(controller.logger)
             else:
+                # 只剩 CJFlow；每月商店已改为随对应游戏自动补跑，不再有独立任务
                 success, message = run_cj_background(
                     controller.logger,
                     stop_check=lambda: controller.stop_current_task,
@@ -664,6 +749,19 @@ def _run_single_task(
     if app_key == "InfinityNikki":
         whimbox_lines = format_whimbox_task_summary(nikki_completion_monitor)
 
+    # 官方 API 是每日完成的核心口径：在日志复核之前先查一次，确保
+    # _load_api_key_progress_tasks 拿到的是当天最新活跃度，而不是空库。
+    # 这样鸣潮/终末地/异环 API 已满时，日志里的边角失败不会把整轮判死。
+    _resolved_game_key = resolve_game_key(app_key)
+    _api_progress_queried = False
+    if (
+        _resolved_game_key in API_PROGRESS_GAMES
+        and message != GAME_UPDATING_SKIP
+        and not controller.stop_current_task
+    ):
+        _auto_query_daily_progress(controller, _resolved_game_key, display_name)
+        _api_progress_queried = True
+
     # 事后日志复核（绝区零/星铁March7th/鸣潮/终末地/异环）：日志显示没跑完则改判失败；
     # 无当日日志时保持原判。只做 success→failed，不做反向。放在全部分支之后，
     # ok 脚本分支（elif）和常规分支（else）都能覆盖到。
@@ -714,7 +812,6 @@ def _run_single_task(
     if state == "failed":
         try:
             from .flow_diagnostics import record_failure
-            from ..settings import resolve_game_key
 
             _fail_reason = str(ok_script_attempt.failure_reason) if ok_script_attempt else ""
             record_failure(
@@ -740,7 +837,7 @@ def _run_single_task(
     try:
         from ..services.daily_progress_tracker import get_tracker
         from ..settings.paths import WORKFLOW_DB_PATH
-        from ..settings import resolve_game_key
+
         _tracker = get_tracker(str(WORKFLOW_DB_PATH))
         # 映射 state → record_script_run status
         _progress_status_map = {
@@ -760,10 +857,14 @@ def _run_single_task(
     except Exception as _exc:
         controller.logger.warning("[任务] 记录每日进度失败: %s", _exc)
 
-    # 只在脚本真正跑成功时回填每日数据；失败/跳过/用户终止时不查，
-    # 免得给没跑完的游戏写入"未完成"的假数据。
-    if state == "success":
-        _auto_query_daily_progress(controller, resolve_game_key(app_key), display_name)
+    # 脚本状态与 API 进度分开看：成功必查；鸣潮/终末地/异环即使脚本
+    # 失败或短时长 warning 也要查，否则真实活跃度会整天空白。
+    # 复核前已经查过的不重复请求；用户终止或维护跳过不查，避免过期快照。
+    if (
+        not _api_progress_queried
+        and _should_auto_query_api_progress(state, _resolved_game_key, stopped)
+    ):
+        _auto_query_daily_progress(controller, _resolved_game_key, display_name)
 
     return TaskAppResult(
         app_key=app_key,
@@ -870,6 +971,9 @@ def run_task_batch(
             app_results.append(skip_result)
             if hooks.on_after_app is not None:
                 hooks.on_after_app(skip_result)
+            # 日常已完成也要检查月商店：月初前几天补跑时，日常早就跑过了，
+            # 不能因为"今日已完成"把当月采购一起跳过。
+            _append_monthly_report(controller, app_key, report, warnings)
             if index < len(target_apps) - 1:
                 _interruptible_sleep(controller, inter_task_delay_sec)
             continue
@@ -902,6 +1006,10 @@ def run_task_batch(
 
         if result.should_stop_batch:
             break
+
+        # 日常跑完再补月商店：此时游戏已被脚本关闭，月度流程自己启动客户端；
+        # 本月已买过则只读一次标记直接返回，不产生任何窗口操作。
+        _append_monthly_report(controller, app_key, report, warnings)
 
         if index < len(target_apps) - 1:
             # 任务间隔冷却：期间持续清理刚结束任务弹出的残留启动器，避免干扰下一个脚本

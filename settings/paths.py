@@ -68,5 +68,8 @@ BAIJING_VERIFY_DIR = ARTIFACTS_DIR / "baijing_verify"
 FLOW_FAILURE_DIR = ARTIFACTS_DIR / "flow_failures"
 # 失败截图保留天数（写入时顺手按 mtime 清理，避免无限堆积）
 FLOW_FAILURE_KEEP_DAYS = 14
+# 每月商店采购证据（采购前/后各一张 + index.jsonl），长期保留不自动清理：
+# 每月只跑一次、单张 40~80KB，"看不到商品算已买过"的判定要靠它事后复核。
+MONTHLY_SHOP_EVIDENCE_DIR = ARTIFACTS_DIR / "monthly_shop"
 ASSETS_DIR = BASE_DIR / "assets"
 FLET_EXAMPLES_DIR = TOOLS_DIR / "flet" / "sdk" / "python" / "examples"

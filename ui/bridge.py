@@ -1362,8 +1362,8 @@ class UiBridge(QObject):
         config = _cm.load()
         flow_overrides = config.get("flow_exe_paths") or {}
         for app_key, flow_label in (
-            ("HonkaiStarRail", "崩铁游戏程序（崩铁每月任务）"),
-            ("ZenlessZoneZero", "绝区零游戏程序（绝区零每月任务）"),
+            ("HonkaiStarRail", "崩铁游戏程序（每月商店流程）"),
+            ("ZenlessZoneZero", "绝区零游戏程序（每月商店流程）"),
         ):
             items.append({
                 "app_key": app_key,
@@ -1424,7 +1424,7 @@ class UiBridge(QObject):
             label = it.get("label") or ""
             if "薅羊毛" in label:
                 return "薅羊毛集合"
-            if it.get("field", "").startswith("flow_exe.") or "每月任务" in label:
+            if it.get("field", "").startswith("flow_exe.") or "每月任务" in label or "每月商店" in label:
                 return "独立 / 每月流程"
             if it.get("app_key") == "" or "qBittorrent" in label:
                 return "其它工具"

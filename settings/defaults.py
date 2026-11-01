@@ -84,17 +84,49 @@ DEFAULT_QBITTORRENT: Dict[str, str] = {
 }
 
 
-# 白荆回廊「有猫零售 · 有猫兑换」每月购买（2026-10-25）
-# 商店每月刷新，可以买点小东西；具体买什么当月还没定，所以清单默认留空。
-# items 每项支持两种写法：
-#   "心迹"                                            → 只写商品名
-#   {"name": "心迹", "max_price": 160, "tab": "小猫礼品"} → 带预算上限与页签
-# max_price = 本次购买总价上限（有猫）；max_qty = 是否一次买满剩余库存（默认 false）。
+# 白荆回廊「有猫零售 · 有猫兑换 · 小猫礼品」每月购买（2026-11-01 用户确认清单）
+# 用户 2026-11-01 明确：只换两张抽卡券（同调线索 / 一刹闪回）+ 心迹，别的都不换。
+# 两张券每月库存各 5（单价 40），按用户选择「买满库存」逐件购买（qty=5）；
+# 心迹库存 1（单价 160）。items 每项支持两种写法：
+#   "心迹"                                             → 只写商品名（买 1 件）
+#   {"name": "同调线索", "qty": 5, "tab": "小猫礼品"}   → 带数量与页签
+# max_price = 单次购买弹窗总价上限（有猫）；max_qty = 一次点「最大」买满（默认 false，
+# 本页签的「最大」按钮未实测，优先用 qty 逐件买）。
 # 清单为空 → 每月任务只报「待定」，不进商店、不买东西（runtime/baijing_cat_exchange.py）。
 DEFAULT_BAIJING_CAT_EXCHANGE: Dict = {
     "enabled": True,
-    "tab": "",
-    "items": [],
+    "tab": "小猫礼品",
+    "items": [
+        {"name": "同调线索", "qty": 5},
+        {"name": "一刹闪回", "qty": 5},
+        {"name": "心迹", "qty": 1},
+    ],
+}
+
+
+# 无限暖暖「晶石兑换」每月兑换抽卡道具（2026-11-01 用户确认）
+# 共鸣水晶 / 启示水晶各本月限购 3 个（单价 120 晶石），按用户习惯买满库存。
+# 由 NikkiLauncher 的 action=nikki_calendar 在进主界面后执行；按月门控
+# （meta 键 monthly_sequence:nikki_crystal_exchange），逐件购买并以「本月限购」递减到账。
+DEFAULT_NIKKI_CRYSTAL_EXCHANGE: Dict = {
+    "enabled": True,
+    "items": [
+        {"name": "共鸣水晶", "qty": 3},
+        {"name": "启示水晶", "qty": 3},
+    ],
+}
+
+
+# 无限暖暖「商城 → 共鸣商店 → 静谧水滴兑换」每月兑换（2026-11-01 用户确认）
+# 必须切到「静谧水滴兑换」页签（用万象星实/棱镜等专属商品校验），只换两张抽卡道具：
+# 启示水晶 / 共鸣水晶，各买满本月限购 5 个（单价 40）。按月门控
+# monthly_sequence:nikki_resonance_shop；**澎湃浪花兑换页不碰**。
+DEFAULT_NIKKI_RESONANCE_SHOP: Dict = {
+    "enabled": True,
+    "items": [
+        {"name": "启示水晶", "qty": 5},
+        {"name": "共鸣水晶", "qty": 5},
+    ],
 }
 
 
@@ -191,6 +223,10 @@ DEFAULT_APPS = {
         # 鸣潮走 prelaunch 先把游戏拉起，ok-ww 启动后无需再盲等初始化：
         # 后续点击/监控都不依赖脚本就绪（监控只看游戏退出），5 秒足够进程落盘。
         "initial_wait": 5,
+        # ok-ww 日常 2-4 分钟即可跑完；短时长已由 execute_task 用
+        # "Successfully Executed Task" 日志复核，不能再按 MIN_RUN_TIME 降级 warning
+        # （否则 272s 的成功会被记成 skipped，并跳过每日 API 回填）。
+        "skip_min_run_warning": True,
         # 拉 ok-ww 前必须等游戏窗口稳定，否则 ok-ww 会误判游戏没起而重复启动客户端。
         # 这是条件等待（窗口一稳立刻走），不是盲睡。
         "wait_game_window_before_script": True,
@@ -325,8 +361,11 @@ DEFAULT_APPS = {
     "InfinityNikki": {
         "display_name": "无限暖暖",
         "script_name": "whimbox",
-        # 不配 prelaunch_flow：一条龙直接拉 whimbox，由它自己启动游戏（10-22 验证可行）。
-        # NikkiLauncher 流程定义保留在 flow_configs.json，留作手动/其他用途，默认不接线。
+        # 2026-11-01 起接线 NikkiLauncher：先由本程序启动/进入主界面并执行
+        # 「奇想日历领奖 + 晶石兑换/共鸣商店」，再把已在主界面的游戏交给 whimbox 跑一条龙
+        # （whimbox 的 StartGameTask 检测到已在游戏会跳过启动）。日历流程内部失败
+        # 只记日志/flow_failures，不阻断 whimbox。
+        "prelaunch_flow": "NikkiLauncher",
         "type": "script",
         "launcher": "",
         "launcher_params": ["startOneDragon"],

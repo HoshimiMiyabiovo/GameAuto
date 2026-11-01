@@ -8,8 +8,8 @@
   5. 启动器更新态 → 等更新完成 → 再点启动
   6. 登录页「点击进入游戏」/「确认」/「退出游戏」防误点
   7. 加载到主界面连续两次命中才算成功
-  8. NikkiLauncher 流程定义在位，但 InfinityNikki 不挂 prelaunch_flow
-     （一条龙直走 whimbox 自启动；前置流程留作手动/其他用途，默认不接线）
+  8. NikkiLauncher 流程定义在位，InfinityNikki 默认接线 prelaunch_flow=NikkiLauncher
+     （2026-11-01 起：先进主界面跑奇想日历/晶石兑换，再交给 whimbox 一条龙）
 
 跑法：.venv\\Scripts\\python.exe artifacts\\test_nikki_launcher_20261022.py
 """
@@ -224,9 +224,15 @@ def test_wiring():
     step = (flow.get("steps") or [{}])[0]
     check("流程存在且启用", bool(flow) and flow.get("enabled") is True)
     check("动作是 nikki_enter_game", step.get("action") == "nikki_enter_game", step)
+    steps = flow.get("steps") or []
     check(
-        "InfinityNikki 未挂 prelaunch_flow（直走 whimbox 自启动）",
-        not (APPS.get("InfinityNikki") or {}).get("prelaunch_flow"),
+        "第二步是 nikki_calendar（2026-11-01 奇想日历/晶石兑换）",
+        len(steps) >= 2 and steps[1].get("action") == "nikki_calendar",
+        steps,
+    )
+    check(
+        "InfinityNikki 默认接线 NikkiLauncher（2026-11-01 起）",
+        (APPS.get("InfinityNikki") or {}).get("prelaunch_flow") == "NikkiLauncher",
         (APPS.get("InfinityNikki") or {}).get("prelaunch_flow"),
     )
     src = inspect.getsource(foreground_flow_runner.run_flow)

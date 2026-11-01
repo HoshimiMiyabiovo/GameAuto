@@ -24,13 +24,17 @@ artifacts/ref_baijing_cat_exchange_20261025.png，1919x1079）：
         "enabled": true,
         "tab": "小猫礼品",
         "items": [
-          {"name": "心迹", "max_price": 160, "max_qty": false, "tab": "小猫礼品"}
+          {"name": "同调线索", "qty": 5},
+          {"name": "一刹闪回", "qty": 5},
+          {"name": "心迹", "qty": 1}
         ]
       }
     }
   - items 支持字符串（"心迹"）或对象（上面那种）
-  - max_price = 本次购买**总价**上限（有猫）；设了但读不到合计金额 → 不买（诚实失败）
-  - max_qty = 是否点「最大」一次买满剩余库存（默认 false，买 1 件）
+  - qty = 一项买几件（默认 1）。逐件走「点商品→购买」，每件都有购买弹窗确认；
+    库存不够会停在「剩余0件」，差额记进 shortfall（部分买到仍算 success，detail 写清）
+  - max_price = 单次购买弹窗的**总价**上限（有猫）；设了但读不到合计金额 → 不买（诚实失败）
+  - max_qty = 是否点「最大」一次买满剩余库存（默认 false）；本页签未实测，优先用 qty
 """
 
 import difflib
@@ -120,8 +124,8 @@ def _parse_total(text: str) -> Optional[int]:
 def load_cat_exchange_plan(logger: logging.Logger) -> Dict:
     """读 app_config.json → baijing.cat_exchange，返回规范化后的购买计划。
 
-    返回 {"enabled": bool, "tab": str, "items": [{"name","max_price","max_qty","tab"}]}
-    读不到配置时返回空清单（调用方据此跳过，绝不猜着买）。
+    返回 {"enabled": bool, "tab": str, "items": [{"name","qty","max_price","max_qty","tab"}]}
+    qty 缺省/非法/<1 一律按 1 处理；读不到配置时返回空清单（调用方据此跳过，绝不猜着买）。
     """
     plan: Dict = {"enabled": True, "tab": "", "items": []}
     try:
@@ -152,9 +156,16 @@ def load_cat_exchange_plan(logger: logging.Logger) -> Dict:
             max_price = int(max_price) if max_price not in (None, "") else None
         except (TypeError, ValueError):
             max_price = None
+        try:
+            qty = int(raw.get("qty", 1))
+        except (TypeError, ValueError):
+            qty = 1
+        if qty < 1:
+            qty = 1
         plan["items"].append(
             {
                 "name": name,
+                "qty": qty,
                 "max_price": max_price,
                 "max_qty": bool(raw.get("max_qty", False)),
                 "tab": str(raw.get("tab") or plan["tab"] or "").strip(),
@@ -162,7 +173,14 @@ def load_cat_exchange_plan(logger: logging.Logger) -> Dict:
         )
     logger.info(
         f"[白荆回廊·有猫兑换] 购买清单载入 {len(plan['items'])} 项"
-        + (f"：{'、'.join(i['name'] for i in plan['items'])}" if plan["items"] else "（空清单，待定）")
+        + (
+            "："
+            + "、".join(
+                f"{i['name']}×{i['qty']}" if i["qty"] > 1 else i["name"] for i in plan["items"]
+            )
+            if plan["items"]
+            else "（空清单，待定）"
+        )
     )
     return plan
 
@@ -470,56 +488,93 @@ def buy_cat_exchange_items(
     items: List[Dict],
     stop_check=None,
 ) -> Dict:
-    """按清单逐项购买（页签按项切换）。返回汇总结果。"""
+    """按清单逐项购买（页签按项切换；qty > 1 时逐件买）。返回汇总结果。
+
+    qty 走逐件购买而不是点「最大」：单件路径（点商品→购买→弹窗消失）是实测过的，
+    「最大」按钮在本页签没有验证过；库存不够时多出的轮次会命中「已买完」，
+    差额记进 shortfall（部分买到仍报 success，detail 里如实写出）。
+    """
     result: Dict = {
         "status": "skipped",
         "purchased": 0,
         "items": [],
         "missing": [],
         "failed": [],
+        "shortfall": [],
         "detail": "",
     }
     if not items:
         result.update(status="skipped", detail="购买清单为空（待定）")
         return result
     current_tab = ""
+    stopped = False
     for item in items:
         if _stopped(stop_check):
-            result["detail"] = "用户停止"
-            return result
+            stopped = True
+            break
         want_tab = item.get("tab") or ""
         if want_tab and want_tab != current_tab:
             switch_cat_tab(logger, hwnd, want_tab, stop_check=stop_check)
             current_tab = want_tab
-        hwnd = _ensure_window(logger, hwnd)
-        if not hwnd:
-            result["failed"].append(f"{item['name']}(窗口丢失)")
-            result["detail"] = "游戏窗口丢失"
+        try:
+            qty = int(item.get("qty") or 1)
+        except (TypeError, ValueError):
+            qty = 1
+        qty = max(1, qty)
+        bought = 0
+        last_out: Optional[Dict] = None
+        for _ in range(qty):
+            if _stopped(stop_check):
+                stopped = True
+                break
+            hwnd = _ensure_window(logger, hwnd)
+            if not hwnd:
+                last_out = {"state": "failed", "detail": "游戏窗口丢失"}
+                break
+            out = _buy_one_cat_item(logger, hwnd, item, stop_check=stop_check)
+            if out.get("state") == "purchased":
+                bought += 1
+                continue
+            last_out = out
             break
-        out = _buy_one_cat_item(logger, hwnd, item, stop_check=stop_check)
-        state = out.get("state")
-        if state == "purchased":
-            result["purchased"] += 1
-            result["items"].append(item["name"])
-        elif state == "sold_out":
-            result["missing"].append(f"{item['name']}(已买完)")
-        elif state == "missing":
-            # 没找到 ≠ 已买完：可能是商品不在当前页签/需要翻页 → 老实记「未找到」
-            result["missing"].append(f"{item['name']}(未找到)")
+        if bought:
+            result["purchased"] += bought
+            result["items"].append(f"{item['name']}×{bought}" if qty > 1 else item["name"])
+            if bought < qty:
+                reason = (last_out or {}).get("state") or "stopped"
+                result["shortfall"].append(f"{item['name']} {bought}/{qty}（{reason}）")
         else:
-            result["failed"].append(f"{item['name']}({state})")
+            state = (last_out or {}).get("state") or "failed"
+            if state == "sold_out":
+                result["missing"].append(f"{item['name']}(已买完)")
+            elif state == "missing":
+                # 没找到 ≠ 已买完：可能是商品不在当前页签/需要翻页 → 老实记「未找到」
+                result["missing"].append(f"{item['name']}(未找到)")
+            elif (last_out or {}).get("detail") == "游戏窗口丢失":
+                result["failed"].append(f"{item['name']}(窗口丢失)")
+            else:
+                result["failed"].append(f"{item['name']}({state})")
         logger.info(
-            f"[白荆回廊·有猫兑换] {item['name']} → {state}（{out.get('detail') or ''}）"
+            f"[白荆回廊·有猫兑换] {item['name']} → 买到 {bought}/{qty}"
+            + (f"（{last_out.get('detail') or last_out.get('state')}）" if last_out else "")
         )
+        if stopped:
+            break
+
+    if stopped:
+        result["detail"] = "用户停止"
+        logger.info(f"[白荆回廊·有猫兑换] {result['detail']}（已买 {result['purchased']} 件）")
+        return result
 
     if result["purchased"]:
         result["status"] = "success"
-        result["detail"] = (
-            f"已购买 {result['purchased']}/{len(items)} 项："
-            + "、".join(result["items"])
-            + (f"；未买到：{'、'.join(result['missing'])}" if result["missing"] else "")
-            + (f"；失败：{'、'.join(result['failed'])}" if result["failed"] else "")
-        )
+        result["detail"] = f"已购买 {result['purchased']} 件：" + "、".join(result["items"])
+        if result["shortfall"]:
+            result["detail"] += f"；未买满：{'、'.join(result['shortfall'])}"
+        if result["missing"]:
+            result["detail"] += f"；未买到：{'、'.join(result['missing'])}"
+        if result["failed"]:
+            result["detail"] += f"；失败：{'、'.join(result['failed'])}"
     elif result["missing"] and not result["failed"] and all("已买完" in m for m in result["missing"]):
         result["status"] = "already"
         result["detail"] = "清单内商品均已买完/不可买：" + "、".join(result["missing"])

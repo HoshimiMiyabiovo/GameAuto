@@ -1496,6 +1496,7 @@ _BUILTIN_ACTIONS = (
     "zzz_shop_buy",
     "monthly_exchange",
     "nikki_enter_game",
+    "nikki_calendar",
     "starrail_enter_main",
     "genshin_enter_main",
     "qoder_open_campaign",
@@ -1571,6 +1572,20 @@ def _dispatch_step_action(
             hwnd = game_hwnd
             pid = game_pid or pid
         logger.info(f"[{flow_key}] 步骤{step_no}进入主界面成功: {nikki_msg}")
+    elif action == "nikki_calendar":
+        # 无限暖暖：L → 奇想日历 → 奇迹之冠搭配赛领奖 → 晶石兑换（每月）
+        from .nikki_calendar import run_nikki_calendar_flow
+
+        calendar_ok, calendar_msg = run_nikki_calendar_flow(
+            logger,
+            hwnd,
+            scales,
+            confidences,
+            stop_check=stop_check,
+        )
+        if not calendar_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({calendar_msg})", hwnd, pid
+        logger.info(f"[{flow_key}] 步骤{step_no}奇想日历完成: {calendar_msg}")
     elif action == "qoder_open_campaign":
         # 头像 → 权益中心：活动弹窗不会自动出现，必须走常驻入口
         from .qoder_claim import open_campaign

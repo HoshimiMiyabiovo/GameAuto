@@ -5,20 +5,74 @@ import HuskarUI.Basic
 
 Item {
     id: root
+    objectName: "staminaConfigRoot"
 
     property real fs: Math.max(0.8, Math.min(1.25, width / 1400))
     property var configs: []
     property bool loading: false
     property bool saving: false
     property string statusText: ""
+    property int selectedIndex: 0
+    // 页面只渲染当前游戏的一张卡：7 张卡同时构建是首帧卡顿的主因。
+    property var visibleConfigs: {
+        if (!configs || configs.length === 0) return []
+        var idx = Math.max(0, Math.min(selectedIndex, configs.length - 1))
+        return [configs[idx]]
+    }
+    // ListView 会回收滚出屏幕的卡片，未保存的编辑必须放在页面级草稿里，
+    // 否则滚远再滚回来输入就没了。键 = gameKey + 分隔符 + fieldKey。
+    property var fieldDrafts: ({})
+
+    function draftKey(gameKey, fieldKey) {
+        return String(gameKey || "") + "\u0001" + String(fieldKey || "")
+    }
+
+    function setFieldDraft(gameKey, fieldKey, valueText, boolValue, kind) {
+        if (!gameKey || !fieldKey) return
+        var drafts = fieldDrafts
+        drafts[draftKey(gameKey, fieldKey)] = {
+            valueText: String(valueText === undefined || valueText === null ? "" : valueText),
+            boolValue: !!boolValue,
+            kind: String(kind || ""),
+            dirty: true
+        }
+        fieldDrafts = drafts
+    }
+
+    function fieldDraft(gameKey, fieldKey) {
+        return fieldDrafts[draftKey(gameKey, fieldKey)] || null
+    }
+
+    function clearGameDrafts(gameKey) {
+        var prefix = String(gameKey || "") + "\u0001"
+        var drafts = fieldDrafts
+        var next = {}
+        for (var key in drafts) {
+            if (key.indexOf(prefix) !== 0) next[key] = drafts[key]
+        }
+        fieldDrafts = next
+    }
 
     function loadConfigs() {
         loading = true
         statusText = "读取中..."
         try {
+            var oldKey = (configs.length > selectedIndex && configs[selectedIndex])
+                         ? String(configs[selectedIndex].game_key || "") : ""
             var raw = bridge.getStaminaConfigs()
             var parsed = JSON.parse(raw || "[]")
+            fieldDrafts = ({})
             configs = Array.isArray(parsed) ? parsed : [parsed]
+            var nextIndex = 0
+            if (oldKey) {
+                for (var i = 0; i < configs.length; i++) {
+                    if (String(configs[i].game_key || "") === oldKey) {
+                        nextIndex = i
+                        break
+                    }
+                }
+            }
+            selectedIndex = Math.max(0, Math.min(nextIndex, Math.max(0, configs.length - 1)))
             statusText = "已读取 " + configs.length + " 个脚本配置"
         } catch (e) {
             configs = []
@@ -70,6 +124,7 @@ Item {
                 for (var j = 0; j < fieldModel.count; j++) {
                     fieldModel.setProperty(j, "dirty", false)
                 }
+                clearGameDrafts(card.gameKey)
                 card.refreshDirty()
                 statusText = (card.title || "配置") + " 已保存 " + changed + " 项（旧文件已备份）"
             } else {
@@ -95,14 +150,14 @@ Item {
                 spacing: 2
                 HusText {
                     text: "脚本刷本配置"
-                    font.pixelSize: Math.round(20 * root.fs)
+                    font.pixelSize: Math.max(22, Math.round(20 * root.fs))
                     font.bold: true
                     color: "#2c241d"
                 }
                 HusText {
-                    text: "第一期：原神 / 鸣潮 / 终末地 / 异环 / 暖暖；第二期：崩铁 / 绝区零。只改白名单字段，保存前自动备份；脚本或游戏运行中禁止写入。绝区零 OneDragon 不支持多账户，固定使用 config/01。脚本自己的 UI 改了配置后请点「刷新」同步；保存只提交本页改过的字段。"
-                    font.pixelSize: Math.round(12 * root.fs)
-                    color: "#6d6257"
+                    text: "支持原神 / 崩铁 / 绝区零 / 鸣潮 / 终末地 / 异环 / 暖暖。保存前自动备份，脚本或游戏运行中禁止写入；绝区零 OneDragon 仅支持单账户（固定 config/01）。脚本内改过配置请点「刷新」同步。"
+                    font.pixelSize: Math.max(14, Math.round(13 * root.fs))
+                    color: "#5f554b"
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                 }
@@ -119,37 +174,61 @@ Item {
         HusText {
             visible: !!root.statusText
             text: root.statusText
-            font.pixelSize: Math.round(12 * root.fs)
+            font.pixelSize: Math.max(13, Math.round(12 * root.fs))
             color: root.statusText.indexOf("失败") >= 0 ? "#b04b44" : "#2f7d4a"
             wrapMode: Text.Wrap
             Layout.fillWidth: true
         }
 
-        Flickable {
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+            HusText {
+                text: "选择游戏"
+                font.pixelSize: Math.max(14, Math.round(13 * root.fs))
+                color: "#2c241d"
+                Layout.alignment: Qt.AlignVCenter
+            }
+            Flow {
+                Layout.fillWidth: true
+                spacing: 8
+                Repeater {
+                    objectName: "staminaGameSelector"
+                    model: root.configs
+                    HusButton {
+                        text: (modelData && modelData.display_name)
+                              ? modelData.display_name : ("配置 " + (index + 1))
+                        type: index === root.selectedIndex
+                              ? HusButton.Type_Primary : HusButton.Type_Outlined
+                        enabled: !root.saving
+                        onClicked: root.selectedIndex = index
+                    }
+                }
+            }
+        }
+
+        ListView {
+            id: cardList
+            objectName: "staminaCardList"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            contentWidth: width
-            contentHeight: contentColumn.implicitHeight
             clip: true
+            spacing: 14
+            cacheBuffer: 100
+            // 只渲染当前游戏的一张卡；不复用 delegate，草稿已存到页面级。
+            reuseItems: false
+            model: root.visibleConfigs
             ScrollBar.vertical: ScrollBar {}
 
-            ColumnLayout {
-                id: contentColumn
-                width: parent.width
-                spacing: 12
-
-                Repeater {
-                    model: root.configs
-
-                    delegate: HusCard {
-                        id: gameCard
-                        property var gameData: modelData
-                        property bool locked: !!(modelData && modelData.running)
-                        property string gameKey: (modelData && modelData.game_key) || ""
-                        property int dirtyCount: 0
-                        property int visibilityVersion: 0
-                        Layout.fillWidth: true
-                        padding: 14
+            delegate: HusCard {
+                id: gameCard
+                width: cardList.width
+                property var gameData: modelData
+                property bool locked: !!(modelData && modelData.running)
+                property string gameKey: (modelData && modelData.game_key) || ""
+                property int dirtyCount: 0
+                property int visibilityVersion: 0
+                padding: 14
                         title: (modelData && modelData.display_name) ? modelData.display_name : "未知脚本"
 
                         function refreshDirty() {
@@ -164,11 +243,14 @@ Item {
                             visibilityVersion++
                         }
 
-                        ListModel { id: fieldModel }
+                        ListModel {
+                            id: fieldModel
+                            objectName: "fieldModel_" + gameCard.gameKey
+                        }
 
                         contentItem: ColumnLayout {
                             id: cardContent
-                            spacing: 8
+                            spacing: 10
                             Layout.fillWidth: true
 
                             Component.onCompleted: {
@@ -206,6 +288,16 @@ Item {
                                         dirty: false
                                     })
                                 }
+                                // 卡片被 ListView 回收后重建时，把页面级草稿灌回去
+                                var drafts = root.fieldDrafts
+                                for (var j = 0; j < fieldModel.count; j++) {
+                                    var item = fieldModel.get(j)
+                                    var draft = drafts[root.draftKey(gameCard.gameKey, item.fieldKey)]
+                                    if (!draft) continue
+                                    fieldModel.setProperty(j, "valueText", draft.valueText)
+                                    fieldModel.setProperty(j, "boolValue", draft.boolValue)
+                                    fieldModel.setProperty(j, "dirty", true)
+                                }
                                 gameCard.refreshDirty()
                                 gameCard.refreshVisibility()
                             }
@@ -214,7 +306,7 @@ Item {
                                 visible: !!(gameCard.gameData && gameCard.gameData.error)
                                 text: "读取失败: " + (gameCard.gameData ? gameCard.gameData.error : "")
                                 color: "#b04b44"
-                                font.pixelSize: Math.round(12 * root.fs)
+                                font.pixelSize: Math.max(13, Math.round(12 * root.fs))
                                 wrapMode: Text.Wrap
                                 Layout.fillWidth: true
                             }
@@ -223,16 +315,19 @@ Item {
                                 visible: gameCard.locked
                                 text: "脚本/游戏正在运行，暂不允许修改。已经全部关闭的话，点右上角「刷新」重新检测；仍锁着说明有相关进程没退出。"
                                 color: "#b66f1f"
-                                font.pixelSize: Math.round(12 * root.fs)
+                                font.pixelSize: Math.max(13, Math.round(12 * root.fs))
                                 wrapMode: Text.Wrap
                                 Layout.fillWidth: true
                             }
 
                             HusText {
                                 visible: !!(gameCard.gameData && gameCard.gameData.primary_file)
-                                text: "配置: " + (gameCard.gameData ? gameCard.gameData.primary_file : "")
-                                color: "#8a7d70"
-                                font.pixelSize: Math.round(11 * root.fs)
+                                text: ((gameCard.gameData && gameCard.gameData.display_name)
+                                       ? gameCard.gameData.display_name : "当前游戏")
+                                      + " 配置: "
+                                      + (gameCard.gameData ? gameCard.gameData.primary_file : "")
+                                color: "#7a6d60"
+                                font.pixelSize: Math.max(12, Math.round(11 * root.fs))
                                 wrapMode: Text.Wrap
                                 Layout.fillWidth: true
                             }
@@ -241,7 +336,7 @@ Item {
                                 visible: gameCard.dirtyCount > 0
                                 text: "有 " + gameCard.dirtyCount + " 项未保存（仅保存本页改过的字段）"
                                 color: "#b66f1f"
-                                font.pixelSize: Math.round(11 * root.fs)
+                                font.pixelSize: Math.max(12, Math.round(11 * root.fs))
                                 wrapMode: Text.Wrap
                                 Layout.fillWidth: true
                             }
@@ -250,8 +345,8 @@ Item {
                                 id: fieldsGrid
                                 Layout.fillWidth: true
                                 columns: root.width >= 1000 ? 2 : 1
-                                columnSpacing: 18
-                                rowSpacing: 10
+                                columnSpacing: 22
+                                rowSpacing: 14
 
                                 Repeater {
                                     model: fieldModel
@@ -299,7 +394,7 @@ Item {
                                                 spacing: 1
                                                 HusText {
                                                     text: model.label || ""
-                                                    font.pixelSize: Math.round(13 * root.fs)
+                                                    font.pixelSize: Math.max(14, Math.round(13 * root.fs))
                                                     color: "#2c241d"
                                                     wrapMode: Text.Wrap
                                                     Layout.fillWidth: true
@@ -307,8 +402,8 @@ Item {
                                                 HusText {
                                                     visible: !!model.help
                                                     text: model.help || ""
-                                                    font.pixelSize: Math.round(10 * root.fs)
-                                                    color: "#8a7d70"
+                                                    font.pixelSize: Math.max(12, Math.round(11 * root.fs))
+                                                    color: "#6f6358"
                                                     wrapMode: Text.Wrap
                                                     Layout.fillWidth: true
                                                 }
@@ -320,6 +415,8 @@ Item {
                                                 onClicked: {
                                                     fieldModel.setProperty(fieldCell.fieldIndex, "boolValue", checked)
                                                     fieldModel.setProperty(fieldCell.fieldIndex, "dirty", true)
+                                                    var boolItem = fieldModel.get(fieldCell.fieldIndex)
+                                                    root.setFieldDraft(gameCard.gameKey, boolItem.fieldKey, "", checked, "bool")
                                                     gameCard.refreshDirty()
                                                     gameCard.refreshVisibility()
                                                 }
@@ -333,7 +430,7 @@ Item {
 
                                             HusText {
                                                 text: model.label || ""
-                                                font.pixelSize: Math.round(13 * root.fs)
+                                                font.pixelSize: Math.max(14, Math.round(13 * root.fs))
                                                 color: "#2c241d"
                                                 wrapMode: Text.Wrap
                                                 Layout.fillWidth: true
@@ -341,8 +438,8 @@ Item {
                                             HusText {
                                                 visible: !!model.help
                                                 text: model.help || ""
-                                                font.pixelSize: Math.round(10 * root.fs)
-                                                color: "#8a7d70"
+                                                font.pixelSize: Math.max(12, Math.round(11 * root.fs))
+                                                color: "#6f6358"
                                                 wrapMode: Text.Wrap
                                                 Layout.fillWidth: true
                                             }
@@ -350,7 +447,7 @@ Item {
                                             HusText {
                                                 visible: model.readonly === true
                                                 text: model.valueText || "（无）"
-                                                font.pixelSize: Math.round(12 * root.fs)
+                                                font.pixelSize: Math.max(13, Math.round(12 * root.fs))
                                                 color: "#2c241d"
                                                 wrapMode: Text.Wrap
                                                 Layout.fillWidth: true
@@ -409,6 +506,8 @@ Item {
                                                     var raw = (item.value === undefined ? item.label : item.value)
                                                     fieldModel.setProperty(fieldCell.fieldIndex, "valueText", raw)
                                                     fieldModel.setProperty(fieldCell.fieldIndex, "dirty", true)
+                                                    var selectItem = fieldModel.get(fieldCell.fieldIndex)
+                                                    root.setFieldDraft(gameCard.gameKey, selectItem.fieldKey, raw, false, selectItem.kind)
                                                     gameCard.refreshDirty()
                                                     gameCard.refreshVisibility()
                                                 }
@@ -430,6 +529,8 @@ Item {
                                                 onTextEdited: {
                                                     fieldModel.setProperty(fieldCell.fieldIndex, "valueText", text)
                                                     fieldModel.setProperty(fieldCell.fieldIndex, "dirty", true)
+                                                    var inputItem = fieldModel.get(fieldCell.fieldIndex)
+                                                    root.setFieldDraft(gameCard.gameKey, inputItem.fieldKey, text, false, inputItem.kind)
                                                     gameCard.refreshDirty()
                                                     gameCard.refreshVisibility()
                                                 }
@@ -461,8 +562,6 @@ Item {
                                 }
                             }
                         }
-                    }
-                }
             }
         }
     }

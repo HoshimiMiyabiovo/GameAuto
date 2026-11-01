@@ -24,6 +24,7 @@ import time
 from typing import Callable, Dict, List, Optional, Tuple
 
 from ..settings.paths import BASE_DIR
+from .monthly_shop_evidence import capture_shop_evidence
 
 LOGGER = logging.getLogger("GameAutomation")
 
@@ -42,6 +43,15 @@ NO_POPUP = "no_popup"            # 点商品后无弹窗（大概率已达上限
 ITEM_MISSING = "item_missing"    # 商品图标匹配不到
 CONFIRM_GONE_FAIL = "confirm_gone_fail"  # 点了确认但弹窗不关（如余额不足换了提示）
 STOPPED = "stopped"              # 用户请求停止
+
+# 「本月已经买过」的两种表现，都不计失败（用户 2026-11-01 拍板）：
+#   1. 点了商品不出弹窗 —— 已达上限
+#   2. 页面上根本看不到商品 —— 到上限后商店直接不展示该商品
+# 买之前已确认进对页签，所以"看不到"按已购买处理，不是失败。
+ALREADY_BOUGHT_REASONS = (
+    "已达上限或无弹窗",
+    "页面上没看到该商品，按已购买处理",
+)
 
 
 def _abs_template(path: str) -> str:
@@ -198,11 +208,13 @@ def buy_shop_groups(
 
     step 需要的字段：
     - confirm_template: 兑换确认弹窗的「确认」按钮模板
+    - log_label: 日志/证据截图前缀（默认「后勤商店」）
     - shop_groups: [{"name", "tab_template"?, "tab_selected_template"?,
                      "items": [{"name", "template", "count"}]}]
 
     返回 (是否全部买够, 摘要消息)。
     """
+    log_label = str(step.get("log_label") or "后勤商店").strip() or "后勤商店"
     confirm_template = _abs_template(str(step.get("confirm_template", "") or ""))
     if not confirm_template or not os.path.isfile(confirm_template):
         return False, "确认按钮模板缺失，无法采购"
@@ -216,6 +228,11 @@ def buy_shop_groups(
     summaries: List[str] = []
     all_ok = True
     stopped = False
+    missing_count = 0      # 页面上没看到的商品数（按"已买过"处理）
+    total_items = 0        # 通过配置检查、真正参与采购的商品数
+
+    # 采购前留一张货架截图：「看不到商品算已买过」的判定要靠它事后复核
+    capture_shop_evidence(logger, hwnd, flow_label=log_label, stage="采购前")
 
     for group in groups:
         if stopped:
@@ -270,6 +287,8 @@ def buy_shop_groups(
             if not has_template:
                 logger.info(f"[商店采购] {group_name}/{item_name} 无模板，使用 OCR 文字定位: {ocr_text}")
 
+            total_items += 1
+
             bought = 0
             reason = ""
             for _ in range(count):
@@ -288,7 +307,8 @@ def buy_shop_groups(
                     reason = "已达上限或无弹窗"
                     break
                 if result == ITEM_MISSING:
-                    reason = "商品定位失败（模板/OCR 均未命中）"
+                    missing_count += 1
+                    reason = "页面上没看到该商品，按已购买处理"
                     break
                 if result == CONFIRM_GONE_FAIL:
                     reason = "确认后弹窗未关"
@@ -298,13 +318,29 @@ def buy_shop_groups(
                 logger.info(f"[商店采购] {group_name}/{item_name} 完成 {bought}/{count}")
                 summaries.append(f"{group_name}/{item_name}: {bought}/{count}")
             else:
-                logger.warning(
-                    f"[商店采购] {group_name}/{item_name} 未买够: {bought}/{count}（{reason or '未知'}）"
+                log_fn = logger.info if reason in ALREADY_BOUGHT_REASONS else logger.warning
+                log_fn(
+                    f"[商店采购] {group_name}/{item_name}: {bought}/{count}（{reason or '未知'}）"
                 )
                 summaries.append(f"{group_name}/{item_name}: {bought}/{count}（{reason or '未知'}）")
-                if reason not in ("已达上限或无弹窗",):
-                    # 已达上限是正常业务状态（之前买过），不计失败
+                if reason not in ALREADY_BOUGHT_REASONS:
+                    # 已达上限 / 页面没看到商品 = 本月已买过，正常业务状态，不计失败
                     all_ok = False
+
+    if total_items and missing_count == total_items:
+        # 整张清单一件都没看到：按用户口径算"本月已买完"，但留一条可排查的日志
+        logger.warning(
+            f"[商店采购] 清单 {total_items} 项全部未在页面上出现，按本月已购买处理"
+            "（如确认没买过，请检查商品模板 / OCR 文字）"
+        )
+
+    # 采购后证据：仍停在商店页，能看到剩余月上限；stopped 时也留，记下停在哪
+    detail = "，".join(summaries) if summaries else "无商品"
+    if stopped:
+        detail += "（用户停止）"
+    elif not all_ok:
+        detail += "（有未买够项，见日志）"
+    capture_shop_evidence(logger, hwnd, flow_label=log_label, stage="采购后", summary=detail)
 
     if stopped:
         return False, "用户停止 | " + "，".join(summaries)

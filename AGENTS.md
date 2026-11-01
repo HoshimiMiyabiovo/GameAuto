@@ -43,6 +43,23 @@ This file mirrors important repository-level development notes inside the projec
 - Python ↔ QML 桥接在 `ui/bridge.py`（UiBridge），主题令牌在 `ui/theme.py`。
 - **凭据输入必须用 `components/CredentialInput.qml`**（默认 `echoMode: TextInput.Password`，自带"显示/隐藏"按钮）。**禁止**直接用 `HusInput` 接收 token / cookie / api_key，会明码显示。
 
+### QML 视图加载 / 回收（2026-11-01）
+
+- `Main.qml` 的所有视图用 `Loader` + `*EverLoaded` 门控：首屏只加载当前视图，其余首次切到才加载
+  （`asynchronous: true`）。**不要**改成全部 `active: true`，首屏会白吃上百 MB。
+- **重页面会延迟释放**：距离最后一次切页超过 `viewReleaseDelayMs`（默认 180000 = 3 分钟）后，
+  `releaseInactiveHeavyViews()` 把**非当前页**的 `dailyEverLoaded / gachaEverLoaded / nikkiEverLoaded /
+  wuwaEverLoaded / staminaConfigEverLoaded` 置 false → Loader 销毁 item，切回时重建。
+  每个重页面 Loader 的 `onVisibleChanged` 调 `touchViewActivity()` 重置计时。
+- 释放的三道闸：`viewReleaseDelayMs > 0`（设 0 = 关闭回收）、`!bridge.isRunning`
+  （任务在跑时 DailyView 有轮询、GachaView 可能在导入，销毁会中断）、且 `currentView !== 该页`。
+- **实测口径（离屏 2026-11-01，别重复踩）**：逐页加载 +10~29MB/页，10 页切一遍 +142MB 不回落；
+  但 **Windows 堆不会把释放的内存立刻还给系统**，所以"切一圈停住"时任务管理器看不出下降；
+  频繁切同一页反而更费（反复重建 10 轮 +24MB）。收益在长期不用的页面和后续分配复用，
+  默认只挑 5 个重页面、延迟 3 分钟，就是为了不让正常切页被 1~2 秒的重建拖慢。
+- 回归：`tests/suite_view_release_20261101.py`（自己设 `QT_QPA_PLATFORM=offscreen`，不弹窗；
+  验证延迟窗口、超时释放、切回重建、isRunning 保护、delay=0 关闭）。
+
 ### PyHuskarUI 兼容性避坑 (重要)
 
 1. **PySide6 版本锁定**: PyHuskarUI 0.6.1 的 QML 文件内 `ParallelAnimation` 直接放在 `Rectangle` 的 `data` 子节点中，在 Qt 6.11 中会报错 `Cannot assign object of type "QQuickParallelAnimation" to list property "data"; expected "QObject"`。必须降级 PySide6: `pip install "PySide6>=6.8,<6.10"`，涉及 PyHuskarUI 库内 7 个文件（HusButton/HusBadge/HusButtonBlock/HusCheckBox/HusRadio/HusRadioBlock/HusSwitch）。
@@ -78,7 +95,7 @@ This file mirrors important repository-level development notes inside the projec
 ### 绝区零双链路 + 主界面检测 (重要, 2026-10-21)
 
 **两条链路互不相干，别混**：
-- **链路 A（每月一次）**：`ZzzMonthlyFlow` 独立任务 → `run_zzz_monthly_background` → `run_flow("ZZZ_MONTHLY")`（flow_configs.json）。exe 走 `exe_from_app: "ZenlessZoneZero"` 从 app_config 取游戏本体。
+- **链路 A（每月一次）**：`ZzzMonthlyFlow` **已删除独立任务**（2026-11-01），现在由每日一条龙在绝区零日常跑完后自动触发 `_run_pending_monthly_flow` → `run_zzz_monthly_background` → `run_flow("ZZZ_MONTHLY")`（flow_configs.json）。exe 走 `exe_from_app: "ZenlessZoneZero"` 从 app_config 取游戏本体。
 - **链路 B（每日一条龙）**：`execute_task("ZenlessZoneZero")` 直接拉 `OneDragon ScriptChainer Runner.exe --chain 1`，**不经过 ZZZ_MONTHLY**，进主界面由 OneDragon 自己的「进入游戏序章」节点完成；本项目只监控 `D:\down\ZZZ\ZenlessZoneZero-OneDragon\.log\log.txt` 并用 `services/zzz_daily_parser.py` 出卡片。
 
 **「点击进入游戏」≠ 进入主界面**：ZZZ_MONTHLY 第一步（OCR 点"点击进入游戏"）只过客户端登录界面，之后还要 loading（OneDragon 的状态文本：加载配置数据中/版本校对中/登录游戏服务器中/登录成功，最长各有时限）。2026-10-21 已在第一步后加第二步「等待进入主界面」：`wait_template` 等大世界特征——模板 `模板\绝区零-主界面-电台.png`（52x52 右侧电台图标，**复制自 OneDragon `assets/template/normal_world/map/raw.png`，GPL-3.0 本地自用**）+ OCR 兜底「星期」（OneDragon 同画面文字特征，pc_rect 201,38-270,86）；timeout 600s、`on_fail: retry_prev`（客户端内可能还有第二层进入游戏按钮，回退上一步重点）、最多 3 轮。
@@ -96,15 +113,44 @@ This file mirrors important repository-level development notes inside the projec
 - **音擎残芯悬案**：用户 2026-10-21 明确不是「音擎能源模块」（EXP 卡那个）且本月已购，原误配项已删；待用户提供该商品截图/描述后再加项，勿再凭截图猜。
 - 回归：`artifacts/test_zzz_monthly_shop_20261021.py`（monkeypatch 界面状态机 24 项：正常/OCR 兜底/上限/确认卡住/OCR 也未命中/停止，点击次数精确断言）、`artifacts/test_zzz_shop_templates_20261021.py`（真实截图 12 项）、`artifacts/test_zzz_shop_ocr_fallback_20261021.py`（mock grab_screen 跑 RapidOCR 全链 4 项——注意 ocr_window_content 截的是实时屏幕，测图片必须 mock grab_screen，v1 直接传 region 截的是桌面所以零命中）。
 
-#### 商店兑换每月采购：信号残响 / 余烬兑换 / 星尘兑换（2026-10-25，清单待定）
+#### 商店兑换每月采购：信号残响 / 余烬兑换 / 星尘兑换（2026-10-25 接入；2026-11-01 三游戏清单定稿）
 
-用户 2026-10-25 需求：绝区零 主界面 ESC → 商城(24 HOUR) → 信源清单 → **信号残响**；崩铁 主界面 ESC → 商店 → 兑换商店 → **余烬兑换**；原神 主界面 ESC → 商城 → 尘辉兑换 → **星尘兑换**。三家都每月买点小东西，**具体买什么下个月才告诉**；用户反复强调「一定要进入余烬兑换/信号残响」「一定要确认在星尘兑换（不能看到宗室长剑/宗室大剑/宗室猎枪/宗室秘法录/宗室长弓）」。通用实现是 `runtime/monthly_exchange.py`（action=`monthly_exchange`），三游戏差异全在 flow_configs 的 step 参数里；旧的 `zzz_signal_exchange.py` 已并入此模块（改名，不要再单建一份）。
+用户 2026-10-25 需求：绝区零 主界面 ESC → 商城(24 HOUR) → 信源清单 → **信号残响**；崩铁 主界面 ESC → 商店 → 兑换商店 → **余烬兑换**；原神 主界面 ESC → 商城 → 尘辉兑换 → **星尘兑换**。三家都每月买点小东西；**2026-11-01 清单全部定稿：绝区零（加密/原装母带各 5）、崩铁（星轨专票/通票各 5 + 命运的足迹 2）、原神（纠缠/相遇之缘各 5）**；用户反复强调「一定要进入余烬兑换/信号残响」「一定要确认在星尘兑换（不能看到宗室长剑/宗室大剑/宗室猎枪/宗室秘法录/宗室长弓）」。通用实现是 `runtime/monthly_exchange.py`（action=`monthly_exchange`），三游戏差异全在 flow_configs 的 step 参数里；旧的 `zzz_signal_exchange.py` 已并入此模块（改名，不要再单建一份）。
 
-- **接线位置**：ZZZ_MONTHLY 第 3 步（`等待进入主界面` 之后、`打开功能菜单` 之前）；HSR_MONTHLY 第 2 步，第 1 步同时改成 `starrail_enter_main`；新流程 `GENSHIN_MONTHLY`（第 1 步 `genshin_enter_main`、第 2 步星尘兑换）+ 独立任务 `GenshinMonthlyFlow`（catalog/STANDALONE_TASK_ORDER/`run_genshin_monthly_background`/task_batch_runner 四处接线）。
+- **接线位置**：ZZZ_MONTHLY 第 3 步（`等待进入主界面` 之后、`打开功能菜单` 之前）；HSR_MONTHLY 第 2 步，第 1 步同时改成 `starrail_enter_main`；新流程 `GENSHIN_MONTHLY`（第 1 步 `genshin_enter_main`、第 2 步星尘兑换）。**三个流程都没有独立任务入口了**（2026-11-01 用户要求删掉 `HsrMonthlyFlow/ZzzMonthlyFlow/GenshinMonthlyFlow`）：catalog 只剩 XM/CJ/Wool/Qoder，老配置里残留的 key 由 `launch_task_catalog.REMOVED_TASK_KEYS` 在 merge 时静默过滤。
 - **清单位置**：`flow_configs.json → <流程>.steps[每月兑换].items`，项写法 `{"name", "template"?, "ocr_text"?, "count"?}`；没给模板/ocr_text 时用商品名做 OCR 定位。
+- **月初自动随日常跑（2026-11-01 用户拍板，别再让人手动勾）**：`task_batch_runner._MONTHLY_FLOW_BY_APP`
+  把 `HonkaiStarRail / ZenlessZoneZero / GenshinImpact` 映射到三个 MONTHLY 流程，批次里每个游戏
+  **日常任务跑完之后**调 `_append_monthly_report` → `_run_pending_monthly_flow`，本月没买才启动，
+  已买只读一次 `monthly_flow:<FLOW>` 标记直接返回（零窗口操作）。**两处出口都要接**：正常执行后 +
+  「今日已完成，跳过」分支后（月初头几天日常早就跑完，不能因为跳过而漏买）。失败/异常只进 warnings，
+  不拖垮当天一条龙，也不写月度标记 → 下一批自动重试。
+  月度标记口径唯一：`background_template_runner.monthly_flow_meta_key()` / `is_monthly_flow_done()`，
+  别在别处再拼一遍 key。
+- **「没看到商品」= 本月已买过，不算失败（2026-11-01 用户拍板）**：商品到月上限后商店直接不展示，
+  所以 `ITEM_MISSING`（模板 + OCR 都定位不到）不能当失败，否则每次都要人肉确认。两个采购实现共用
+  `zzz_monthly_shop.ALREADY_BOUGHT_REASONS`（`已达上限或无弹窗` / `页面上没看到该商品，按已购买处理`），
+  `monthly_exchange` 直接 import 同一常量，**别各写一份**。真失败只剩三种：配置错（模板缺失且无
+  OCR）、确认后弹窗不关、用户停止。整张清单一件都没看到时按已买完处理，但打一条 WARNING
+  （`清单 N 项全部未在页面上出现…请检查模板/OCR`）便于事后排查。页签内容强校验
+  （`tab_content_markers`）是这条口径的前提：先确认页面对，再说商品看不到。
+- **截图证据（2026-11-01 用户要求）**：`runtime/monthly_shop_evidence.py::capture_shop_evidence`
+  在采购前 / 采购后各抓一张窗口截图（宽 960、JPEG q72），存
+  `data/artifacts/monthly_shop/<YYYYMMDD_HHMMSS>_<流程>_<阶段>.jpg`，并往同目录
+  `index.jsonl` 追加一行 `{ts, flow, stage, file, summary}`，不打开图片也能知道买了几件。
+  **长期保留，不挂到 flow_failures 的 14 天清理**（每月只跑一次，占不了空间）。
+  三条硬约束：截图失败只记 debug（绝不能影响采购）；窗口取不到区域时直接跳过、
+  **不退化全屏**（会把用户桌面存进证据目录）；`grab_screen` 的 region 是
+  `(left, top, width, height)`，不是 win32 的 `(left, top, right, bottom)`，换算错会截偏。
+  失败场景的截图仍走 `flow_diagnostics.record_failure`（flow_failures + 结构化落库）。
 - **空清单语义（当前状态）**：items 为空 → 只记一条「待定」日志并直接返回成功，**不按 ESC、不点开商店**；绝区零后面的后勤商店采购照常跑。别把空清单改成报失败，否则每月流程白挂。
 - **页签强校验（对应「一定」）**：
-  - 页签模板一律裁「未选中态」；点完必须等模板消失（= 变选中态）才算进入成功，点两次仍在 → 整步失败，**不进入购买**。
+  - **有专属商品可查时以页面内容为准（2026-11-01 用户指出视觉判据不可靠）**：step 配
+    `tab_content_markers` 后，进入后必须 OCR 到这些专属商品（原神星尘页的摩拉/嬗变之尘/
+    并生嵌合胞/嵌合种），看不到就整步失败、不购买；购买前再复核一次。这比“选中态模板/
+    亮度”硬。原神已改用这条，`tab_template` 置空。
+  - 无内容标记的游戏（绝区零/崩铁）才用未选中态模板消失 / 亮度确认：
+    页签模板一律裁「未选中态」；点完必须等模板消失（= 变选中态）才算进入成功，点两次仍在 → 整步失败，**不进入购买**。
   - 进来时模板就不命中（上次已停在该页签 / 模板失效）：用「页签中心亮度」确认选中态（实测 1919x1079：绝区零选中 145 vs 未选中 78；崩铁 188 vs 53，阈值默认 110；**原神 186 vs 未选中 104/114 → 必须用 150**，原神页签栏底色本来就亮，用 110 会把「原石购买」误判成已选中）。不够就点一次再测；亮度读不到或仍不够 → 失败，**绝不放行到购买**。
   - 崩铁「余烬兑换」会被 RapidOCR 认成「余煨兑换」（conf 0.60，实测）→ 目标文字 OCR 不可靠，step 配 `tab_between_texts=["星芒兑换","星尘之礼"]`，认错时取两者中点（(441,132)/(889,132) → (665,132) 正好是余烬兑换）；原神同理配 `["星辉兑换","原石购买"]`（中点 (898,127) = 星尘兑换）。
 - **错页签拦截（绝区零信号余波商品 / 崩铁五星光锥 / 原神宗室武器）**：`forbidden_texts` 在进入页签后、购买前做一次全窗 OCR，命中任意词即失败不买。
@@ -112,14 +158,46 @@ This file mirrors important repository-level development notes inside the projec
   - 崩铁：星芒兑换的五星光锥「银河铁道之夜 / 时节不居 / 但战斗还未结束 / 无可取代的东西 / 以世界之名」**一定要消失**（用户 2026-10-25 原话），实测这五个名字在 1919x1079 截图上 conf 0.74-0.87 全部可识别；截图里还能看到「制胜的瞬间 / 如泥酣眠」，用户只点名五件，**别自行加词**（要加先问）。
   - 原神：宗室长剑/大剑/猎枪/秘法录/长弓（星辉兑换页实测 conf 0.71-0.81 全部可识别）。
   - OCR 失败只告警不拦截（页签模板/亮度已是第一道闸）；拦截只在「有商品要买」时执行，空清单不打开商店。
-- **导航定位**：绝区零商城入口走模板 `模板/绝区零-商城入口.png`（24HOUR 图标，主菜单 1.000 / 商城页 0.476）+ OCR「商城」（0.67）；「信源清单」纯 OCR（黄色选中行与其它导航行同款，模板区分度不够，选中态 OCR 0.73）；页签模板 `绝区零-信号残响页签.png`（1.000 / 主菜单 0.555）+ OCR「信号残响」（0.80）。
+- **导航定位**：绝区零商城入口走模板 `模板/绝区零-商城入口.png`（24HOUR 图标，主菜单 1.000 / 商城页 0.476）+ OCR「商城」（0.67）；「信源清单」纯 OCR（黄色选中行与其它导航行同款，模板区分度不够，选中态 OCR 0.73）；页签模板 `绝区零-信号残响页签.png`（1.000 / 主菜单 0.555）+ OCR「信号残响」（0.71-0.80）。
+- **绝区零信号残响清单（2026-11-01 用户确认）**：抽卡道具 **加密母带 ×5、原装母带 ×5**
+  （月剩余 5/5、单价 90，合计 900）；储值电卡/芯片/认证章一律不买。
+  **信号余波页也有同名母带**（2026-10-25 旧参考图实测：加密母带/原装母带都在），
+  不能用商品名判页签：`tab_content_markers=["储值电卡"]` 做内容强校验（储值电卡只在
+  信号残响页，OCR 0.80；信号余波页没有），看不到就整步失败、不购买，购买前再复核；
+  原页签模板/亮度保留作无内容标记时的兜底；硫磺石等 `forbidden_texts` 仍作第二道闸。
+  确认模板 `模板/绝区零-商店-确认.png` 在新弹窗上 1.000、无弹窗商店页 0.659
+  （生效阈值 0.8）。参考图 `data/artifacts/ref_zzz_signal_resonance_20261101.png` /
+  `ref_zzz_signal_resonance_dialog_20261101.png`。
 - **崩铁左侧导航必须限定区域**：「兑换商店」同时出现在顶层面包屑 (153,80) 和左侧导航行 (170,382)，全窗 OCR 先命中的是面包屑（点了无效），所以配 `nav_region_frac=[0.0,0.18,0.2,0.95]`。商店入口只有 OCR「商店」（菜单格 (1322,408)，0.67），没裁模板。
+- **崩铁余烬兑换清单（2026-11-01 用户确认）**：抽卡道具 **星轨专票 ×5 + 星轨通票 ×5 +
+  命运的足迹 ×2**（买满可兑换 5/5、5/5、2/2；单价 90/90/60，合计 1020）；信用点/
+  冒险记录/凝缩以太/遗失碎金/四星光锥一律不买。**星芒兑换页也有星轨专票/通票/命运的
+  足迹**（2026-10-25 旧参考图实测），不能用商品名判页签：`tab_content_markers=["信用点"]`
+  做内容强校验（「信用点×10000」只在余烬页，OCR 0.83；星芒页没有），看不到就整步失败、
+  不购买，购买前再复核；原页签模板/亮度保留作无内容标记时的兜底；五星光锥
+  `forbidden_texts` 仍作第二道闸。确认模板 `模板/崩铁-兑换确认.png`（用户 2026-11-01
+  弹窗截图底部白色「确认」按钮，367x70）在弹窗上 1.000、无弹窗商店页 0.636/0.661
+  （生效阈值 0.8）。参考图 `data/artifacts/ref_starrail_ember_20261101.png` /
+  `ref_starrail_ember_dialog_20261101.png`。
 - **原神定位**：商城入口 OCR「商城」（ESC 菜单 (196,455)，0.67，没裁模板——左侧面板背景固定，OCR 够用）；左侧「尘辉兑换」OCR（(130,434)，0.74，只有选中态截图，不做模板）；页签模板 `模板/原神-星尘兑换页签.png`（1.000 / ESC 菜单 0.579）+ OCR「星尘兑换」（0.80）。
+- **原神星尘清单（2026-11-01 用户确认）**：只买抽卡道具 **纠缠之缘 ×5、相遇之缘 ×5**
+  （本月剩余 5/5、单价 75，合计 750 星尘）；冒险家的经验/精锻用魔矿/摩拉/嬗变之尘/
+  并生嵌合胞/嵌合种一律不买。确认模板 `模板/原神-兑换确认.png`（用户弹窗截图底部
+  蓝色「兑换」按钮，330x80；弹窗标题「兑换物品」、数量默认 1、「本月剩余数量:5」、
+  「消耗 75」、「取消/兑换」）。参考图
+  `data/artifacts/ref_genshin_{main,esc_menu,shop,stardust,stardust_dialog}_20261101.png`。
+- **原神页签判据（2026-11-01 修正）**：**不要**用选中态模板/亮度判断星尘页——实测
+  未选中态模板在已选中页仍有 **0.854**（旧阈值 0.85 会误判），拉阈值只是打补丁，
+  用户明确指出“视觉天然容易混”。改为 `tab_content_markers=["摩拉","嬗变之尘",
+  "并生嵌合胞","嵌合种"]`：进入后必须 OCR 到星尘专属商品，看不到就整步失败、不购买；
+  购买前再复核一次；`tab_template` 已置空，`tab_selected_brightness` 只留作没有内容
+  标记时的旧流程兜底。宗室武器 `forbidden_texts` 仍保留作第二道闸。实测：星尘页命中
+  摩拉/并生嵌合胞/嵌合种（conf 0.78-0.83），星辉页（2026-10-25 旧参考图）一个都不命中。
 - **原神启动路径（exe_from_game）**：`apps.GenshinImpact.launcher` 是 BetterGI（一条龙脚本），**不能给每月流程用 exe_from_app**（会启动 BetterGI 而不是游戏）。新增 flow 字段 `exe_from_game`，从 `apps.<key>._discovery.game_exe_path` 取游戏本体（`_resolve_exe_path` 里实现），GENSHIN_MONTHLY 用 `exe_from_game: GenshinImpact` → YuanShen.exe。**不要**再走 GenshinLauncher 的 `exe_path` 硬编码，也不要把它加进「路径配置」的 launcher 列表（那会改坏 BetterGI 启动路径）。
-- **购买交互未实跑**：复用后勤商店 `zzz_monthly_shop._buy_once`（新增 `label` 参数只为日志前缀），即「点商品 → 确认 → 确认按钮」。绝区零信号残响沿用 `模板/绝区零-商店-确认.png`；**崩铁余烬兑换与原神星尘兑换的 `confirm_template` 故意留空**（弹窗没截图，不凭猜），下月补清单时必须同时补弹窗截图再填，否则会以「确认按钮模板缺失」诚实失败。
+- **购买交互未实跑**：复用后勤商店 `zzz_monthly_shop._buy_once`（新增 `label` 参数只为日志前缀），即「点商品 → 确认 → 确认按钮」。绝区零信号残响沿用 `模板/绝区零-商店-确认.png`；原神/崩铁均已补齐确认模板（2026-11-01 用户弹窗截图：`模板/原神-兑换确认.png` / `模板/崩铁-兑换确认.png`）。
 - **退出**：买完先查 `exit_marker_template`（绝区零主世界「···」/ 崩铁主界面图标 / 原神派蒙图标），看不到才按 ESC，最多 3 次；先查再按是防止多按一次又把主世界切回菜单。未确认回到主界面只在摘要里标注，不单独判失败。
 - **月度门控在流程层**（`background_template_runner._run_monthly_flow` 的 `monthly_flow:<KEY>`）：本月流程已跑过再补 items，需要手动重跑，不会自动补。
-- 回归：`artifacts/test_monthly_exchange_20261025.py`（三游戏：空清单/完整链路/已在菜单/已达上限/页签缺失/商品定位失败/停止/回不到主世界/确认模板缺失/页签已选中/区域导航/页签未切换必须失败/亮度读不到必须失败/原神错页签拦截必须失败/原神 150 亮度阈值 + 配置与独立任务静态）、`artifacts/test_monthly_exchange_templates_20261025.py`（三游戏真图模板正反向 + RapidOCR + 面包屑陷阱 + 选中态亮度夹逼 + 原神宗室武器可识别，参考图 `artifacts/ref_{zzz,starrail,genshin}_exchange_{menu,shop}_20261025.png`）。插入新步骤后 `test_zzz_monthly_main_screen_20261021.py` 的步骤数/序号同步改为 7 步。
+- 回归：`tests/suite_monthly_exchange_20261025.py`（三游戏：空清单/完整链路/已在菜单/已达上限/页签缺失/商品定位失败/停止/回不到主世界/确认模板缺失/页签已选中/区域导航/页签未切换必须失败/亮度读不到必须失败/原神错页签拦截必须失败/原神清单与确认模板 + **绝区零清单（加密/原装母带各 5）与储值电卡内容校验** + **崩铁清单（星轨专票/通票各 5 + 命运的足迹 2）与信用点内容校验** + 原神内容强校验（星尘页有摩拉、星辉页没有）+ 三游戏「外观已选中但无内容标记必须失败、零购买」+ 三游戏内容标记/确认模板真图分离度 + 配置与独立任务静态）、`data/artifacts/test_monthly_exchange_templates_20261025.py`（三游戏真图模板正反向 + RapidOCR + 面包屑陷阱 + 选中态亮度夹逼 + 原神宗室武器可识别，参考图 `data/artifacts/ref_{zzz,starrail,genshin}_exchange_{menu,shop}_20261025.png`）。插入新步骤后 `test_zzz_monthly_main_screen_20261021.py` 的步骤数/序号同步改为 7 步。
 
 ### 蓝屏复盘结论 + 任务鲁棒性三层防护 (重要, 2026-10-15)
 
@@ -538,6 +616,14 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
 - 写入 tracker 时必须判断 `cur<=0 且 total>0` → extra 加 `stale=True` + `stale_reason`，
   UI 显示"（未刷新）"而不是真实百分比（见 `DailyView.qml`）。
 - 历史事故：2026-09-22~09-27 连续 6 天库里都是 0/100，用户投诉后才发现。
+- **进过游戏也可能读到 0：服务器结算有延迟（2026-11-01 实跑事故）**。ok-ww 11:53:03 退出，
+  11:53:26 `fetch_daily_data`（内部已先调 `refresh_daily_data` 刷缓存）仍返回 0/100，
+  13:30 同一接口 100/100。**别把"已刷新缓存"当成"数据已结算"**：`clients/daily_checker.py`
+  的 `check_wuwa_daily_with_retry` 在 `今日活跃=0` 时按 `WUWA_STALE_RETRY_DELAYS=(8s,20s)`
+  等一会儿重查，最多 3 次；三次都是 0 才交给上层标 stale。重查抛错/无数据时保留上一次
+  可用结果，不要把整条链路变成 errors。用户 2026-11-01 明确要求"统一刷新一下"。
+- 用户原话纠正过一个错误归因：**「打开每日任务 → 领每日奖励」就是在涨活跃度**，
+  所以"脚本只领奖所以活跃度是 0"不成立，遇到 0 先怀疑结算延迟，别先怪任务内容。
 
 ### 回答数值类问题必须实跑取证
 
@@ -555,6 +641,34 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
 - 返回 `(snapshot, fresh)`，`fresh` 要传给 `build_daily_report(snapshot_fresh=...)`，
   邮件正文会据此标注"发信前实时查询"或"⚠ 缓存数据，可能不是最新"。
 - 单测 `UiBridge` 纯逻辑方法时用 `UiBridge.__new__(UiBridge)` 绕过 QApplication 依赖。
+
+### 每日进度 API 回填门控（2026-10-31）
+
+- **背景**：今天鸣潮脚本实际成功（272s），但批处理按 `MIN_RUN_TIME=300` 降级为
+  warning（落库 skipped）；终末地脚本被日志复核改判失败。两者都因为
+  `_auto_query_daily_progress` 只在 `state == "success"` 时执行，没有回填
+  API，每日进度里完全没有「今日活跃 / 日活跃」。
+- **规则**：成功一律回填；`failed` / `warning` 时鸣潮、终末地、异环仍回填
+  （官方活跃度与脚本执行是两回事）；`skipped`（维护跳过等）与用户停止不查。
+  统一入口 `runtime/task_batch_runner.py::_should_auto_query_api_progress`。
+- **顺序铁律（2026-10-31 补）**：对鸣潮/终末地/异环，必须**先查 API、再跑
+  `_verify_script_log_result`**。旧顺序是日志复核先读库、API 回填在后，复核时
+  库里还是空的，终末地「日活跃 100/100」被 ⭐送礼/⭐造装备 的日志失败改判死。
+  预查询只跑一次（`_api_progress_queried`），复核后不重复请求；鸣潮复核也合并
+  「今日活跃」，与终末地同口径。
+- **鸣潮短时长**：`DEFAULT_APPS["WutheringWaves"].skip_min_run_warning=True`。
+  `execute_task` 在 <MIN_RUN_TIME 时已用 ok-ww 日志 `Successfully Executed Task`
+  复核，批处理不应再降级 warning，否则 272s 的真实成功会被记成 skipped，
+  并连带跳过 API 回填。
+- **当天回填**：只读 API 返回鸣潮今日活跃 100/100、终末地日活跃 100/100；
+  已用 tracker 补写今日数据，两张卡片 `completion_state=completed`、100%。
+  回归 `tests/suite_daily_api_query_gate_20261031.py`。
+- **禁止在 `_run_single_task` 函数体内再 import `resolve_game_key`（2026-11-01 实跑事故）**：
+  Python 会把函数内任意位置的 import 当成整个函数的局部变量，导致前面的
+  `_resolved_game_key = resolve_game_key(app_key)` 直接 `UnboundLocalError`，
+  整个批次在任务后处理阶段崩掉。模块顶部第 52 行已 import，函数里直接用；
+  回归已加 `"_run_single_task 不局部遮蔽 resolve_game_key"` 静态断言。
+  改完必须重启 GUI 再跑批次。
 
 ### 每日进度「完成」判定口径（历史统计用）
 
@@ -651,8 +765,10 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
 - **异环（塔吉多）dayvalue 接入 + 社区任务/暖暖假进度删除**（用户拍板 2026-10-24）：
   塔吉多 H5 游戏名片接口 `GET /apihub/awapi/yh/roleHome?roleId=`（从
   yh-game-record 前端 bundle 挖掘并实测）返回 `dayvalue`（每日活跃度，上限 100）、
-  体力、城市体力。`TajiduoClient.fetch_role_home()` 封装，`check_tajiduo_daily`
-  产出「活跃度 X/100」+「体力/城市体力」（计量不参与完成判定）+ 游戏签到。
+  本性像素、都市活力。`TajiduoClient.fetch_role_home()` 封装，`check_tajiduo_daily`
+  产出「活跃度 X/100」+「本性像素/都市活力」（计量不参与完成判定）+ 游戏签到。
+  字段映射以 H5 名片前端为准：`staminaValue/staminaMaxValue` = 本性像素，
+  `citystaminaValue/citystaminaMaxValue` = 都市活力；**不要叫体力/城市体力**。
   复核：nte 分支合并 `_load_api_key_progress_tasks`，**dayvalue 满 → 直接
   return None**（ok-nte 边角失败不再改判烧重试）；不满/无数据 → 旧口径。
   同批删除：①社区任务（点赞/浏览/分享，恒 pending 无信息量）停止查询与落库，
@@ -726,16 +842,17 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
 
 ### 无限暖暖进入主界面 (2026-10-22)
 
-- **默认不接线（2026-10-22 验证后的决定）**：`settings/defaults.py` 的 InfinityNikki
-  不配 `prelaunch_flow`，一条龙直接拉 whimbox，由 whimbox 自己启动游戏。
-  `NikkiLauncher` 流程定义保留在 `flow_configs.json`，需要时手动在 app_config 里加
-  `"prelaunch_flow": "NikkiLauncher"` 再启用。启动器是叠纸 `launcher.exe`（窗口标题
+- **接线状态**：2026-10-22 初次验证时默认不接线（一条龙由 whimbox 自己启动游戏）；
+  **2026-11-01 起默认接线**（`prelaunch_flow = "NikkiLauncher"`）——因为要先在游戏内跑
+  「奇想日历领奖 + 晶石兑换」（见下节），做完再把已在主界面的游戏交给 whimbox
+  （其 StartGameTask 检测到已在游戏会跳过启动）。启动器是叠纸 `launcher.exe`（窗口标题
   「无限暖暖」、窗口进程 `xstarter.exe`，1280x720 实测 OCR「启动游戏」conf 0.80），
   不是 `run_one_dragon.bat`。
-- 流程只有一步 `action=nikki_enter_game`（`runtime/nikki_launcher.py`）：
+- 流程第一步 `action=nikki_enter_game`（`runtime/nikki_launcher.py`）：
   启动器「启动游戏/更新/运行中」→ 等 `X6Game-Win64-Shipping.exe` 窗口 →
   登录页 OCR「点击进入游戏/确认/登录」→ 加载小月卡/道具弹窗 →
-  左下角聊天气泡模板 `模板/暖暖-主界面.png` 连续 2 次命中。
+  左下角聊天气泡模板 `模板/暖暖-主界面.png` 连续 2 次命中；第二步 `action=nikki_calendar`
+  （2026-11-01 新增，见下节）。
 - 模板来源：whimbox 2.5.6 `IconPageMainFeature` 二值化裁剪（GPL-3.0 本地自用）；
   36x30，左下角 (48,989)@1920x1080，合成背景匹配 0.99，阈值 0.8。
 - `close_process_on_finish/fail=false`：游戏要留给 whimbox；whimbox 的
@@ -745,6 +862,66 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
   点底部中央 (0.5,0.83)，早期再点顶部中央 (0.5,0.09)。
 - 回归 `artifacts/test_nikki_launcher_20261022.py`（模板/启动器 OCR/已在主界面/
   启动链路/更新态/登录防误点/主界面连续命中/配置接线）。
+
+#### 奇想日历领奖 + 晶石兑换/共鸣商店（2026-11-01）
+
+- **接线**：`apps.InfinityNikki.prelaunch_flow = "NikkiLauncher"`（defaults 与本机
+  app_config 都已配）。`NikkiLauncher` 第二步 `action=nikki_calendar`
+  → `runtime/nikki_calendar.py`：主界面 → 按 L 打开奇想日历 → 奇迹之冠 →
+  奇迹之冠搭配赛 → 领取奖励（如有）→「空白区域继续」→ 晶石兑换（每月）→ 回主界面 →
+  按 H 打开商城 → 左列滚动找「共鸣商店」→ 静谧水滴兑换（每月）→ ESC 回主界面。
+  做完再把已在主界面的游戏交给 whimbox（它的 StartGameTask 会跳过启动）。
+- **OCR 定标**（1919x1079，参考图 `data/artifacts/ref_nikki_*_20261101.png`）：
+  日历标题 (0.094,0.047)，日历页「奇迹之冠」区块 (0.506,0.556)，页面特征
+  每日灵感/幻境挑战/奇迹之冠/星光的追寻（命中 ≥2）；hub「奇迹之冠搭配赛」
+  (0.277,0.618)、「争锋赛」(0.789,0.363)；搭配赛页「领取奖励」(0.501,0.697)、
+  左列「晶石兑换」(0.078,0.718)、「赛事嘉奖」(0.078,0.830)。点开搭配赛后可能
+  先弹「巅峰赛速报」（用户截图 4），领取奖励就在弹窗底部。
+- **「空白区域继续」是暖暖奖励页的通用收尾**（用户原话「暖暖的领取都是这个」）：
+  OCR 到「空白区域继续/点击屏幕继续」就点屏幕下方空白 (0.50,0.82)，最多 4 轮；
+  **不要**按 ESC 或乱点按钮。领奖点击最多 3 轮，点不掉只记录、不阻断。
+- **晶石兑换**：配置在 `app_config.json → nikki.crystal_exchange`（注意 `nikki`
+  段同时存 uid/momo 凭据，**不要新开重复顶层键**）。默认 共鸣水晶×3 + 启示水晶×3
+  （本月限购各 3、单价 120），逐件「点商品 → 确认兑换 → 空白区域继续」。
+  **到账只认「本月限购 N/M」递减，或购买后出现奖励页**；价格 OCR 会被图标污染
+  （120 常识别成 4120），不解析价格。按月门控 meta
+  `monthly_sequence:nikki_crystal_exchange`，成功/already 才写标记。
+- **兑换确认弹窗（2026-11-01 用户截图定标，`ref_nikki_exchange_dialog_20261101.png`）**：
+  标题「兑换」(0.501,0.209)、数量默认 1（右侧有「最大」小图标，暂不用）、
+  底部「确认」(0.500,0.751)、弹窗内「本月限购 3/3」(0.622,0.538)、「合计」(0.580,0.651)。
+  **标题「兑换」conf 0.66 > 按钮「确认」0.64，且两者都在 DIALOG_REGION 内** —— 确认词表
+  必须去掉「兑换」，用 `_pick_confirm` 按「确认兑换 > 确认 > 确定 > 购买」词序找按钮；
+  按置信度选会点标题、弹窗不动却误判成功。购买后是通用「空白区域继续」奖励页。
+- **商城 → 共鸣商店（2026-11-01 用户截图）**：主界面按 **H** 进商城（页面标志
+  商城+购物车；主界面只有商城没有购物车）；左列「美鸭梨优选」初始 (0.115,0.830)，
+  鼠标放在该位置滚轮向下（pyautogui.scroll 负值）后它到 (0.115,0.287)，
+  「共鸣商店」出现在 (0.105,0.787)；滚不到就反向再滚，每步复扫 OCR，共 ≤20 次。
+- **静谧水滴页签强校验**：共鸣商店页两个页签 澎湃浪花兑换 (0.313,0.119) /
+  静谧水滴兑换 (0.500,0.119)。点静谧后**必须看到专属商品**（万象星实/虹彩棱镜/
+  流辉棱镜/璨光棱镜）才算切成功；没确认到就**不买**，防止花错货币（澎湃页的
+  启示/共鸣水晶单价 20 且没有 5/5 限购）。静谧页 启示水晶 (0.292,0.383) /
+  共鸣水晶 (0.436,0.384)，本月限购 5/5 在名上方 (0.320,0.204)/(0.465,0.204)，
+  单价 40；逐件「点商品→确认→空白区域继续」买满 5 个。按月门控 meta
+  `monthly_sequence:nikki_resonance_shop`；清单 `app_config.json → nikki.resonance_shop.items`，
+  默认 启示水晶×5 + 共鸣水晶×5。参考图 `ref_nikki_shop_20261101.png` /
+  `ref_nikki_shop_menu_scrolled_20261101.png` / `ref_nikki_resonance_surge_20261101.png` /
+  `ref_nikki_resonance_serene_20261101.png`。
+- **失败策略**：领奖/兑换失败只记 ERROR + flow_failures（flow_key=NikkiLauncher），
+  **不阻断**后续 whimbox；日历打不开、未识别主界面也返回「继续」，避免一个附加功能
+  把整条暖暖任务拖死。流程内部异常吞成警告（FailSafeAborted 仍向上抛）。
+  若确认弹窗结构与假设不符，会诚实报 no_dialog 并落证据截图。
+- **交接兜底（2026-11-01 用户叮嘱）**：流程结束必须保证游戏在主界面再交给 whimbox；
+  `_ensure_main_or_close` 回不去就 `_close_game_for_whimbox_restart` 关掉
+  `X6Game-Win64-Shipping.exe`（按名清理 + 等进程消失），让 whimbox 自己重新启动进入；
+  开局识别不到主界面/窗口失效同样关游戏。关游戏失败只记警告，流程仍返回继续。
+  **不要**把停在菜单/日历/商店里的游戏直接交给 whimbox。
+- 回归：`tests/suite_nikki_calendar_20261101.py`（截图 OCR 定标 + 状态机全链路 +
+  无奖励 / 点不掉 / 无确认弹窗 / 月度已兑换 / 已换完 / 日历打不开 / 用户停止 +
+  共鸣商店 H→滚动→静谧页签→买 10 件 / 页签没切过去一件不买 / 滚动找不到 / 月度已完成 /
+  商城打不开 + 接线静态断言）。
+- **未实机验证**：本流程只做了离线截图 OCR 与状态机回归；首次实跑看
+  `data/logs/auto_runner.log` 的 `[无限暖暖·奇想日历]/[无限暖暖·晶石兑换]/[无限暖暖·共鸣商店]`
+  与 `data/artifacts/flow_failures/` 证据图。
 
 ### 崩铁进入主界面（复刻三月七方法, 2026-10-24, 默认不启用）
 
@@ -794,8 +971,9 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
   第 2 步 `monthly_exchange` 星尘兑换（见「商店兑换每月采购」一节）。启动游戏用
   新字段 `exe_from_game: GenshinImpact` 取 `_discovery.game_exe_path` 的 YuanShen.exe；
   **不能用 `exe_from_app`**（apps.GenshinImpact.launcher 是 BetterGI）。
-  独立任务 `GenshinMonthlyFlow` 已接入 catalog / STANDALONE_TASK_ORDER /
-  `run_genshin_monthly_background` / task_batch_runner 分支。
+  ~~独立任务 `GenshinMonthlyFlow` 已接入 catalog / STANDALONE_TASK_ORDER /~~
+  ~~`run_genshin_monthly_background` / task_batch_runner 分支~~ —— 该独立任务 2026-11-01 已删除，
+  现在只由 `task_batch_runner._MONTHLY_FLOW_BY_APP` 在原神日常跑完后自动补跑。
 
 ### CredentialInput 双向同步 (重要)
 
@@ -1012,9 +1190,10 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
   回归：`artifacts/test_baijing_club_daily_20261018.py`（5 组，含"弹窗帧不得命中页面
   特征"这条防回归断言）。
 - **有猫兑换每月购买**（`runtime/baijing_cat_exchange.py`，2026-10-25 用户新增需求）：
-  「有猫零售 → 有猫兑换」页每月刷新，可以每月买点小东西；**具体买什么当月还没定**，
-  所以购买清单做成配置 `app_config.json → baijing.cat_exchange.items`，清单为空时
-  每月任务只报「待定」、**不进商店、不买任何东西、也不写月度 meta**（清单补上后本月还能补跑）。
+  「有猫零售 → 有猫兑换」页每月刷新，可以每月买点小东西；清单做成配置
+  `app_config.json → baijing.cat_exchange.items`（2026-10-25 时待定；**2026-11-01 用户
+  已确认，见下方清单**），清单为空时每月任务只报「待定」、**不进商店、不买任何东西、
+  也不写月度 meta**（清单补上后本月还能补跑）。
   挂在 `baijing_flow._maybe_run_monthly`（月一次，meta 键 `monthly_sequence:baijing_cat_exchange`），
   一条龙里排在周常之后、关游戏之前；结果落 daily_progress（task_key=`monthly`）。
   定位策略与俱乐部商店**相反**：那边「扫价格按钮全量买」，这边「按清单点名买」，
@@ -1034,8 +1213,19 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
     「未找到」（商品不在当前页签/需翻页）与「已买完」分开记，**只有全部已买完才报 already**，
     其余一律 failed（宁可报失败也不报假成功）。
   - **只覆盖当前可见区域**（商店右侧还有翻页箭头，翻页未实现）→ 找不到就报"未找到"，需要时再补。
-  - 回归：`artifacts/test_baijing_cat_exchange_20261025.py`（真实截图 OCR 几何定标 +
-    配置解析 + 预算闸门 + 月度门控 + 空清单不进商店）。
+  - **2026-11-01 清单已定（用户确认）**：小猫礼品每月只换 **同调线索**（角色抽卡券）、
+    **一刹闪回**（记忆烙痕抽卡券）、**心迹**，别的都不换；两张券每月库存各 5（单价 40），
+    按用户选择「买满库存」；心迹库存 1（单价 160）。`items[]` 新增 `qty`（缺省 1）：
+    逐件走「点商品 → 购买 → 弹窗确认」，**不点「最大」**——本页签的「最大」按钮没实测过，
+    逐件只依赖已验证的单件路径。部分买到（库存不足/点击失败）仍报 success，但 detail 带
+    `未买满：同调线索 3/5(sold_out)`；中途停止不写 success（避免月度 meta 误记完成）；
+    全部买到 `purchased` 按件计数（同调线索×5 → `items=["同调线索×5"]`）。
+    新参考图 `data/artifacts/ref_baijing_cat_exchange_20261101.png`（1919x1079）：OCR 实测
+    同调线索 0.70 / 一刹闪回 0.78 / 心迹 0.65，价格 40/40/160 全部可读，`剩余5件/1件` 不误判售罄。
+  - 回归：`tests/suite_baijing_cat_exchange_qty_20261101.py`（qty 解析 / 逐件循环 / 部分买到 /
+    already / 窗口丢失 / 用户停止 / 默认清单静态断言 / 新参考图 OCR）+ 旧
+    `data/artifacts/test_baijing_cat_exchange_20261025.py`（几何定标 + 月度门控等；
+    月度断言已改为当前月份动态生成，避免过月假失败）。
 
 ### 白荆回廊任务列表防护 + 零售/俱乐部自保 (重要, 2026-10-22)
 
@@ -1396,6 +1586,22 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
   合成电池写空/图鉴缺失退回只读/单账户固定 config01）。实机只读验证：
   March7th 24 字段、OneDragon 7 字段均能从真实配置读出；真实图鉴生成 77 个
   刷本目标选项，当前计划回显为「实战模拟室 / 代理人技能 / 升温测试（火属性）」。
+
+### 刷本配置页性能与编辑草稿（2026-10-31）
+
+- `ui/qml/views/StaminaConfigView.qml` 的卡片容器必须是 **ListView**，且 model
+  只绑定 `root.visibleConfigs`（当前游戏一张卡）；上方 7 个游戏按钮切换。
+  不能退回 `Flickable + ColumnLayout + Repeater` 一次铺 7 张卡：离屏实测首帧
+  约 2.3 秒（创建 1.38s），改单卡 ListView 后约 0.22 秒（创建 0.2s）。
+- ListView delegate 必须 `reuseItems: false`：每张卡有自己的 `fieldModel`/dirty
+  状态，复用会串卡。切换游戏/滚出屏幕会销毁 delegate，所以未保存编辑放在页面级
+  `root.fieldDrafts`（键 `gameKey + \u0001 + fieldKey`）：bool/select/input 三个
+  输入回调都必须调 `setFieldDraft`，卡片 `Component.onCompleted` 灌回草稿，保存
+  成功调 `clearGameDrafts`。新增输入类型时漏掉这一步会导致切换回来编辑丢失。
+- 刷新配置时先清空 `fieldDrafts` 再替换 `configs`，并按 game_key 保留当前选中
+  游戏，避免旧草稿灌进新数据。
+- 回归：`tests/suite_stamina_view_perf_20261031.py`（QML 离屏加载、7 个游戏按钮、
+  只渲染当前 1 张卡、ListView 参数、草稿写入/读取/清理）；QML 结构改动后必须跑。
 
 ## 异环 2026-10-29 两次失败：标题页「进入游戏」没人点
 

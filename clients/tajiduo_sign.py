@@ -266,7 +266,7 @@ class TajiduoClient:
         return []
 
     def fetch_role_home(self, role_id) -> Dict[str, Any]:
-        """游戏名片聚合数据：体力/城市体力/每日活跃度（dayvalue）等。
+        """游戏名片聚合数据：本性像素/都市活力/每日活跃度（dayvalue）等。
 
         数据源是塔吉多 H5 游戏名片页（webstatic.tajiduo.com/bbs/yh-game-record）
         的同款接口，2026-10-24 从其前端 bundle 挖掘并实测可用：

@@ -757,6 +757,9 @@
         ],
         "tab_text": "余烬兑换",
         "tab_template": "模板\\崩铁-余烬兑换页签.png",
+        "tab_content_markers": [
+          "信用点"
+        ],
         "tab_between_texts": [
           "星芒兑换",
           "星尘之礼"
@@ -768,14 +771,27 @@
           "无可取代的东西",
           "以世界之名"
         ],
-        "confirm_template": "",
+        "confirm_template": "模板\\崩铁-兑换确认.png",
         "exit_marker_template": "模板\\崩铁-主界面.png",
         "timeout_sec": 600,
         "post_delay_sec": 2.0,
         "on_fail": "fail",
         "max_attempts": 1,
-        "items": [],
-        "_comment": "ESC → 商店 → 左侧兑换商店 → 顶部余烬兑换（未选中态模板消失才算切换成功，点两次还不行就整步失败）。用户 2026-10-25 强调：星芒兑换的五星光锥（银河铁道之夜/时节不居/但战斗还未结束/无可取代的东西/以世界之名）一定要消失——forbidden_texts 在购买前做 OCR 反向拦截，看到任意一个就失败不买。items 为空时只记「待定」且不打开商店。confirm_template 故意留空：余烬兑换的确认弹窗尚未截图，补清单时必须同时补弹窗截图再填，不要凭猜点。"
+        "items": [
+          {
+            "name": "星轨专票",
+            "count": 5
+          },
+          {
+            "name": "星轨通票",
+            "count": 5
+          },
+          {
+            "name": "命运的足迹",
+            "count": 2
+          }
+        ],
+        "_comment": "ESC → 商店 → 左侧兑换商店 → 顶部余烬兑换。2026-11-01 用户确认清单：抽卡道具 星轨专票×5 + 星轨通票×5 + 命运的足迹×2（均买满可兑换数 5/5、5/5、2/2；单价 90/90/60）。**星芒兑换页也有星轨专票/通票/命运的足迹，不能靠商品名判断页签**：tab_content_markers=[\"信用点\"] 做页面内容强校验（星芒页没有信用点；余烬页的「信用点×10000」OCR 0.83），看不到就整步失败、不购买，购买前再复核一次；原页签模板/亮度保留作无内容标记时的兜底。用户 2026-10-25 强调星芒兑换的五星光锥（银河铁道之夜/时节不居/但战斗还未结束/无可取代的东西/以世界之名）一定要消失——forbidden_texts 在购买前做 OCR 反向拦截，看到任意一个就失败不买。confirm_template 来自 2026-11-01 用户弹窗截图（底部「确认」白色按钮），弹窗上 1.000、无弹窗商店页 0.636/0.661（生效阈值 0.8，不误点）。参考图 data/artifacts/ref_starrail_ember_20261101.png / ref_starrail_ember_dialog_20261101.png。"
       }
     ],
     "close_process_on_finish": false
@@ -836,6 +852,9 @@
         "nav_text": "信源清单",
         "tab_text": "信号残响",
         "tab_template": "模板\\绝区零-信号残响页签.png",
+        "tab_content_markers": [
+          "储值电卡"
+        ],
         "forbidden_texts": [
           "硫磺石",
           "燃狱齿轮",
@@ -849,8 +868,17 @@
         "post_delay_sec": 2.0,
         "on_fail": "fail",
         "max_attempts": 1,
-        "items": [],
-        "_comment": "主界面 ESC → 商城(24HOUR) → 信源清单 → 信号残响，每月小额兑换。用户 2026-10-25 要求屏蔽信号余波的商品（硫磺石/燃狱齿轮/嵌合编译器/啜泣摇篮）：forbidden_texts 在购买前 OCR 反向拦截，看到即失败不买。注意 RapidOCR 把「啜泣摇篮」认成「嚼泣摇篮」（conf 0.61），两个写法都配上。items 为空时只记「待定」且不点开商城；具体买什么下月再定（项写法 {\"name\", \"template\"?, \"ocr_text\"?, \"count\"?}，无模板时用商品名 OCR 定位）。兑换交互复用后勤商店「点商品→确认」，信号残响页尚未实跑，首次补清单后按日志校验弹窗形态。"
+        "items": [
+          {
+            "name": "加密母带",
+            "count": 5
+          },
+          {
+            "name": "原装母带",
+            "count": 5
+          }
+        ],
+        "_comment": "主界面 ESC → 商城(24HOUR) → 信源清单 → 信号残响。2026-11-01 用户确认清单：抽卡道具 加密母带×5 + 原装母带×5（买满月剩余 5/5，单价 90）。**信号余波页也有同名母带，不能靠商品名判断页签**：tab_content_markers=[\"储值电卡\"] 做页面内容强校验（信号余波页没有储值电卡，2026-11-01 实测；新截图 OCR conf 0.80），看不到就整步失败、不购买，购买前再复核一次；原页签模板/亮度保留作无内容标记时的兜底，forbidden_texts 硫磺石/燃狱齿轮/嵌合编译器/啜泣摇篮（含 OCR 误读写法）仍作第二道闸。确认模板 绝区零-商店-确认.png 在新弹窗上 1.000、无弹窗商店页 0.659（生效阈值 0.8，不误点）。参考图 data/artifacts/ref_zzz_signal_resonance_20261101.png / ref_zzz_signal_resonance_dialog_20261101.png。"
       },
       {
         "name": "打开功能菜单",
@@ -961,7 +989,7 @@
   },
   "GENSHIN_MONTHLY": {
     "enabled": true,
-    "_comment": "原神每月任务：直接启动游戏本体（exe_from_game 走 apps.GenshinImpact._discovery.game_exe_path，不能走 exe_from_app——那只配了 BetterGI）→ genshin_enter_main 进主界面 → ESC 商城 → 尘辉兑换 → 星尘兑换 每月采购。星尘兑换清单 items 暂空（用户 2026-10-25 说明下月再定）；空清单只记待定且不打开商城。",
+    "_comment": "原神每月任务：直接启动游戏本体（exe_from_game 走 apps.GenshinImpact._discovery.game_exe_path，不能走 exe_from_app——那只配了 BetterGI）→ genshin_enter_main 进主界面 → ESC 商城 → 尘辉兑换 → 星尘兑换 每月采购。2026-11-01 清单已定：纠缠之缘/相遇之缘各买满 5 个；确认模板已补（弹窗截图）。",
     "exe_from_game": "GenshinImpact",
     "window_title_keywords": [
       "原神",
@@ -1001,7 +1029,13 @@
         "shop_entry_text": "商城",
         "nav_text": "尘辉兑换",
         "tab_text": "星尘兑换",
-        "tab_template": "模板\\原神-星尘兑换页签.png",
+        "tab_template": "",
+        "tab_content_markers": [
+          "摩拉",
+          "嬗变之尘",
+          "并生嵌合胞",
+          "嵌合种"
+        ],
         "tab_between_texts": [
           "星辉兑换",
           "原石购买"
@@ -1014,14 +1048,23 @@
           "宗室秘法录",
           "宗室长弓"
         ],
-        "confirm_template": "",
+        "confirm_template": "模板\\原神-兑换确认.png",
         "exit_marker_template": "模板\\原神-主界面.png",
         "timeout_sec": 600,
         "post_delay_sec": 2.0,
         "on_fail": "fail",
         "max_attempts": 1,
-        "items": [],
-        "_comment": "用户 2026-10-25 强调「一定要确认在星尘兑换（不能看到宗室长剑/大剑/猎枪/秘法录/长弓）」：页签模板未选中态消失 + 亮度阈值 150（实测选中 186 vs 未选中 103-114，原神的未选中页签背景比绝区零/崩铁亮，不能用默认 110）+ 宗室武器 OCR 反向拦截，三保险；任一不过整步失败、不购买。confirm_template 故意留空：星尘兑换的确认弹窗尚未截图，下月补清单时必须同时补弹窗截图再填，不要凭猜点。"
+        "items": [
+          {
+            "name": "纠缠之缘",
+            "count": 5
+          },
+          {
+            "name": "相遇之缘",
+            "count": 5
+          }
+        ],
+        "_comment": "用户 2026-11-01 定清单：星尘兑换只买抽卡道具 纠缠之缘/相遇之缘，各买满本月 5 个（单价 75）。**页签判定用页面内容，不用选中态模板/亮度**（用户指出：选中/未选中视觉天然易混，拉阈值也不一定准）：进入后必须 OCR 到星尘专属商品（摩拉/嬗变之尘/并生嵌合胞/嵌合种），看不到就整步失败、不购买；购买前再复核一次内容。tab_template 已置空（旧模板在已选中页仍有 0.854，容易误判），tab_selected_brightness 只留作没有内容标记时的旧流程兜底。宗室武器 forbidden_texts 仍保留作第二道闸。confirm_template 来自 2026-11-01 用户弹窗截图（底部蓝色「兑换」按钮）。"
       }
     ],
     "close_process_on_finish": false
@@ -1111,7 +1154,7 @@
     ]
   },
   "NikkiLauncher": {
-    "_comment": "无限暖暖前置流程：启动叠纸启动器 → 处理更新/点击启动游戏 → 等游戏窗口 → OCR 登录页 → 加载弹窗 → 左下角聊天气泡（主界面特征）。默认不接线：apps.InfinityNikki 不配 prelaunch_flow，一条龙由 whimbox 自己启动游戏；需要时手动加 prelaunch_flow=NikkiLauncher。",
+    "_comment": "无限暖暖前置流程：启动叠纸启动器 → 处理更新/点击启动游戏 → 等游戏窗口 → OCR 登录页 → 加载弹窗 → 左下角聊天气泡（主界面特征）→ 奇想日历（奇迹之冠搭配赛领奖 + 晶石兑换每月一次）。2026-11-01 起 apps.InfinityNikki 默认接线 prelaunch_flow=NikkiLauncher：先进主界面做完日历/兑换，再交给 whimbox 跑一条龙（whimbox 检测到已在游戏会跳过启动）。",
     "enabled": true,
     "exe_path": "E://Program Files//Game//InfinityNikki Launcher//launcher.exe",
     "window_title_keywords": [
@@ -1154,6 +1197,14 @@
         "loading_timeout_sec": 240,
         "on_fail": "retry_step",
         "max_attempts": 2
+      },
+      {
+        "name": "奇想日历与晶石兑换",
+        "action": "nikki_calendar",
+        "target_text": "奇想日历",
+        "timeout_sec": 240,
+        "on_fail": "retry_step",
+        "max_attempts": 1
       }
     ]
   },

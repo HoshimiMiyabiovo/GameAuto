@@ -1,8 +1,15 @@
 """绝区零 / 崩铁「商店 → 兑换商店 → 目标页签」每月兑换通用流程测试（2026-10-25）。
 
-覆盖两套配置（都是 action=monthly_exchange，差异只在 step 参数）：
-- 绝区零 ZZZ_MONTHLY：ESC → 商城(24HOUR) → 信源清单 → 信号残响
-- 崩铁 HSR_MONTHLY：ESC → 商店 → 兑换商店 → 余烬兑换
+覆盖三套配置（都是 action=monthly_exchange，差异只在 step 参数）：
+- 绝区零 ZZZ_MONTHLY：ESC → 商城(24HOUR) → 信源清单 → 信号残响（2026-11-01 清单：
+  加密母带/原装母带各买满 5 个；**用储值电卡做页面内容强校验**，信号余波页也有同名母带
+  但没有储值电卡）
+- 崩铁 HSR_MONTHLY：ESC → 商店 → 兑换商店 → 余烬兑换（2026-11-01 清单：
+  星轨专票/星轨通票各 5 + 命运的足迹 2；**用信用点做页面内容强校验**，星芒页也有同名
+  专票/通票/足迹但没有信用点）
+- 原神 GENSHIN_MONTHLY：ESC → 商城 → 尘辉兑换 → 星尘兑换（2026-11-01 清单：
+  纠缠之缘/相遇之缘各买满 5 个；**页签用页面内容强校验**：必须 OCR 到摩拉/嬗变之尘/
+  并生嵌合胞/嵌合种等星尘专属商品才允许买；确认模板来自用户弹窗截图）
 
 重点（用户 2026-10-25 两次强调「一定要进入余烬兑换/信号残响」）：
 页签未选中态模板不消失（点击后没真的切过去）必须整步失败，且不能进入购买。
@@ -13,14 +20,15 @@
 3. 已在 ESC 菜单不多按 ESC
 4. 已达上限（点商品无弹窗）中断剩余次数且不计失败
 5. 找不到目标页签：整步失败，不进入购买
-6. 商品定位失败：该项失败，其余继续
+6. 商品在页面上看不到（月上限已用完）：按已购买处理，不算失败，其余继续
 7. 用户停止
 8. 回不到主世界：购买成功照报，但摘要标注
 9. 确认模板缺失：直接失败，不点任何东西
 10. 页签已是选中态（未选中态模板不命中）：OCR 依据继续
 11. 崩铁导航限定左侧区域（避开面包屑「兑换商店」）
 12. 页签点击后未切换：整步失败，零购买（核心防护）
-13. 配置静态：两流程 actions/顺序/空清单/模板存在/区域合法
+13. 配置静态：三流程 actions/顺序/空清单/模板存在/区域合法
+14. 三游戏内容标记真实截图分离度（原神摩拉、绝区零储值电卡、崩铁信用点）+ 确认模板分离度
 """
 
 import copy
@@ -110,7 +118,7 @@ class FakeGame:
                  tab_selected=False, tab_ocr_ok=True, tab_template_ok=True,
                  brightness_unavailable=False, brightness_selected=210.0, brightness_unselected=35.0,
                  forbidden_visible=(), no_popup_after=None, confirm_stuck=(),
-                 missing_items=(), exit_ok=True):
+                 missing_items=(), exit_ok=True, content_ok=True):
         self.game = game
         self.page = page
         self.nav_ok = nav_ok
@@ -127,6 +135,7 @@ class FakeGame:
         self.confirm_stuck = set(confirm_stuck)
         self.missing_items = set(missing_items)
         self.exit_ok = exit_ok
+        self.content_ok = content_ok
         self.popup = False
         self.current_item = None
         self.item_clicks = {}
@@ -152,7 +161,7 @@ class FakeGame:
             return NAV if (self.page == "shop" and self.nav_ok) else None
         if text == self.game["tab_text"]:
             if self.page == "shop" and self.tab_ok and self.tab_ocr_ok:
-                return TAB
+                return self.game["tab_point"]
             return None
         if text == "星芒兑换":
             return TAB_LEFT if (self.page == "shop" and self.tab_ok) else None
@@ -244,6 +253,7 @@ def run_case(step, game, fake, stop_after_clicks=None):
         "time_sleep": time.sleep,
         "brightness": mx._tab_brightness,
         "visible": mx._visible_texts,
+        "content": mx._content_markers_present,
     }
     mx._locate = lambda hwnd, template, scales, confs, timeout, stop_check=None, interval=0.5: fake.locate_nav(template)
     mx._locate_ocr = lambda logger, hwnd, text, timeout, stop_check=None, interval=0.5: fake.ocr_nav(text)
@@ -258,6 +268,10 @@ def run_case(step, game, fake, stop_after_clicks=None):
     mx._visible_texts = lambda logger, hwnd: [
         {"text": t, "confidence": 0.8} for t in fake.forbidden_visible
     ]
+    mx._content_markers_present = lambda logger, hwnd, markers: (
+        markers[0] if (fake.page == "shop" and fake.tab_selected and fake.content_ok and markers)
+        else None
+    )
     shop._locate = lambda hwnd, template, scales, confs, timeout, stop_check=None, interval=0.5: fake.locate_shop(template)
     shop._locate_ocr = lambda logger, hwnd, text, timeout, stop_check=None, interval=0.5: fake.ocr_shop(text)
     shop._wait_gone = lambda hwnd, template, scales, confs, timeout, stop_check=None, interval=0.5: fake.wait_gone(template)
@@ -282,19 +296,15 @@ def run_case(step, game, fake, stop_after_clicks=None):
         time.sleep = saved["time_sleep"]
         mx._tab_brightness = saved["brightness"]
         mx._visible_texts = saved["visible"]
+        mx._content_markers_present = saved["content"]
     return ok, msg, fake, regions
 
 
-ZZZ_DEFAULT_ITEMS = [
-    {"name": "加密母带", "count": 2},
-    {"name": "原装母带", "count": 1},
-]
-
-
 def zzz_step(items=None):
-    """绝区零参数直接从 flow_configs 读（含 forbidden_texts），只替换商品清单。"""
+    """绝区零参数直接从 flow_configs 读（含 forbidden_texts / 储值电卡内容校验）。"""
     step = copy.deepcopy(load_step("ZZZ_MONTHLY", "信号残响每月兑换"))
-    step["items"] = copy.deepcopy(ZZZ_DEFAULT_ITEMS if items is None else items)
+    if items is not None:
+        step["items"] = items
     return step
 
 
@@ -303,18 +313,16 @@ def load_step(flow_key, name):
 
 
 def hsr_step(items=None):
-    """崩铁参数取自 flow_configs（含 nav_region_frac），确认模板借后勤商店的只为跑状态机。"""
+    """崩铁参数取自 flow_configs（含 nav_region_frac / 信用点内容校验 / 确认模板）。"""
     step = copy.deepcopy(load_step("HSR_MONTHLY", "余烬兑换每月兑换"))
-    step["confirm_template"] = "模板\\绝区零-商店-确认.png"
     if items is not None:
         step["items"] = items
     return step
 
 
 def genshin_step(items=None):
-    """原神参数取自 flow_configs（含 forbidden_texts / 亮度阈值 150），确认模板同样只为跑状态机。"""
+    """原神参数取自 flow_configs（含 forbidden_texts / 亮度阈值 150 / 已补齐的确认模板）。"""
     step = copy.deepcopy(load_step("GENSHIN_MONTHLY", "星尘兑换每月兑换"))
-    step["confirm_template"] = "模板\\绝区零-商店-确认.png"
     if items is not None:
         step["items"] = items
     return step
@@ -332,9 +340,9 @@ print()
 print("== 用例2：主世界完整链路（绝区零）==")
 ok, msg, fake, _ = run_case(zzz_step(), ZZZ, FakeGame(ZZZ, page="main"))
 check("整体成功", ok is True, msg)
-check("摘要含 加密母带 2/2", "加密母带: 2/2" in msg, msg)
-check("摘要含 原装母带 1/1", "原装母带: 1/1" in msg, msg)
-expected = [ENTRY, NAV, TAB, ITEM, CONFIRM, ITEM, CONFIRM, ITEM, CONFIRM]
+check("摘要含 加密母带 5/5", "加密母带: 5/5" in msg, msg)
+check("摘要含 原装母带 5/5", "原装母带: 5/5" in msg, msg)
+expected = [ENTRY, NAV, TAB] + [ITEM, CONFIRM] * 10
 check("点击顺序：入口→导航→页签→商品→确认", fake.clicks == expected, f"{fake.clicks}")
 check("ESC 次数=3（打开菜单1 + 退出2）", fake.esc_count == 3, f"esc={fake.esc_count}")
 check("结束后回到主世界", fake.page == "main", fake.page)
@@ -370,11 +378,11 @@ check("错误说明页签未找到", "未找到「信号残响」页签" in msg,
 check("未进入购买", all(c not in (ITEM, CONFIRM) for c in fake.clicks), f"{fake.clicks}")
 
 print()
-print("== 用例6：商品 OCR 定位失败 ==")
+print("== 用例6：商品在页面上看不到（本月已买过）==")
 ok, msg, fake, _ = run_case(zzz_step(), ZZZ, FakeGame(ZZZ, page="menu", missing_items={"加密母带"}))
-check("失败", ok is False, msg)
-check("摘要含定位失败", "加密母带: 0/2（商品定位失败" in msg, msg)
-check("其余商品继续 原装母带 1/1", "原装母带: 1/1" in msg, msg)
+check("按已购买处理，不算失败", ok is True, msg)
+check("摘要写按已购买处理", "加密母带: 0/5（页面上没看到该商品，按已购买处理）" in msg, msg)
+check("其余商品继续 原装母带 5/5", "原装母带: 5/5" in msg, msg)
 
 print()
 print("== 用例7：用户停止 ==")
@@ -404,6 +412,12 @@ ok, msg, fake, _ = run_case(zzz_step(), ZZZ, FakeGame(ZZZ, page="menu", tab_sele
 check("整体成功", ok is True, msg)
 check("已选中时不再重复点击页签", TAB not in fake.clicks, f"{fake.clicks}")
 
+ok, msg, fake, _ = run_case(
+    zzz_step(), ZZZ, FakeGame(ZZZ, page="menu", tab_selected=True, content_ok=False),
+)
+check("信号残响外观已选中但无储值电卡 → 必须失败", ok is False, msg)
+check("内容不符时零购买", all(c not in (ITEM, CONFIRM) for c in fake.clicks), f"{fake.clicks}")
+
 print()
 print("== 用例11+12：崩铁链路（区域导航 / 页签必须真的切换）==")
 ok, msg, fake, regions = run_case(
@@ -420,22 +434,22 @@ ok, msg, fake, _ = run_case(
     FakeGame(HSR, page="main", tab_switch_ok=False),
 )
 check("页签未切换 → 整步失败", ok is False, msg)
-check("失败原因写明未切换", "未能切换到「余烬兑换」页签" in msg, msg)
+check("失败原因写明未确认页签", "未确认在「余烬兑换」" in msg, msg)
 check("页签未切换时零购买（不得在错误页签买东西）",
       all(c not in (ITEM, CONFIRM) for c in fake.clicks), f"{fake.clicks}")
 
 print()
-print("== 用例11b：已选中 + 目标页签 OCR 认错（中点定位 + 亮度确认）==")
+print("== 用例11b：已选中 + 目标页签 OCR 认错（内容确认）==")
 ok, msg, fake, _ = run_case(
     hsr_step([{"name": "测试商品", "count": 1}]), HSR,
     FakeGame(HSR, page="menu", tab_selected=True, tab_ocr_ok=False),
 )
 check("整体成功", ok is True, msg)
-check("按相邻页签中点判定，且已选中不重复点击", TAB_MID not in fake.clicks, f"{fake.clicks}")
+check("已有信用点（内容判据）→ 不再点页签", TAB_MID not in fake.clicks, f"{fake.clicks}")
 check("购买了商品", ITEM in fake.clicks, f"{fake.clicks}")
 
 print()
-print("== 用例11c：模板失效 + OCR 认错 + 未选中（中点点击 + 亮度复核）==")
+print("== 用例11c：OCR 认错 + 未选中（中点点击 + 内容确认）==")
 ok, msg, fake, _ = run_case(
     hsr_step([{"name": "测试商品", "count": 1}]), HSR,
     FakeGame(HSR, page="menu", tab_ocr_ok=False, tab_template_ok=False),
@@ -445,13 +459,13 @@ check("点击的是相邻页签中点", TAB_MID in fake.clicks, f"{fake.clicks}"
 check("购买了商品", ITEM in fake.clicks, f"{fake.clicks}")
 
 print()
-print("== 用例11d：亮度读不到且模板不命中 → 不得放行 ==")
+print("== 用例11d：余烬兑换外观已选中但无信用点 → 必须失败 ==")
 ok, msg, fake, _ = run_case(
     hsr_step([{"name": "测试商品", "count": 1}]), HSR,
-    FakeGame(HSR, page="menu", tab_selected=True, tab_ocr_ok=False, brightness_unavailable=True),
+    FakeGame(HSR, page="menu", tab_selected=True, content_ok=False),
 )
 check("整步失败", ok is False, msg)
-check("说明无法确认页签亮度", "无法读取「余烬兑换」页签亮度" in msg, msg)
+check("说明未确认页签", "未确认在「余烬兑换」" in msg, msg)
 check("零购买", all(c not in (ITEM, CONFIRM) for c in fake.clicks), f"{fake.clicks}")
 
 print()
@@ -465,10 +479,10 @@ check("失败原因写明错页签", "检测到「银河铁道之夜」，当前
 check("错页签时零购买", all(c not in (ITEM, CONFIRM) for c in fake.clicks), f"{fake.clicks}")
 
 print()
-print("== 用例12：原神星尘兑换链路 + 错页签拦截 ==")
+print("== 用例12：原神星尘兑换链路（内容强校验） ==")
 ok, msg, fake, _ = run_case(
     genshin_step([{"name": "测试商品", "count": 1}]), GENSHIN,
-    FakeGame(GENSHIN, page="main", brightness_selected=186.0, brightness_unselected=104.0),
+    FakeGame(GENSHIN, page="main"),
 )
 check("原神完整链路成功", ok is True, msg)
 check("点击顺序：商城→尘辉兑换→星尘兑换→商品→确认",
@@ -485,26 +499,31 @@ check("错页签时零购买", all(c not in (ITEM, CONFIRM) for c in fake.clicks
 
 ok, msg, fake, _ = run_case(
     genshin_step([{"name": "测试商品", "count": 1}]), GENSHIN,
-    FakeGame(GENSHIN, page="menu", tab_selected=True,
-             brightness_selected=186.0, brightness_unselected=104.0),
+    FakeGame(GENSHIN, page="menu", tab_selected=True),
 )
-check("已选中（亮度 186 ≥ 150）不再点击页签", ok is True and GENS_TAB not in fake.clicks, msg)
+check("页面已有星尘专属商品 → 不再点页签", ok is True and GENS_TAB not in fake.clicks, msg)
 
 ok, msg, fake, _ = run_case(
     genshin_step([{"name": "测试商品", "count": 1}]), GENSHIN,
-    FakeGame(GENSHIN, page="menu", tab_ocr_ok=False, tab_template_ok=False,
-             brightness_selected=186.0, brightness_unselected=114.0),
+    FakeGame(GENSHIN, page="menu", tab_ocr_ok=False),
 )
-check("模板失效+OCR认错 → 相邻页签中点点击后成功", ok is True and GENS_TAB_MID in fake.clicks, msg)
+check("OCR 认错页签 → 相邻页签中点点击后内容确认成功",
+      ok is True and GENS_TAB_MID in fake.clicks, msg)
 
 ok, msg, fake, _ = run_case(
     genshin_step([{"name": "测试商品", "count": 1}]), GENSHIN,
-    FakeGame(GENSHIN, page="menu", tab_ocr_ok=False, tab_template_ok=False, tab_switch_ok=False,
-             brightness_selected=186.0, brightness_unselected=114.0),
+    FakeGame(GENSHIN, page="menu", tab_ocr_ok=False, tab_switch_ok=False),
 )
-check("未选中页签亮度 114 < 150 → 不得误判为选中", ok is False, msg)
-check("失败原因写明亮度不足", "亮度 114 < 150" in msg, msg)
+check("点页签后仍无星尘专属商品 → 整步失败", ok is False, msg)
+check("失败原因写明未确认页签", "未确认在「星尘兑换」" in msg, msg)
 check("零购买", all(c not in (ITEM, CONFIRM) for c in fake.clicks), f"{fake.clicks}")
+
+ok, msg, fake, _ = run_case(
+    genshin_step([{"name": "测试商品", "count": 1}]), GENSHIN,
+    FakeGame(GENSHIN, page="menu", tab_selected=True, content_ok=False),
+)
+check("页签外观已选中但无星尘专属商品 → 必须失败", ok is False, msg)
+check("内容不符时零购买", all(c not in (ITEM, CONFIRM) for c in fake.clicks), f"{fake.clicks}")
 
 print()
 print("== 用例13：配置静态 ==")
@@ -515,7 +534,11 @@ check("绝区零步骤顺序：等主界面 → 信号残响 → 打开功能菜
       zzz_names.index("信号残响每月兑换") == zzz_names.index("等待进入主界面") + 1
       and zzz_names.index("打开功能菜单") == zzz_names.index("信号残响每月兑换") + 1, f"{zzz_names}")
 check("绝区零 action=monthly_exchange", zzz.get("action") == "monthly_exchange", zzz.get("action"))
-check("绝区零清单为空（下月补）", zzz.get("items") == [], f"{zzz.get('items')}")
+check("绝区零清单：加密母带×5 + 原装母带×5",
+      [(i.get("name"), i.get("count")) for i in (zzz.get("items") or [])]
+      == [("加密母带", 5), ("原装母带", 5)], zzz.get("items"))
+check("绝区零页签内容强校验：储值电卡（信号余波页没有）",
+      zzz.get("tab_content_markers") == ["储值电卡"], zzz.get("tab_content_markers"))
 check("绝区零日志前缀", zzz.get("log_label") == "信源兑换", zzz.get("log_label"))
 check("绝区零错页签拦截词齐备（信号余波商品，含 OCR 变体）",
       zzz.get("forbidden_texts") == ["硫磺石", "燃狱齿轮", "嵌合编译器", "啜泣摇篮", "嚼泣摇篮"],
@@ -533,8 +556,16 @@ check("崩铁进入主界面复用 starrail_enter_main",
 hsr = load_step("HSR_MONTHLY", "余烬兑换每月兑换")
 check("崩铁 action=monthly_exchange", hsr.get("action") == "monthly_exchange", hsr.get("action"))
 check("崩铁日志前缀", hsr.get("log_label") == "余烬兑换", hsr.get("log_label"))
-check("崩铁清单为空（下月补）", hsr.get("items") == [], f"{hsr.get('items')}")
-check("崩铁确认模板故意留空（弹窗未截图）", hsr.get("confirm_template") == "", hsr.get("confirm_template"))
+check("崩铁清单：星轨专票×5 + 星轨通票×5 + 命运的足迹×2",
+      [(i.get("name"), i.get("count")) for i in (hsr.get("items") or [])]
+      == [("星轨专票", 5), ("星轨通票", 5), ("命运的足迹", 2)], hsr.get("items"))
+check("崩铁页签内容强校验：信用点（星芒页没有）",
+      hsr.get("tab_content_markers") == ["信用点"], hsr.get("tab_content_markers"))
+hsr_conf = hsr.get("confirm_template") or ""
+check("崩铁确认模板已补齐且存在",
+      os.path.isabs(hsr_conf) and os.path.isfile(hsr_conf)
+      and os.path.basename(hsr_conf) == "崩铁-兑换确认.png",
+      hsr_conf)
 frac = hsr.get("nav_region_frac")
 check("崩铁导航区域合法", isinstance(frac, list) and len(frac) == 4 and 0 <= frac[0] < frac[2] <= 1 and 0 <= frac[1] < frac[3] <= 1, f"{frac}")
 check("崩铁配置了相邻页签兜底", hsr.get("tab_between_texts") == ["星芒兑换", "星尘之礼"],
@@ -542,7 +573,7 @@ check("崩铁配置了相邻页签兜底", hsr.get("tab_between_texts") == ["星
 check("崩铁错页签拦截词齐备（星芒兑换五星光锥）",
       hsr.get("forbidden_texts") == ["银河铁道之夜", "时节不居", "但战斗还未结束", "无可取代的东西", "以世界之名"],
       f"{hsr.get('forbidden_texts')}")
-for key in ("tab_template", "exit_marker_template"):
+for key in ("tab_template", "confirm_template", "exit_marker_template"):
     p = hsr.get(key) or ""
     check(f"崩铁 {key} 已锚定且存在", os.path.isabs(p) and os.path.isfile(p), p)
 
@@ -562,8 +593,22 @@ check("exe_from_game 解析出 YuanShen.exe", bool(gen_exe) and "YuanShen.exe" i
 gen = load_step("GENSHIN_MONTHLY", "星尘兑换每月兑换")
 check("原神 action=monthly_exchange", gen.get("action") == "monthly_exchange", gen.get("action"))
 check("原神日志前缀", gen.get("log_label") == "星尘兑换", gen.get("log_label"))
-check("原神清单为空（下月补）", gen.get("items") == [], f"{gen.get('items')}")
-check("原神确认模板故意留空（弹窗未截图）", gen.get("confirm_template") == "", gen.get("confirm_template"))
+gen_items = gen.get("items") or []
+check("原神清单：纠缠之缘×5 + 相遇之缘×5",
+      [(i.get("name"), i.get("count")) for i in gen_items]
+      == [("纠缠之缘", 5), ("相遇之缘", 5)], gen_items)
+gen_conf = gen.get("confirm_template") or ""
+check("原神确认模板已补齐且存在",
+      os.path.isabs(gen_conf) and os.path.isfile(gen_conf)
+      and os.path.basename(gen_conf) == "原神-兑换确认.png",
+      gen_conf)
+check("原神页签内容强校验标记齐备（页面内容为准）",
+      gen.get("tab_content_markers") == ["摩拉", "嬗变之尘", "并生嵌合胞", "嵌合种"],
+      gen.get("tab_content_markers"))
+check("原神不再依赖选中态页签模板", gen.get("tab_template") == "", gen.get("tab_template"))
+check("原神模板阈值保持原值（页签判据已改为内容）",
+      (gen_cfg or {}).get("match_confidences") == [0.9, 0.88, 0.85],
+      (gen_cfg or {}).get("match_confidences"))
 check("原神亮度阈值 150（未选中页签背景比其它两游戏亮）",
       gen.get("tab_selected_brightness") == 150, gen.get("tab_selected_brightness"))
 check("原神错页签拦截词齐备（宗室五件武器）",
@@ -571,20 +616,135 @@ check("原神错页签拦截词齐备（宗室五件武器）",
       f"{gen.get('forbidden_texts')}")
 check("原神配置相邻页签兜底", gen.get("tab_between_texts") == ["星辉兑换", "原石购买"],
       f"{gen.get('tab_between_texts')}")
-for key in ("tab_template", "exit_marker_template"):
+for key in ("confirm_template", "exit_marker_template"):
     p = gen.get(key) or ""
     check(f"原神 {key} 已锚定且存在", os.path.isabs(p) and os.path.isfile(p), p)
 
-check("独立任务目录包含 GenshinMonthlyFlow", "GenshinMonthlyFlow" in STANDALONE_TASK_APPS)
-check("独立任务顺序包含原神每月", "GenshinMonthlyFlow" in STANDALONE_TASK_ORDER)
-check("merge 后 APPS 暴露 GenshinMonthlyFlow", "GenshinMonthlyFlow" in APPS)
+print()
+print("== 用例14：三游戏内容标记与确认模板真实截图分离度 ==")
+
+
+def _max_match_score(tpl_path, img_path):
+    import cv2
+    import numpy as np
+    from PIL import Image
+
+    tpl = cv2.cvtColor(np.asarray(Image.open(tpl_path).convert("RGB")), cv2.COLOR_RGB2GRAY)
+    scr = cv2.cvtColor(np.asarray(Image.open(img_path).convert("RGB")), cv2.COLOR_RGB2GRAY)
+    best = 0.0
+    for scale in (1.0, 1.25, 0.8, 1.5, 0.67):
+        t2 = cv2.resize(tpl, None, fx=scale, fy=scale)
+        if t2.shape[0] > scr.shape[0] or t2.shape[1] > scr.shape[1]:
+            continue
+        best = max(best, float(cv2.matchTemplate(scr, t2, cv2.TM_CCOEFF_NORMED).max()))
+    return best
+
+
+ART = PROJECT_ROOT / "data" / "artifacts"
+confirm_tpl = PROJECT_ROOT / "模板" / "原神-兑换确认.png"
+old_page = ART / "ref_genshin_exchange_shop_20261025.png"
+selected_page = ART / "ref_genshin_stardust_20261101.png"
+dialog_img = ART / "ref_genshin_stardust_dialog_20261101.png"
+markers = gen.get("tab_content_markers") or []
+
+
+def _ocr_texts(img_path):
+    import numpy as np
+    from PIL import Image
+
+    from game_auto.runtime.ocr_click_tester import _get_rapidocr_engine
+
+    rows, _ = _get_rapidocr_engine()(np.asarray(Image.open(img_path).convert("RGB")))
+    return [str(t) for _box, t, c in rows or [] if float(c) >= 0.45]
+
+
+if old_page.exists() and selected_page.exists():
+    old_texts = _ocr_texts(old_page)
+    new_texts = _ocr_texts(selected_page)
+    old_hits = [m for m in markers if any(m in t for t in old_texts)]
+    new_hits = [m for m in markers if any(m in t for t in new_texts)]
+    check("星辉页没有星尘专属商品（不会误买）", not old_hits, old_hits)
+    check("星尘页能 OCR 到专属商品（摩拉等）", bool(new_hits), new_hits)
+    for name in ("纠缠之缘", "相遇之缘"):
+        texts = [t for t in new_texts if name in t]
+        check(f"星尘页「{name}」OCR 可识别", bool(texts), texts)
+else:
+    print("  SKIP 缺少原神页签参考图")
+if dialog_img.exists() and selected_page.exists():
+    score_dlg = _max_match_score(confirm_tpl, dialog_img)
+    score_page = _max_match_score(confirm_tpl, selected_page)
+    check("确认按钮模板在弹窗上 ≥0.99", score_dlg >= 0.99, f"{score_dlg:.3f}")
+    check("确认按钮模板在无弹窗页面 <0.85（当前生效阈值）", score_page < 0.85, f"{score_page:.3f}")
+else:
+    print("  SKIP 缺少原神弹窗参考图")
+
+zzz_page = ART / "ref_zzz_signal_resonance_20261101.png"
+zzz_old = ART / "ref_zzz_signal_exchange_shop_20261025.png"
+zzz_dialog = ART / "ref_zzz_signal_resonance_dialog_20261101.png"
+zzz_confirm = PROJECT_ROOT / "模板" / "绝区零-商店-确认.png"
+if zzz_page.exists() and zzz_old.exists():
+    zzz_new_texts = _ocr_texts(zzz_page)
+    zzz_old_texts = _ocr_texts(zzz_old)
+    check("信号残响页有储值电卡（内容判据）",
+          any("储值电卡" in t for t in zzz_new_texts), zzz_new_texts)
+    check("信号余波页没有储值电卡（不能只看母带名）",
+          not any("储值电卡" in t for t in zzz_old_texts), zzz_old_texts)
+    check("信号余波页确有硫磺石（旧页对照有效）",
+          any("硫磺石" in t for t in zzz_old_texts), zzz_old_texts)
+else:
+    print("  SKIP 缺少绝区零页签参考图")
+if zzz_dialog.exists() and zzz_page.exists():
+    score_dlg = _max_match_score(zzz_confirm, zzz_dialog)
+    score_page = _max_match_score(zzz_confirm, zzz_page)
+    check("绝区零确认模板在弹窗上 ≥0.99", score_dlg >= 0.99, f"{score_dlg:.3f}")
+    check("绝区零确认模板在商店页 <0.80（生效阈值）", score_page < 0.80, f"{score_page:.3f}")
+else:
+    print("  SKIP 缺少绝区零弹窗参考图")
+
+hsr_page = ART / "ref_starrail_ember_20261101.png"
+hsr_old = ART / "ref_starrail_exchange_shop_20261025.png"
+hsr_dialog = ART / "ref_starrail_ember_dialog_20261101.png"
+hsr_confirm = PROJECT_ROOT / "模板" / "崩铁-兑换确认.png"
+if hsr_page.exists() and hsr_old.exists():
+    hsr_new_texts = _ocr_texts(hsr_page)
+    hsr_old_texts = _ocr_texts(hsr_old)
+    check("余烬页有信用点（内容判据）",
+          any("信用点" in t for t in hsr_new_texts), hsr_new_texts)
+    check("星芒页没有信用点（不能只看专票/足迹名）",
+          not any("信用点" in t for t in hsr_old_texts), hsr_old_texts)
+    for name in ("星轨专票", "星轨通票", "命运的足迹"):
+        check(f"余烬页「{name}」OCR 可识别",
+              any(name in t for t in hsr_new_texts), [t for t in hsr_new_texts if name in t])
+    check("星芒页确有五星光锥（旧页对照有效）",
+          any("银河铁道之夜" in t for t in hsr_old_texts), hsr_old_texts)
+else:
+    print("  SKIP 缺少崩铁页签参考图")
+if hsr_dialog.exists() and hsr_page.exists():
+    score_dlg = _max_match_score(hsr_confirm, hsr_dialog)
+    score_page = _max_match_score(hsr_confirm, hsr_page)
+    check("崩铁确认模板在弹窗上 ≥0.99", score_dlg >= 0.99, f"{score_dlg:.3f}")
+    check("崩铁确认模板在商店页 <0.80（生效阈值）", score_page < 0.80, f"{score_page:.3f}")
+else:
+    print("  SKIP 缺少崩铁弹窗参考图")
+
+check("独立任务目录已删除每月任务",
+      not any(k in STANDALONE_TASK_APPS for k in ("HsrMonthlyFlow", "ZzzMonthlyFlow", "GenshinMonthlyFlow")),
+      list(STANDALONE_TASK_APPS))
+check("STANDALONE_TASK_ORDER 不再含每月任务",
+      not any(k in STANDALONE_TASK_ORDER for k in ("HsrMonthlyFlow", "ZzzMonthlyFlow", "GenshinMonthlyFlow")),
+      STANDALONE_TASK_ORDER)
+check("merge 后 APPS 不再暴露每月任务", "GenshinMonthlyFlow" not in APPS)
 
 bg_src = (PROJECT_ROOT / "runtime" / "background_template_runner.py").read_text(encoding="utf-8")
 check("后台 runner 提供原神每月入口",
       "def run_genshin_monthly_background" in bg_src and '"GENSHIN_MONTHLY"' in bg_src)
 batch_src = (PROJECT_ROOT / "runtime" / "task_batch_runner.py").read_text(encoding="utf-8")
-check("批次执行器接线 GenshinMonthlyFlow",
-      'app_key == "GenshinMonthlyFlow"' in batch_src and "run_genshin_monthly_background" in batch_src)
+check("批次执行器不再按 app_key 分派每月任务",
+      'app_key == "GenshinMonthlyFlow"' not in batch_src
+      and 'app_key == "HsrMonthlyFlow"' not in batch_src
+      and 'app_key == "ZzzMonthlyFlow"' not in batch_src)
+check("批次执行器改为日常跑完自动补跑",
+      "_append_monthly_report" in batch_src and "_MONTHLY_FLOW_BY_APP" in batch_src)
 
 runner_src = (PROJECT_ROOT / "runtime" / "foreground_flow_runner.py").read_text(encoding="utf-8")
 check("runner 注册 monthly_exchange", '"monthly_exchange"' in runner_src)

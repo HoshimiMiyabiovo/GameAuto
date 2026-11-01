@@ -2,15 +2,15 @@
 
 用户拍板：
   - 塔吉多 roleHome 的 dayvalue（每日活跃度，上限 100）接入判定：
-    dayvalue >= 100 → 当日完成（复核兜底）；体力/城市体力进卡片展示；
+    dayvalue >= 100 → 当日完成（复核兜底）；本性像素/都市活力进卡片展示；
   - 社区任务（点赞/浏览/分享）停止查询与落库（getUserTasks 仍供签到内部使用）；
   - 无限暖暖 Pearpal 的 5 项假进度任务（每日心愿/周常奖励/能量体力/派遣/登录天数）
     停止查询与落库，真实进度只来自 whimbox 日志。
 
 断言：
   1. fetch_role_home 解析 roleHome 响应
-  2. check_tajiduo_daily：产出 活跃度/体力/城市体力/游戏签到，不再有社区任务
-  3. 活跃度满/不满对 daily_completed 的影响；体力不参与完成判定
+  2. check_tajiduo_daily：产出 活跃度/本性像素/都市活力/游戏签到，不再有社区任务
+  3. 活跃度满/不满对 daily_completed 的影响；资源计量不参与完成判定
   4. completion_state：无 日常领取 时活跃度计数兜底；有 日常领取 时状态优先
   5. 事后复核：dayvalue 满 → 不改判（即使 ok-nte 边角失败）；不满 → 保持改判
   6. 暖暖：Pearpal 函数已删除，whimbox 落库仍在
@@ -94,8 +94,14 @@ def test_check_tajiduo_daily():
     check("活跃度 100/100 已完成",
           names.get("活跃度") and names["活跃度"].current == 100 and names["活跃度"].is_completed,
           st.tasks)
-    check("体力 360/360 进卡片", names.get("体力") and names["体力"].total == 360, st.tasks)
-    check("城市体力 0/700 进卡片", names.get("城市体力") and names["城市体力"].current == 0, st.tasks)
+    check("本性像素 360/360 进卡片",
+          names.get("本性像素") and names["本性像素"].total == 360, st.tasks)
+    check("本性像素满 → 展示为完成",
+          names.get("本性像素") and names["本性像素"].is_completed is True, st.tasks)
+    check("都市活力 0/700 进卡片",
+          names.get("都市活力") and names["都市活力"].current == 0, st.tasks)
+    check("都市活力未满 → 展示为未完成",
+          names.get("都市活力") and names["都市活力"].is_completed is False, st.tasks)
     check("游戏签到在列", names.get("异环签到") and names["异环签到"].is_completed, st.tasks)
     check("社区任务已删除",
           not ({"点赞帖子", "浏览帖子", "分享", "社区签到"} & set(names)), list(names))
@@ -104,7 +110,7 @@ def test_check_tajiduo_daily():
     st60 = _run_check(60)
     n60 = {t.name: t for t in st60.tasks}
     check("dayvalue 60 → 活跃度未完成", n60["活跃度"].is_completed is False)
-    check("dayvalue 60 → 每日未完成（体力不计入判定）", st60.is_daily_completed is False)
+    check("dayvalue 60 → 每日未完成（资源计量不计入判定）", st60.is_daily_completed is False)
 
 
 def test_completion_state():

@@ -771,6 +771,50 @@ def check_wuwa_daily(profile: WuwaKujiequProfile) -> GameDailyStatus:
         )
 
 
+# 库街区活跃度由服务器在「进过游戏」后结算，脚本刚退出时立即查询经常还是
+# 0/100（2026-11-01 实跑：ok-ww 11:53:03 退出，11:53:26 刷新缓存后查到 0/100，
+# 13:30 再查已是 100/100，中间只打了几把副本）。fetch_daily_data 本身每次都会
+# 先调 refresh_daily_data 刷缓存，所以问题不在缓存，而在结算需要时间——
+# 这里在拿到 0 时等一会儿重查，而不是直接把 0 落库标 stale。
+WUWA_STALE_RETRY_DELAYS: Tuple[float, ...] = (8.0, 20.0)
+
+
+def _wuwa_liveness_is_stale(status: GameDailyStatus) -> bool:
+    """今日活跃为 0（且 total>0）时视为还没结算，需要重查。"""
+    for task in status.tasks:
+        if task.name == "今日活跃" and task.total > 0 and task.current <= 0:
+            return True
+    return False
+
+
+def check_wuwa_daily_with_retry(profile: WuwaKujiequProfile) -> GameDailyStatus:
+    """查鸣潮每日数据；活跃度仍是 0 时等几秒重查，避免把「未结算」当「0 活跃」。
+
+    最多 1 + len(WUWA_STALE_RETRY_DELAYS) 次，全部为 0 才原样返回（上层照旧标 stale）。
+    重查抛错时保留上一次能用的结果，不让整条链路变成 errors。
+    """
+    status = check_wuwa_daily(profile)
+    total_attempts = len(WUWA_STALE_RETRY_DELAYS) + 1
+    for attempt, delay in enumerate(WUWA_STALE_RETRY_DELAYS, start=2):
+        if not _wuwa_liveness_is_stale(status):
+            break
+        LOGGER.info(
+            "[鸣潮] 今日活跃仍是 0，%d 秒后重查（第 %d/%d 次，等库街区结算）",
+            int(delay), attempt, total_attempts,
+        )
+        time.sleep(delay)
+        try:
+            retry_status = check_wuwa_daily(profile)
+        except Exception as exc:  # noqa: BLE001 - 重查失败沿用上一次结果
+            LOGGER.warning("[鸣潮] 活跃度重查失败，沿用上一次结果: %s", exc)
+            break
+        if retry_status.errors and not status.errors:
+            LOGGER.warning("[鸣潮] 活跃度重查无数据，沿用上一次结果: %s", retry_status.errors)
+            break
+        status = retry_status
+    return status
+
+
 # ---------------------------------------------------------------------------
 # 塔吉多 / 异环（游戏侧 roleHome 数值 + 游戏签到）
 # ---------------------------------------------------------------------------
@@ -790,7 +834,7 @@ def check_tajiduo_daily(
 
     复用**签到用的 token / deviceid**，不需要额外凭据。数据两路：
     - 游戏侧：roleHome（H5 游戏名片接口）的 dayvalue（每日活跃度）与
-      体力/城市体力——2026-10-24 接入，判定口径 dayvalue >= 100 → 当日完成；
+      本性像素/都市活力——2026-10-24 接入，判定口径 dayvalue >= 100 → 当日完成；
     - 游戏签到状态：awapi 的 signin 接口。
 
     2026-10-24 用户拍板：社区任务（点赞/浏览/分享）不再查询与落库
@@ -827,13 +871,20 @@ def check_tajiduo_daily(
                     total=NTE_DAILY_ACTIVITY_MAX,
                     is_completed=dayvalue >= NTE_DAILY_ACTIVITY_MAX,
                 ))
+                # 字段名沿用接口原义：H5 名片把 stamina 显示为「本性像素」，
+                # citystamina 显示为「都市活力」。不要叫「体力/城市体力」，
+                # 否则会把 360/360 误认成玩家口中的普通体力。
+                # is_completed 只用于展示是否已满；这两项在 daily_completed
+                # 里被显式排除，不参与每日完成判定。
+                stamina_cur, stamina_max = _num("staminaValue"), _num("staminaMaxValue")
                 tasks.append(DailyTaskItem(
-                    name="体力", current=_num("staminaValue"),
-                    total=_num("staminaMaxValue"), is_completed=False,
+                    name="本性像素", current=stamina_cur, total=stamina_max,
+                    is_completed=stamina_max > 0 and stamina_cur >= stamina_max,
                 ))
+                city_cur, city_max = _num("citystaminaValue"), _num("citystaminaMaxValue")
                 tasks.append(DailyTaskItem(
-                    name="城市体力", current=_num("citystaminaValue"),
-                    total=_num("citystaminaMaxValue"), is_completed=False,
+                    name="都市活力", current=city_cur, total=city_max,
+                    is_completed=city_max > 0 and city_cur >= city_max,
                 ))
             except Exception as exc:  # noqa: BLE001
                 LOGGER.debug("[塔吉多] roleHome 查询失败: %s", exc)
@@ -854,9 +905,9 @@ def check_tajiduo_daily(
                 is_completed=bool(gs.get("signed")),
             ))
 
-        # 体力/城市体力是资源计量不是任务，不参与"每日完成"判定
+        # 本性像素/都市活力是资源计量不是任务，不参与"每日完成"判定
         daily_completed = bool(tasks) and all(
-            t.is_completed for t in tasks if t.name not in ("体力", "城市体力"))
+            t.is_completed for t in tasks if t.name not in ("本性像素", "都市活力"))
 
         # 金币任务进度（塔吉多社区金币，非游戏内货币）
         coin_state: Dict[str, Any] = {}
@@ -1282,7 +1333,8 @@ def check_games_progress(
     profile = load_wuwa_kujiequ_profile(config if isinstance(config, dict) else None)
     if profile is not None and _wants("wuwa"):
         try:
-            wuwa_status = check_wuwa_daily(profile)
+            # 活跃度 0 时自动等一会儿重查（游戏刚退出，服务器还没结算）
+            wuwa_status = check_wuwa_daily_with_retry(profile)
             result.games.append(wuwa_status)
             if tracker is not None:
                 _record_wuwa_to_tracker(tracker, wuwa_status)

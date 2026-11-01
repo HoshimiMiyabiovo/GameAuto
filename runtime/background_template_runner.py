@@ -4,6 +4,8 @@ from typing import Callable, List, Optional, Tuple
 
 from .foreground_flow_runner import run_flow
 
+LOGGER = logging.getLogger("GameAutomation")
+
 
 def run_xm_background(
     logger: logging.Logger,
@@ -91,13 +93,36 @@ def run_wool_background(logger: logging.Logger) -> Tuple[bool, str]:
     return run_wool_flow_background(logger, WOOL_FLOW_KEYS)
 
 
+def monthly_flow_meta_key(flow_key: str) -> str:
+    """每月流程的门控键（workflow.sqlite3 的 task_meta）。"""
+    return f"monthly_flow:{flow_key}"
+
+
+def is_monthly_flow_done(flow_key: str, month_key: Optional[str] = None) -> bool:
+    """本月是否已成功跑过该每月流程。
+
+    供每日一条龙调度器复用同一套月度标记：批次里判断"要不要顺手把月商店买了"
+    时只看标记，不重复实现口径。读库失败按"未完成"处理（宁可多跑一次）。
+    """
+    from ..storage.workflow_db import WorkflowDB
+    from ..settings.paths import WORKFLOW_DB_PATH
+
+    month = month_key or time.strftime("%Y-%m")
+    try:
+        db = WorkflowDB(str(WORKFLOW_DB_PATH))
+        return db.get_task_meta(monthly_flow_meta_key(flow_key)) == month
+    except Exception as exc:  # noqa: BLE001 - 读不到标记就当没做过，不影响主流程
+        LOGGER.warning("[每月] 读取月度标记失败(%s): %s", flow_key, exc)
+        return False
+
+
 def _run_monthly_flow(logger: logging.Logger, flow_key: str, label: str) -> Tuple[bool, str]:
     """每月流程通用门控：自然月记录在 workflow.sqlite3，本月已执行则跳过。"""
     from ..storage.workflow_db import WorkflowDB
     from ..settings.paths import WORKFLOW_DB_PATH
 
     month_key = time.strftime("%Y-%m")
-    meta_key = f"monthly_flow:{flow_key}"
+    meta_key = monthly_flow_meta_key(flow_key)
     db = WorkflowDB(str(WORKFLOW_DB_PATH))
     if db.get_task_meta(meta_key) == month_key:
         logger.info("[%s] 本月已执行，跳过", label)

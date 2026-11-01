@@ -15,6 +15,8 @@ from .defaults import (
     DEFAULT_APPS,
     DEFAULT_APP_ORDER,
     DEFAULT_BAIJING_CAT_EXCHANGE,
+    DEFAULT_NIKKI_CRYSTAL_EXCHANGE,
+    DEFAULT_NIKKI_RESONANCE_SHOP,
     DEFAULT_QBITTORRENT,
 )
 from .paths import APP_CONFIG_PATH
@@ -161,6 +163,10 @@ def _default_config() -> Dict:
         "log": {"dir": "data/logs", "file": "auto_runner.log", "backup_count": 0},
         "global": {"min_run_time": 300, "check_interval": 10, "debug_mode": False},
         "baijing": {"cat_exchange": copy.deepcopy(DEFAULT_BAIJING_CAT_EXCHANGE)},
+        "nikki": {
+            "crystal_exchange": copy.deepcopy(DEFAULT_NIKKI_CRYSTAL_EXCHANGE),
+            "resonance_shop": copy.deepcopy(DEFAULT_NIKKI_RESONANCE_SHOP),
+        },
         "apps": copy.deepcopy(DEFAULT_APPS),
     }
 

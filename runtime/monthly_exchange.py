@@ -36,7 +36,9 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 import pyautogui
 
 from ..settings.paths import BASE_DIR
+from .monthly_shop_evidence import capture_shop_evidence
 from .zzz_monthly_shop import (
+    ALREADY_BOUGHT_REASONS,
     BOUGHT,
     CONFIRM_GONE_FAIL,
     ITEM_MISSING,
@@ -69,6 +71,44 @@ TAB_PATCH_WIDTH_FRAC = 0.05
 TAB_PATCH_HEIGHT_FRAC = 0.035
 TAB_SELECTED_BRIGHTNESS = 110.0
 FORBIDDEN_MIN_CONF = 0.5    # 错页签拦截的 OCR 置信度下限
+CONTENT_MIN_CONF = 0.45     # 页签内容强校验（专属商品 OCR）置信度下限
+
+
+def _content_markers_present(
+    logger: logging.Logger,
+    hwnd: int,
+    markers: Sequence[str],
+) -> Optional[str]:
+    """全窗 OCR 找目标页签的专属商品（如原神星尘页的「摩拉」）。
+
+    页签选中态的模板/亮度天然容易混淆（实测未选中态模板在已选中页仍 0.854），
+    所以有专属商品可查时以页面内容为准。窗口不可用/OCR 失败返回 None，
+    调用方必须按「未确认」处理，绝不放行购买。
+    """
+    markers = [str(m).strip() for m in markers or [] if str(m).strip()]
+    if not markers:
+        return None
+    try:
+        from .ocr_click_tester import ocr_window_content
+
+        items = ocr_window_content(logger, hwnd)
+    except Exception as exc:  # noqa: BLE001 - OCR 失败按未确认处理
+        logger.debug(f"[每月兑换] 页签内容校验 OCR 失败: {exc}")
+        return None
+    for item in items or []:
+        text = str(item.get("text") or "")
+        if not text:
+            continue
+        try:
+            conf = float(item.get("confidence") or 0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        if conf < CONTENT_MIN_CONF:
+            continue
+        for marker in markers:
+            if marker in text:
+                return marker
+    return None
 
 
 def _abs_template(path: str) -> str:
@@ -278,6 +318,43 @@ def _select_tab(
     except (TypeError, ValueError):
         threshold = TAB_SELECTED_BRIGHTNESS
     between = [str(t).strip() for t in (step.get("tab_between_texts") or []) if str(t).strip()]
+    content_markers = [
+        str(t).strip() for t in (step.get("tab_content_markers") or []) if str(t).strip()
+    ]
+
+    # 内容优先：目标页签有专属商品（原神星尘页的摩拉/嬗变之尘等）时，以页面内容为准。
+    # 页签选中态模板/亮度在视觉上天然容易混淆，不再作为该游戏的放行依据。
+    if content_markers:
+        hit = _content_markers_present(logger, hwnd, content_markers)
+        if hit:
+            logger.info(f"[{label}] 已在「{tab_text}」（页面出现专属商品「{hit}」）")
+            return True, f"已在「{tab_text}」"
+        center = _locate_ocr(logger, hwnd, tab_text, SHORT_WAIT_SEC, stop_check)
+        if center is None and len(between) >= 2:
+            left = _locate_ocr(logger, hwnd, between[0], SHORT_WAIT_SEC, stop_check)
+            right = _locate_ocr(logger, hwnd, between[1], SHORT_WAIT_SEC, stop_check)
+            if left and right:
+                center = ((left[0] + right[0]) // 2, (left[1] + right[1]) // 2)
+                logger.info(
+                    f"[{label}] 页签文字未识别，按相邻「{between[0]}」「{between[1]}」中点定位 @ {center}"
+                )
+        if center is None:
+            return False, f"未找到「{tab_text}」页签"
+        for attempt in range(1, TAB_ATTEMPTS + 1):
+            if stop_check is not None and stop_check():
+                return False, "用户停止"
+            _click_window_local(hwnd, center[0], center[1], clicks=1)
+            logger.info(f"[{label}] 已点击「{tab_text}」页签 @ {center}（内容校验，第 {attempt} 次）")
+            _sleep(1.0, stop_check)
+            hit = _content_markers_present(logger, hwnd, content_markers)
+            if hit:
+                logger.info(f"[{label}] 内容确认已在「{tab_text}」（看到专属商品「{hit}」）")
+                return True, f"已切换到「{tab_text}」"
+            logger.warning(f"[{label}] 点击后仍看不到「{tab_text}」专属商品，重试")
+        return False, (
+            f"未确认在「{tab_text}」"
+            f"（未看到 {'/'.join(content_markers)} 等专属商品），未购买"
+        )
 
     unselected = _locate(hwnd, tab_template, scales, confidences, TAB_WAIT_SEC, stop_check) if has_template else None
     center = unselected
@@ -434,10 +511,13 @@ def _buy_items(
     """按清单逐项兑换。返回 (是否全部成功, 每项摘要)。
 
     单项判定沿用后勤商店：NO_POPUP 视为已达上限/已购（正常业务状态，不计失败并
-    中断该项剩余次数）；模板与 OCR 都定位不到、或确认后弹窗不关 → 该项失败。
+    中断该项剩余次数）；**模板与 OCR 都定位不到也按"已买过"处理**（用户 2026-11-01
+    拍板：兑换页商品到月上限后就不展示了，看不到 ≠ 失败）；只有确认后弹窗不关
+    才算真失败。
     """
     summaries: List[str] = []
     all_ok = True
+    missing_count = 0
 
     for raw in items:
         if stop_check is not None and stop_check():
@@ -473,7 +553,8 @@ def _buy_items(
                 reason = "已达上限或无弹窗"
                 break
             if result == ITEM_MISSING:
-                reason = "商品定位失败（模板/OCR 均未命中）"
+                missing_count += 1
+                reason = "页面上没看到该商品，按已购买处理"
                 break
             if result == CONFIRM_GONE_FAIL:
                 reason = "确认后弹窗未关"
@@ -483,10 +564,18 @@ def _buy_items(
             logger.info(f"[{label}] {name} 完成 {bought}/{count}")
             summaries.append(f"{name}: {bought}/{count}")
         else:
-            logger.warning(f"[{label}] {name} 未买够: {bought}/{count}（{reason or '未知'}）")
+            log_fn = logger.info if reason in ALREADY_BOUGHT_REASONS else logger.warning
+            log_fn(f"[{label}] {name}: {bought}/{count}（{reason or '未知'}）")
             summaries.append(f"{name}: {bought}/{count}（{reason or '未知'}）")
-            if reason != "已达上限或无弹窗":
+            if reason not in ALREADY_BOUGHT_REASONS:
                 all_ok = False
+
+    if items and missing_count == len(items):
+        # 整张清单一件都没看到：按用户口径算"本月已买完"，但要留一条可排查的日志
+        logger.warning(
+            f"[{label}] 清单 {len(items)} 项全部未在页面上出现，按本月已购买处理"
+            "（如确认没买过，请检查商品模板 / OCR 文字）"
+        )
 
     return all_ok, summaries
 
@@ -576,9 +665,24 @@ def buy_monthly_exchange(
     if not page_ok:
         return False, page_msg
 
+    content_markers = [
+        str(t).strip() for t in (step.get("tab_content_markers") or []) if str(t).strip()
+    ]
+    if content_markers:
+        hit = _content_markers_present(logger, hwnd, content_markers)
+        if not hit:
+            return False, (
+                f"未确认在目标页签（未看到 {'/'.join(content_markers)} 等专属商品），未购买"
+            )
+        logger.info(f"[{label}] 购买前内容复核通过（看到「{hit}」）")
+
     guard_ok, guard_msg = _check_forbidden_texts(logger, hwnd, step, label)
     if not guard_ok:
         return False, guard_msg
+
+    # 采购前留一张货架截图：本次判定"看不到商品算已买过"，复核时要能看出
+    # 当时页面上到底有没有这些东西（模板/OCR 失灵 vs 真买完）。
+    capture_shop_evidence(logger, hwnd, flow_label=label, stage="采购前")
 
     buy_ok, summaries = _buy_items(
         logger, hwnd, items, confirm_template, label, scales, confidences, stop_check,
@@ -586,10 +690,16 @@ def buy_monthly_exchange(
     if not buy_ok and any("用户停止" in s for s in summaries):
         return False, "用户停止 | " + "，".join(summaries)
 
+    # 买完仍停在兑换页，趁现在留"采购后"证据（离开后只剩主世界，没有复核价值）
+    detail = "，".join(summaries) if summaries else "无商品"
+    capture_shop_evidence(
+        logger, hwnd, flow_label=label, stage="采购后",
+        summary=detail + ("" if buy_ok else "（有未买够项，见日志）"),
+    )
+
     exit_ok = _leave_to_main_world(logger, hwnd, step, label, scales, confidences, stop_check)
     if stop_check is not None and stop_check():
         return False, "用户停止 | " + "，".join(summaries)
-    detail = "，".join(summaries) if summaries else "无商品"
     if not exit_ok:
         detail += "（未确认返回主界面）"
     return buy_ok, detail

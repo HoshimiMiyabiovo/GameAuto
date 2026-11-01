@@ -200,11 +200,11 @@ check("仓鼠笼 OCR 兜底仍执行：1/1", "仓鼠笼访问器: 1/1" in msg, m
 check("点击次数 = 35（原装2+日常20+邦布10+仓鼠笼2+页签1）", n_clicks == 35, f"实际 {n_clicks}")
 
 print()
-print("== 用例4：模板与 OCR 都找不到仓鼠笼访问器 ==")
+print("== 用例4：模板与 OCR 都找不到仓鼠笼访问器（按本月已买过处理）==")
 fake = FakeGame(ocr_missing_items={"仓鼠笼访问器"})
 ok, msg, n_clicks = run_case(step_norm, fake)
-check("OCR 也未命中算失败 all_ok=False", ok is False, msg)
-check("摘要含 仓鼠笼访问器 0/1（商品定位失败）", "仓鼠笼访问器: 0/1（商品定位失败（模板/OCR 均未命中））" in msg, msg)
+check("看不到商品不算失败 all_ok=True", ok is True, msg)
+check("摘要写按已购买处理", "仓鼠笼访问器: 0/1（页面上没看到该商品，按已购买处理）" in msg, msg)
 check("其他商品不受影响：邦布券 5/5", "邦布券: 5/5" in msg, msg)
 
 print()
