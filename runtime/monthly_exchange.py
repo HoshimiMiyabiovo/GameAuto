@@ -45,6 +45,7 @@ from .zzz_monthly_shop import (
     NO_POPUP,
     STOPPED,
     _buy_once,
+    _frac_point,
     _locate,
     _locate_ocr,
     _wait_gone,
@@ -321,6 +322,7 @@ def _select_tab(
     content_markers = [
         str(t).strip() for t in (step.get("tab_content_markers") or []) if str(t).strip()
     ]
+    tab_point_frac = step.get("tab_point_frac")
 
     # 内容优先：目标页签有专属商品（原神星尘页的摩拉/嬗变之尘等）时，以页面内容为准。
     # 页签选中态模板/亮度在视觉上天然容易混淆，不再作为该游戏的放行依据。
@@ -329,7 +331,13 @@ def _select_tab(
         if hit:
             logger.info(f"[{label}] 已在「{tab_text}」（页面出现专属商品「{hit}」）")
             return True, f"已在「{tab_text}」"
-        center = _locate_ocr(logger, hwnd, tab_text, SHORT_WAIT_SEC, stop_check)
+        # 页签文字被 OCR 认错（异环「迷迭兑换」→「迷送兑换」）时按固定比例坐标点，
+        # 点完仍要用专属商品验证，坐标只负责"点哪里"。
+        center = _frac_point(hwnd, tab_point_frac) if tab_point_frac else None
+        if center:
+            logger.info(f"[{label}] 按固定比例坐标定位「{tab_text}」页签 @ {center}")
+        if center is None:
+            center = _locate_ocr(logger, hwnd, tab_text, SHORT_WAIT_SEC, stop_check)
         if center is None and len(between) >= 2:
             left = _locate_ocr(logger, hwnd, between[0], SHORT_WAIT_SEC, stop_check)
             right = _locate_ocr(logger, hwnd, between[1], SHORT_WAIT_SEC, stop_check)
@@ -356,8 +364,13 @@ def _select_tab(
             f"（未看到 {'/'.join(content_markers)} 等专属商品），未购买"
         )
 
-    unselected = _locate(hwnd, tab_template, scales, confidences, TAB_WAIT_SEC, stop_check) if has_template else None
-    center = unselected
+    center = _frac_point(hwnd, tab_point_frac) if tab_point_frac else None
+    if center:
+        logger.info(f"[{label}] 按固定比例坐标定位「{tab_text}」页签 @ {center}")
+    unselected = None
+    if center is None:
+        unselected = _locate(hwnd, tab_template, scales, confidences, TAB_WAIT_SEC, stop_check) if has_template else None
+        center = unselected
     if center is None:
         center = _locate_ocr(logger, hwnd, tab_text, SHORT_WAIT_SEC, stop_check)
     if center is None and len(between) >= 2:

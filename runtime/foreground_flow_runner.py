@@ -49,35 +49,57 @@ def _get_cached_template(template_path: str) -> Optional[Any]:
         return None
 
 
-def _match_template_cv2_once(screenshot: Any, tpl: Any, confidences) -> Optional[Tuple[int, int]]:
+def _match_template_cv2_once(
+    screenshot: Any,
+    tpl: Any,
+    confidences,
+    use_color: bool = False,
+) -> Optional[Tuple[int, int]]:
     """单张截图上对单个尺度模板匹配一次，返回截图内中心坐标。
 
     同一张 matchTemplate 结果只取全局最大值，与最低阈值比一次即可
     （等价于旧高→低逐阈值循环，但少做 N-1 次 minMaxLoc）。
+
+    use_color=True 走 BGR 三通道匹配：灰度过不了的红/蓝同形图标
+    （异环质感骰子 vs 捏造骰子，灰度互匹配 0.976、彩色 0.689）靠这个分开。
+    代价是单次匹配慢 2~3 倍，而且对渲染色差更敏感；**默认关闭**，
+    只有 step/item 显式配 color_match 才开。
     """
     try:
         import cv2
         import numpy as np
-        scr = screenshot
-        if hasattr(scr, "convert"):
-            scr_gray = cv2.cvtColor(np.asarray(scr.convert("RGB")), cv2.COLOR_RGB2GRAY)
+
+        def _to_array(src):
+            if hasattr(src, "convert"):
+                return np.asarray(src.convert("RGB"))
+            arr = np.asarray(src)
+            # 非 PIL 输入按 OpenCV 约定当 BGR，转成 RGB 与 PIL 分支统一
+            if arr.ndim == 3 and arr.shape[2] >= 3:
+                return arr[:, :, 2::-1] if arr.shape[2] == 3 else cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
+            return arr
+
+        scr_arr = _to_array(screenshot)
+        tpl_arr = _to_array(tpl)
+        if use_color:
+            scr_img = scr_arr
+            tpl_img = tpl_arr
+            if scr_img.ndim != 3 or tpl_img.ndim != 3:
+                return None   # 彩色匹配遇到灰度图直接放弃，不瞎猜
+            if scr_img.shape[2] != tpl_img.shape[2]:
+                return None
         else:
-            arr = np.asarray(scr)
-            scr_gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY) if arr.ndim == 3 else arr
-        if hasattr(tpl, "convert"):
-            tpl_gray = cv2.cvtColor(np.asarray(tpl.convert("RGB")), cv2.COLOR_RGB2GRAY)
-        else:
-            tpl_gray = np.asarray(tpl)
-        if tpl_gray.shape[0] > scr_gray.shape[0] or tpl_gray.shape[1] > scr_gray.shape[1]:
+            scr_img = cv2.cvtColor(scr_arr, cv2.COLOR_RGB2GRAY) if scr_arr.ndim == 3 else scr_arr
+            tpl_img = cv2.cvtColor(tpl_arr, cv2.COLOR_RGB2GRAY) if tpl_arr.ndim == 3 else tpl_arr
+        if tpl_img.shape[0] > scr_img.shape[0] or tpl_img.shape[1] > scr_img.shape[1]:
             return None
-        res = cv2.matchTemplate(scr_gray, tpl_gray, cv2.TM_CCOEFF_NORMED)
+        res = cv2.matchTemplate(scr_img, tpl_img, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
         try:
             min_conf = float(min(float(c) for c in confidences))
         except Exception:
             return None
         if max_val >= min_conf:
-            h, w = tpl_gray.shape[:2]
+            h, w = tpl_img.shape[:2]
             return int(max_loc[0] + w // 2), int(max_loc[1] + h // 2)
     except Exception as exc:
         _LOGGER.debug("[模板] 匹配异常: %s", exc)
@@ -716,6 +738,7 @@ def _locate_template_on_screen(
     scales,
     confidences,
     throttle_sec: float = 0.1,
+    use_color: bool = False,
 ) -> Optional[Tuple[int, int]]:
     tpl0 = _get_cached_template(template_path)
     if tpl0 is None:
@@ -740,9 +763,11 @@ def _locate_template_on_screen(
             except Exception:
                 continue
         # 优先 cv2 单次匹配（返回截图内坐标，需加 region 偏移回屏幕坐标）
-        pt = _match_template_cv2_once(screenshot, tpl, confidences)
+        pt = _match_template_cv2_once(screenshot, tpl, confidences, use_color=use_color)
         if pt:
             return int(pt[0] + region[0]), int(pt[1] + region[1])
+        if use_color:
+            continue   # pyautogui.locate 内部只认灰度，彩色模式下别拿它兜底
         for conf in confidences:
             try:
                 box = pyautogui.locate(tpl, screenshot, confidence=float(conf))
@@ -759,7 +784,13 @@ def _locate_template_on_screen(
     return None
 
 
-def _locate_template_in_window(hwnd: int, template_path: str, scales, confidences) -> Optional[Tuple[int, int]]:
+def _locate_template_in_window(
+    hwnd: int,
+    template_path: str,
+    scales,
+    confidences,
+    use_color: bool = False,
+) -> Optional[Tuple[int, int]]:
     if not os.path.exists(template_path):
         return None
     rect = _window_rect(hwnd)
@@ -770,7 +801,9 @@ def _locate_template_in_window(hwnd: int, template_path: str, scales, confidence
 
     # 先直接在屏幕区域中匹配，避免局部截图与后续点击坐标换算产生偏差。
     try:
-        screen_center = _locate_template_on_screen(template_path, region, scales, confidences)
+        screen_center = _locate_template_on_screen(
+            template_path, region, scales, confidences, use_color=use_color,
+        )
     except OSError as e:
         # 桌面临时不可用（锁屏/RDP/窗口刚关闭），视为未命中而非崩溃
         return None
@@ -792,9 +825,11 @@ def _locate_template_in_window(hwnd: int, template_path: str, scales, confidence
             nw = max(8, int(tpl0.width * scale))
             nh = max(8, int(tpl0.height * scale))
             tpl = tpl0.resize((nw, nh))
-        pt = _match_template_cv2_once(screenshot, tpl, confidences)
+        pt = _match_template_cv2_once(screenshot, tpl, confidences, use_color=use_color)
         if pt:
             return pt
+        if use_color:
+            continue   # pyautogui.locate 只认灰度，彩色模式别用它兜底
         for conf in confidences:
             box = None
             try:

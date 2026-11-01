@@ -40,6 +40,7 @@ from .background_template_runner import (
     run_cj_background,
     run_genshin_monthly_background,
     run_hsr_monthly_background,
+    run_nte_monthly_background,
     run_wool_background,
     run_wool_flow_background,
     run_xm_background,
@@ -122,6 +123,15 @@ _MONTHLY_FLOW_BY_APP: Dict[str, Tuple[str, str]] = {
     "HonkaiStarRail": ("HSR_MONTHLY", "崩铁每月商店"),
     "ZenlessZoneZero": ("ZZZ_MONTHLY", "绝区零每月商店"),
     "GenshinImpact": ("GENSHIN_MONTHLY", "原神每月商店"),
+    "NevernessToEverness": ("NTE_MONTHLY", "异环每月商店"),
+}
+
+# 流程 key → 后台执行入口（加新游戏时两处一起加，别在 if/elif 里漏分支）
+_MONTHLY_RUNNERS: Dict[str, Callable[..., Tuple[bool, str]]] = {
+    "HSR_MONTHLY": run_hsr_monthly_background,
+    "ZZZ_MONTHLY": run_zzz_monthly_background,
+    "GENSHIN_MONTHLY": run_genshin_monthly_background,
+    "NTE_MONTHLY": run_nte_monthly_background,
 }
 
 
@@ -153,13 +163,12 @@ def _run_pending_monthly_flow(controller, app_key: str) -> Optional[Tuple[str, b
         return None
 
     controller.logger.info("[%s] 本月还没买，随日常自动补跑一次", label)
+    runner = _MONTHLY_RUNNERS.get(flow_key)
+    if runner is None:
+        controller.logger.warning("[%s] 没有对应的执行入口（flow_key=%s），跳过", label, flow_key)
+        return None
     try:
-        if flow_key == "HSR_MONTHLY":
-            ok, msg = run_hsr_monthly_background(controller.logger)
-        elif flow_key == "ZZZ_MONTHLY":
-            ok, msg = run_zzz_monthly_background(controller.logger)
-        else:
-            ok, msg = run_genshin_monthly_background(controller.logger)
+        ok, msg = runner(controller.logger)
     except Exception as exc:  # noqa: BLE001 - 月商店失败不能拖垮当天一条龙
         controller.logger.warning("[%s] 执行异常: %s", label, exc)
         return (f"{label:20} ❌ 执行异常: {exc}", False)

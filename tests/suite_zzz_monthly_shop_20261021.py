@@ -104,7 +104,7 @@ def run_case(step, fake, stop_after_clicks=None):
     def stop_check():
         return state["stop"]
 
-    def fake_locate(hwnd, template, scales, confidences, timeout_sec, stop_check=None, interval=0.5):
+    def fake_locate(hwnd, template, scales, confidences, timeout_sec, stop_check=None, interval=0.5, use_color=False):
         base = os.path.basename(template or "")
         if base in items_by_template:
             fake._current_item = items_by_template[base]

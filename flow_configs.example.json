@@ -374,11 +374,22 @@
         "action": "click_template",
         "template": "",
         "_comment": "2026-10-31：目标「签到得」会子串命中卡片宣传语「连续签到得更多积分」。改为结构化匹配：精确/前缀优先，并以卡片标题「连续签到」为锚点只取下方按钮；排除词仅作最后兜底。",
-        "target_text": ["签到得⊙400", "签到得 400", "签到得"],
+        "target_text": [
+          "签到得⊙400",
+          "签到得 400",
+          "签到得"
+        ],
         "ocr_match_mode": "smart",
-        "ocr_anchor": ["连续签到"],
-        "ocr_near": {"direction": "below", "max_distance": 500},
-        "ocr_exclude_texts": ["更多积分"],
+        "ocr_anchor": [
+          "连续签到"
+        ],
+        "ocr_near": {
+          "direction": "below",
+          "max_distance": 500
+        },
+        "ocr_exclude_texts": [
+          "更多积分"
+        ],
         "ocr_debug_snapshot": true,
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -1286,6 +1297,161 @@
         "login_timeout_sec": 600,
         "on_fail": "retry_step",
         "max_attempts": 2
+      }
+    ]
+  },
+  "NTE_MONTHLY": {
+    "enabled": true,
+    "_comment": "异环每月商店：官方启动器进主界面 → ESC 二级菜单 → 商城 → 集市兑换 → 迷迭兑换。2026-11-01 用户确认清单：质感骰子×5、捏造骰子×5、三重钥匙×20（50%off，买满本月库存）。**页签与商品都用固定比例坐标**：RapidOCR 把「迷迭兑换」认成「迷送兑换」，红/蓝骰子转灰度后互相匹配 0.976，模板和 OCR 都不可靠；坐标点完仍用「资深猎人攻略」等四种养成材料做页签内容校验。",
+    "exe_path": "E:\\Program Files\\Game\\Neverness To Everness\\NTELauncher.exe",
+    "window_title_keywords": [
+      "neverness",
+      "nte",
+      "异环"
+    ],
+    "window_process_names": [
+      "NTEGame.exe",
+      "NTELauncher.exe",
+      "HTGame.exe"
+    ],
+    "startup_wait_sec": 15,
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8,
+      1.5,
+      0.67
+    ],
+    "match_confidences": [
+      0.92,
+      0.88,
+      0.84,
+      0.8
+    ],
+    "close_process_on_finish": false,
+    "steps": [
+      {
+        "name": "开始更新",
+        "action": "click_template",
+        "template": "模板\\异环-开始更新.png",
+        "target_text": "开始更新",
+        "confirm_type": "none",
+        "timeout_sec": 8,
+        "clicks": 1,
+        "post_delay_sec": 2.0,
+        "optional_if_missing": true,
+        "on_fail": "fail",
+        "max_attempts": 1
+      },
+      {
+        "name": "等待开始游戏",
+        "action": "wait_template",
+        "template": "模板\\异环-开始游戏.png",
+        "target_text": "开始游戏",
+        "timeout_sec": 1200,
+        "post_delay_sec": 1.0
+      },
+      {
+        "name": "开始游戏",
+        "action": "click_template",
+        "template": "模板\\异环-开始游戏.png",
+        "target_text": "开始游戏",
+        "confirm_type": "none",
+        "timeout_sec": 180,
+        "clicks": 1,
+        "post_delay_sec": 2.0,
+        "on_fail": "retry_step",
+        "max_attempts": 4
+      },
+      {
+        "name": "确定",
+        "action": "click_template",
+        "template": "模板\\异环-确定.png",
+        "search_scope": "screen",
+        "confirm_type": "none",
+        "timeout_sec": 45,
+        "clicks": 1,
+        "post_delay_sec": 2.0,
+        "on_fail": "retry_step",
+        "max_attempts": 4
+      },
+      {
+        "name": "游戏启动确认",
+        "action": "wait_process",
+        "process_name": "HTGame.exe",
+        "target_text": "HTGame.exe",
+        "confirm_type": "none",
+        "timeout_sec": 180,
+        "switch_window_to_process": true,
+        "post_delay_sec": 15.0,
+        "on_fail": "retry_step",
+        "max_attempts": 1
+      },
+      {
+        "name": "进入游戏",
+        "action": "click_template",
+        "template": "模板\\异环-进入游戏.png",
+        "confirm_type": "disappear",
+        "timeout_sec": 120,
+        "clicks": 1,
+        "post_delay_sec": 5.0,
+        "confirm_timeout_sec": 12,
+        "on_fail": "retry_step",
+        "max_attempts": 1
+      },
+      {
+        "name": "迷迭兑换每月兑换",
+        "action": "monthly_exchange",
+        "log_label": "迷迭兑换",
+        "shop_entry_template": "模板\\异环-商城入口.png",
+        "shop_entry_text": "商城",
+        "nav_text": "集市兑换",
+        "nav_region_frac": [
+          0.0,
+          0.15,
+          0.18,
+          0.95
+        ],
+        "tab_text": "迷迭兑换",
+        "tab_template": "",
+        "tab_point_frac": [
+          0.441,
+          0.16
+        ],
+        "tab_content_markers": [
+          "资深猎人攻略",
+          "无彩染剂",
+          "并肩达人",
+          "茫昧絮语"
+        ],
+        "confirm_template": "模板\\异环-购买确认.png",
+        "items": [
+          {
+            "name": "质感骰子",
+            "template": "模板\\异环-质感骰子.png",
+            "color_match": true,
+            "point_frac": [
+              0.256,
+              0.371
+            ],
+            "count": 5
+          },
+          {
+            "name": "三重钥匙",
+            "template": "模板\\异环-三重钥匙.png",
+            "color_match": true,
+            "point_frac": [
+              0.573,
+              0.371
+            ],
+            "count": 20
+          }
+        ],
+        "timeout_sec": 1800,
+        "post_delay_sec": 3.0,
+        "on_fail": "fail",
+        "max_attempts": 1,
+        "_comment": "2026-11-01 用户确认：只换**质感骰子（限定抽卡道具）5 个 + 三重钥匙 20 个**，捏造骰子不换（2026-11-01 16:06 明确）。页签按固定比例坐标点（RapidOCR 把「迷迭兑换」认成「迷送兑换」）；商品用**彩色模板**（color_match）：红/蓝骰子灰度互匹配 0.976、彩色 0.689，模板未命中再退固定比例坐标。点完商品仍要等「购买」弹窗。"
       }
     ]
   }

@@ -72,8 +72,13 @@ def _locate(
     timeout_sec: int,
     stop_check: Optional[Callable[[], bool]] = None,
     interval: float = 0.5,
+    use_color: bool = False,
 ) -> Optional[Tuple[int, int]]:
-    """轮询匹配模板，命中返回窗口局部中心坐标，超时/停止返回 None。"""
+    """轮询匹配模板，命中返回窗口局部中心坐标，超时/停止返回 None。
+
+    use_color=True 走三通道匹配：只对「灰度分不开、颜色是唯一判据」的商品开
+    （异环红/蓝骰子灰度互匹配 0.976，彩色 0.689）。
+    """
     from .foreground_flow_runner import _focus_window, _locate_template_in_window
 
     end = time.time() + max(1, int(timeout_sec))
@@ -81,7 +86,9 @@ def _locate(
         if stop_check is not None and stop_check():
             return None
         _focus_window(hwnd)
-        center = _locate_template_in_window(hwnd, template, scales, confidences)
+        center = _locate_template_in_window(
+            hwnd, template, scales, confidences, use_color=use_color,
+        )
         if center:
             return center
         time.sleep(interval)
@@ -133,6 +140,29 @@ def _locate_ocr(
     return None
 
 
+def _frac_point(hwnd: int, frac) -> Optional[Tuple[int, int]]:
+    """把 [fx, fy]（窗口相对比例）换算成窗口局部像素坐标。
+
+    给「图标在灰度下无法区分」的商品兜底：异环迷迭兑换的质感骰子（红）和
+    捏造骰子（蓝）转灰度后互相匹配 0.976，模板/OCR 都认不准，只能按固定布局点。
+    比例坐标跟着窗口尺寸走，换分辨率不会失效，但游戏改版布局变了要重新量。
+    """
+    try:
+        from .foreground_flow_runner import _window_rect
+
+        rect = _window_rect(hwnd)
+        if not rect:
+            return None
+        _, _, width, height = rect
+        fx, fy = float(frac[0]), float(frac[1])
+        if not (0.0 < fx < 1.0 and 0.0 < fy < 1.0):
+            return None
+        return (int(fx * width), int(fy * height))
+    except Exception as exc:  # noqa: BLE001 - 取不到窗口就当定位失败
+        LOGGER.debug(f"[商店采购] 比例坐标换算失败 {frac}: {exc}")
+        return None
+
+
 def _buy_once(
     logger: logging.Logger,
     hwnd: int,
@@ -145,8 +175,9 @@ def _buy_once(
 ) -> str:
     """执行一次「点商品 → 确认」。返回 BOUGHT/NO_POPUP/ITEM_MISSING/CONFIRM_GONE_FAIL/STOPPED。
 
-    商品定位优先模板；模板缺失或未命中时，若 item 配了 ocr_text 则用 OCR
-    文字定位兜底（点文字中心，商品卡整卡为热区）。两者都无 → ITEM_MISSING。
+    商品定位优先级：point_frac（固定比例坐标）→ 模板 → OCR 文字兜底。
+    point_frac 是给「图标灰度相同、OCR 也认不准」的商品用的（异环两个骰子），
+    点完同样要等确认弹窗出现，点空/点错照样会暴露成 NO_POPUP。
     label 只影响日志前缀（信源残响兑换复用本函数，避免日志里出现"商店采购"字样）。
     """
     from .foreground_flow_runner import _click_window_local
@@ -158,10 +189,25 @@ def _buy_once(
     item_template = _abs_template(str(item.get("template", "") or ""))
     ocr_text = str(item.get("ocr_text", "") or "").strip()
     has_template = bool(item_template) and os.path.isfile(item_template)
+    point_frac = item.get("point_frac")
+    use_color = bool(item.get("color_match"))
 
     center = None
+    # 模板优先（配了 color_match 时走三通道，红/蓝骰子靠它分开）；
+    # 模板没命中才退到固定比例坐标，最后才是 OCR。
     if has_template:
-        center = _locate(hwnd, item_template, scales, confidences, ITEM_TIMEOUT_SEC, stop_check)
+        center = _locate(
+            hwnd, item_template, scales, confidences, ITEM_TIMEOUT_SEC, stop_check,
+            use_color=use_color,
+        )
+        if center and use_color:
+            logger.info(f"[{label}] {item_name} 彩色模板命中 @ {center}")
+    if center is None and isinstance(point_frac, (list, tuple)) and len(point_frac) == 2:
+        center = _frac_point(hwnd, point_frac)
+        if center:
+            logger.info(f"[{label}] {item_name} 模板未命中，改用固定比例坐标 @ {center}")
+        else:
+            logger.warning(f"[{label}] {item_name} 比例坐标无效: {point_frac}")
     if center is None and ocr_text:
         if stop_check is not None and stop_check():
             return STOPPED

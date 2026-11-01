@@ -146,3 +146,7 @@ def run_genshin_monthly_background(logger: logging.Logger) -> Tuple[bool, str]:
 def run_zzz_monthly_background(logger: logging.Logger) -> Tuple[bool, str]:
     return _run_monthly_flow(logger, "ZZZ_MONTHLY", "绝区零每月")
 
+
+def run_nte_monthly_background(logger: logging.Logger) -> Tuple[bool, str]:
+    return _run_monthly_flow(logger, "NTE_MONTHLY", "异环每月")
+

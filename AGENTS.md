@@ -127,6 +127,29 @@ This file mirrors important repository-level development notes inside the projec
   不拖垮当天一条龙，也不写月度标记 → 下一批自动重试。
   月度标记口径唯一：`background_template_runner.monthly_flow_meta_key()` / `is_monthly_flow_done()`，
   别在别处再拼一遍 key。
+- **异环 NTE_MONTHLY（2026-11-01 用户新增）**：主界面 ESC → 二级菜单「商城」→ 左侧「集市兑换」→
+  顶部「迷迭兑换」→ **质感骰子×5（限定抽卡道具）+ 三重钥匙×20**；**捏造骰子不换**
+  （2026-11-01 16:06 用户明确去掉，别再加回来）。
+  第 1-6 步直接复用 flow_configs 的 `NTE` 进游戏链路（开始更新/开始游戏/确定/启动确认/进入游戏），
+  第 7 步才是兑换。**页签用固定比例坐标**（`tab_point_frac`）：RapidOCR 把「迷迭兑换」认成
+  「迷送兑换」（conf 0.69），文字定位不可用；点完仍用 `tab_content_markers`（资深猎人攻略/无彩染剂/
+  并肩达人/茫昧絮语）验证页面。**商品用彩色模板**（`color_match: true` + `template`），
+  模板没命中才退 `point_frac` 固定比例坐标。
+- **彩色模板匹配 `color_match`（2026-11-01 新增，默认关闭）**：`_match_template_cv2_once(..., use_color=True)`
+  → `_locate_template_in_window` / `_locate_template_on_screen` / `zzz_monthly_shop._locate` 全链透传；
+  step/item 配 `color_match: true` 才开。意义不是"灰度认不出目标"，而是**目标消失后会误认隔壁同类图标**：
+  异环质感骰子（红）与捏造骰子（蓝）灰度互匹配 **0.976**，红骰子撤架后灰度仍指向蓝骰子那块
+  （继续点 → 点错商品），彩色只有 **0.689**，直接判定"已消失"。实测颜色：红 B67/G73/R153、蓝 B108/G96/R104，
+  灰度均值 95.9 vs 99.5 —— 灰度公式对红蓝权重太低，这是根因。
+  代价：单次匹配慢 2~3 倍（模板小，无感）；彩色模式下**跳过 pyautogui.locate 兜底**（它只认灰度）。
+  换机器有渲染色差时下调阈值即可，互匹配 0.689 给了 0.16+ 余量，别把阈值压到 0.85 以下。
+- **比例坐标 `point_frac` / `tab_point_frac`**：跟着窗口尺寸走（换分辨率不失效），但**游戏改版布局变了
+  必须重新量**（对截图跑 OCR 拿文字框、再用 `cv2.matchTemplate` 自匹配 1.0 校验）。
+  只负责"点哪里"，验证一步都不能省：页签靠 content_markers，商品靠「购买」弹窗（点空会暴露成 NO_POPUP）。
+- **测试绝对不能真跑月商店流程（2026-11-01 误触，血的教训）**：`_MONTHLY_RUNNERS` 是模块加载时
+  绑定的函数对象字典，`patch.object(task_batch_runner, "run_xxx_monthly_background")` **不影响字典
+  里的引用**，测试会真的启动游戏并清理进程——当时把 `StarRail.exe` / `ZenlessZoneZero.exe` 一起
+  列进了终止名单。一律用 `patch.dict(tbr._MONTHLY_RUNNERS, {flow_key: fake})`。
 - **「没看到商品」= 本月已买过，不算失败（2026-11-01 用户拍板）**：商品到月上限后商店直接不展示，
   所以 `ITEM_MISSING`（模板 + OCR 都定位不到）不能当失败，否则每次都要人肉确认。两个采购实现共用
   `zzz_monthly_shop.ALREADY_BOUGHT_REASONS`（`已达上限或无弹窗` / `页面上没看到该商品，按已购买处理`），

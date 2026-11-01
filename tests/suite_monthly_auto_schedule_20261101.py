@@ -83,18 +83,22 @@ def test_monthly_mapping():
         "HonkaiStarRail": "HSR_MONTHLY",
         "ZenlessZoneZero": "ZZZ_MONTHLY",
         "GenshinImpact": "GENSHIN_MONTHLY",
+        "NevernessToEverness": "NTE_MONTHLY",
     }
     for app_key, flow_key in expect.items():
         entry = tbr._MONTHLY_FLOW_BY_APP.get(app_key)
         check(f"{app_key} 映射到 {flow_key}", entry is not None and entry[0] == flow_key, entry)
-    check("覆盖三个游戏", len(tbr._MONTHLY_FLOW_BY_APP) == 3, tbr._MONTHLY_FLOW_BY_APP)
+    check("覆盖四个游戏", len(tbr._MONTHLY_FLOW_BY_APP) == len(expect), tbr._MONTHLY_FLOW_BY_APP)
+    check("每个流程都有执行入口",
+          set(tbr._MONTHLY_RUNNERS) == {v[0] for v in tbr._MONTHLY_FLOW_BY_APP.values()},
+          sorted(tbr._MONTHLY_RUNNERS))
 
 
 def test_monthly_done_skip():
     print("[2] 本月已买 → 不重复启动")
     calls = []
     with patch.object(tbr, "is_monthly_flow_done", return_value=True), \
-         patch.object(tbr, "run_hsr_monthly_background", side_effect=lambda *a, **k: calls.append(1) or (True, "x")):
+         patch.dict(tbr._MONTHLY_RUNNERS, {"HSR_MONTHLY": lambda *a, **k: calls.append(1) or (True, "x")}):
         out = tbr._run_pending_monthly_flow(FakeController(), "HonkaiStarRail")
     check("已完成返回 None", out is None, out)
     check("runner 未被调用", calls == [], calls)
@@ -102,23 +106,27 @@ def test_monthly_done_skip():
 
 def test_monthly_pending_runs():
     print("[3] 本月未买 → 自动补跑并对号入座")
+    # 必须 patch _MONTHLY_RUNNERS 这个字典：执行入口是**模块加载时绑定的函数对象**，
+    # patch 模块属性（patch.object(tbr, "run_xxx_background")）对字典里的引用无效，
+    # 会真的去启动游戏、清理进程（2026-11-01 测试误触，别再犯）。
     cases = [
-        ("HonkaiStarRail", "run_hsr_monthly_background"),
-        ("ZenlessZoneZero", "run_zzz_monthly_background"),
-        ("GenshinImpact", "run_genshin_monthly_background"),
+        ("HonkaiStarRail", "HSR_MONTHLY"),
+        ("ZenlessZoneZero", "ZZZ_MONTHLY"),
+        ("GenshinImpact", "GENSHIN_MONTHLY"),
+        ("NevernessToEverness", "NTE_MONTHLY"),
     ]
-    for app_key, fn_name in cases:
+    for app_key, flow_key in cases:
         calls = []
 
-        def fake_runner(logger, _fn=fn_name):
-            calls.append(_fn)
+        def fake_runner(logger, _fk=flow_key):
+            calls.append(_fk)
             return True, "已购买"
 
         with _no_maintenance(), \
              patch.object(tbr, "is_monthly_flow_done", return_value=False), \
-             patch.object(tbr, fn_name, side_effect=fake_runner):
+             patch.dict(tbr._MONTHLY_RUNNERS, {flow_key: fake_runner}):
             out = tbr._run_pending_monthly_flow(FakeController(), app_key)
-        check(f"{app_key} 调到 {fn_name}", calls == [fn_name], calls)
+        check(f"{app_key} 调到 {flow_key}", calls == [flow_key], calls)
         check(f"{app_key} 报告 ✅", out is not None and out[1] and "✅" in out[0], out)
 
 
@@ -126,14 +134,17 @@ def test_monthly_failure_not_fatal():
     print("[4] 月商店失败/异常不拖垮一条龙")
     with _no_maintenance(), \
          patch.object(tbr, "is_monthly_flow_done", return_value=False), \
-         patch.object(tbr, "run_zzz_monthly_background", return_value=(False, "❌ 步骤失败")):
+         patch.dict(tbr._MONTHLY_RUNNERS, {"ZZZ_MONTHLY": lambda *a, **k: (False, "❌ 步骤失败")}):
         out = tbr._run_pending_monthly_flow(FakeController(), "ZenlessZoneZero")
     check("失败返回 ok=False", out is not None and out[1] is False, out)
     check("失败行带 ❌", out is not None and "❌" in out[0], out)
 
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+
     with _no_maintenance(), \
          patch.object(tbr, "is_monthly_flow_done", return_value=False), \
-         patch.object(tbr, "run_genshin_monthly_background", side_effect=RuntimeError("boom")):
+         patch.dict(tbr._MONTHLY_RUNNERS, {"GENSHIN_MONTHLY": _boom}):
         out = tbr._run_pending_monthly_flow(FakeController(), "GenshinImpact")
     check("异常被吞成失败行", out is not None and out[1] is False and "boom" in out[0], out)
 
@@ -163,7 +174,7 @@ def test_monthly_report_helper():
     print("[6] 报告/警告写入")
     with _no_maintenance(), \
          patch.object(tbr, "is_monthly_flow_done", return_value=False), \
-         patch.object(tbr, "run_hsr_monthly_background", return_value=(False, "❌ 未找到商店")):
+         patch.dict(tbr._MONTHLY_RUNNERS, {"HSR_MONTHLY": lambda *a, **k: (False, "❌ 未找到商店")}):
         report, warnings = [], []
         tbr._append_monthly_report(FakeController(), "HonkaiStarRail", report, warnings)
     check("report 有行", len(report) == 1, report)
