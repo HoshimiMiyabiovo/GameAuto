@@ -36,6 +36,8 @@ TAB_TIMEOUT_SEC = 20         # 页签匹配超时（切换用）
 TAB_SELECTED_TIMEOUT_SEC = 10  # 目标页签选中态确认超时
 SETTLE_SEC = 0.8             # 点击后画面稳定等待
 TAB_SWITCH_SETTLE_SEC = 2.0  # 页签切换后等待
+EXIT_MAX_ESC = 3             # 采购完最多按几次 ESC 回主世界
+EXIT_CHECK_SEC = 5           # 每次 ESC 后等主世界特征出现的超时
 
 # 单次购买结果
 BOUGHT = "bought"                # 买成功 1 个
@@ -241,6 +243,38 @@ def _buy_once(
     return BOUGHT
 
 
+def _leave_shop_to_main(
+    logger: logging.Logger,
+    hwnd: int,
+    step: Dict,
+    label: str,
+    scales,
+    confidences,
+    stop_check: Optional[Callable[[], bool]],
+) -> bool:
+    """买完按 ESC 退回主世界（step 配了 exit_marker_template 才执行）。
+
+    2026-11-01 用户要求「记得返回」：采购完别把游戏停在商店页，否则下次启动
+    或下一个流程要人工退出。主世界特征用「绝区零-主界面-电台」那类模板，
+    先确认再按键，避免多按一次又把主世界切回菜单。
+    """
+    marker = _abs_template(str(step.get("exit_marker_template") or ""))
+    if not marker or not os.path.isfile(marker):
+        return True   # 没配就当不需要退出，保持旧行为
+    from .foreground_flow_runner import _press_escape
+
+    for _ in range(EXIT_MAX_ESC):
+        if stop_check is not None and stop_check():
+            return False
+        if _locate(hwnd, marker, scales, confidences, EXIT_CHECK_SEC, stop_check):
+            logger.info(f"[{label}] 已退回主世界")
+            return True
+        _press_escape(hwnd)
+        time.sleep(1.2)
+    logger.warning(f"[{label}] 采购完成，但按 {EXIT_MAX_ESC} 次 ESC 没确认回到主世界")
+    return False
+
+
 def buy_shop_groups(
     logger: logging.Logger,
     hwnd: int,
@@ -390,4 +424,6 @@ def buy_shop_groups(
 
     if stopped:
         return False, "用户停止 | " + "，".join(summaries)
+    # 用户 2026-11-01 要求「记得返回」：买完退回主世界，别停在商店页
+    _leave_shop_to_main(logger, hwnd, step, log_label, scales, confidences, stop_check)
     return all_ok, "，".join(summaries)
