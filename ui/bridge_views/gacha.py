@@ -418,51 +418,51 @@ class GachaView:
             self.emit_event("toast", message=f"打开失败: {exc}", color="#b04b44")
 
     def _load_gacha_accounts_backend(self, *args, **kwargs):
-        from .bridge_backends.gacha import _load_gacha_accounts_backend as _impl
+        from ..bridge_backends.gacha import _load_gacha_accounts_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _load_gacha_analysis_backend(self, *args, **kwargs):
-        from .bridge_backends.gacha import _load_gacha_analysis_backend as _impl
+        from ..bridge_backends.gacha import _load_gacha_analysis_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _import_gacha_backend(self, *args, **kwargs):
-        from .bridge_backends.gacha import _import_gacha_backend as _impl
+        from ..bridge_backends.gacha import _import_gacha_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _import_hoyogacha_db_backend(self, *args, **kwargs):
-        from .bridge_backends.gacha import _import_hoyogacha_db_backend as _impl
+        from ..bridge_backends.gacha import _import_hoyogacha_db_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _load_nikki_gacha_backend(self, *args, **kwargs):
-        from .bridge_backends.gacha import _load_nikki_gacha_backend as _impl
+        from ..bridge_backends.gacha import _load_nikki_gacha_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _load_wuwa_daily_backend(self, *args, **kwargs):
-        from .bridge_backends.gacha import _load_wuwa_daily_backend as _impl
+        from ..bridge_backends.gacha import _load_wuwa_daily_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _load_wuwa_gacha_backend(self, *args, **kwargs):
-        from .bridge_backends.gacha import _load_wuwa_gacha_backend as _impl
+        from ..bridge_backends.gacha import _load_wuwa_gacha_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _import_wuwa_gacha_from_json_backend(self, *args, **kwargs):
-        from .bridge_backends.gacha import _import_wuwa_gacha_from_json_backend as _impl
+        from ..bridge_backends.gacha import _import_wuwa_gacha_from_json_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _load_endfield_gacha_backend(self, *args, **kwargs):
-        from .bridge_backends.gacha import _load_endfield_gacha_backend as _impl
+        from ..bridge_backends.gacha import _load_endfield_gacha_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _migrate_endfield_uids_to(self, *args, **kwargs):
-        from .bridge_backends.gacha import _migrate_endfield_uids_to as _impl
+        from ..bridge_backends.gacha import _migrate_endfield_uids_to as _impl
         return _impl(self, *args, **kwargs)
 
     def _load_endfield_db_backend(self, *args, **kwargs):
-        from .bridge_backends.gacha import _load_endfield_db_backend as _impl
+        from ..bridge_backends.gacha import _load_endfield_db_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _fetch_endfield_gacha_by_token_backend(self, *args, **kwargs):
-        from .bridge_backends.gacha import _fetch_endfield_gacha_by_token_backend as _impl
+        from ..bridge_backends.gacha import _fetch_endfield_gacha_by_token_backend as _impl
         return _impl(self, *args, **kwargs)
 
     # ═══════════════════════════════════════════════════════════════

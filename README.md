@@ -66,8 +66,9 @@ setup_deps.bat
 ```
 game_auto/
 ├── app/            # CLI / GUI 包入口（app/cli.py、app/gui.py）
-├── ui/             # QML 视图（ui/qml/）、PySide6↔QML 桥接（ui/bridge.py）、主题（ui/theme.py）
-│                   #   及保留的 Flet 界面（ui/flet_app.py，暂停维护）
+├── games/          # 游戏档案（插件式）：身份/默认配置/日常日志/月流程/更新窗口/视图 key
+├── ui/             # QML 视图（ui/qml/）、PySide6↔QML 桥接（ui/bridge.py + ui/bridge_views/）、
+│                   #   主题（ui/theme.py）及保留的 Flet 界面（ui/flet_app.py，暂停维护）
 ├── runtime/        # 运行执行链：编排器、流程执行器、日志监控、OCR 工具
 ├── services/       # 依赖检查、启动前签到调度、每日进度、邮件报告、各游戏日志解析器
 ├── clients/        # 米游社 / 库街区 / 塔吉多 / 森空岛等外部接口客户端
@@ -149,7 +150,7 @@ game_auto/
 
 ## 开发注意
 
-重复踩坑的工程约定（依赖新增规则、日志规则、QML 兼容性避坑、米哈游协议已验证事实等）集中记录在 [AGENTS.md](AGENTS.md)，改代码前先看它。
+重复踩坑的工程约定（依赖新增规则、日志规则、QML 兼容性避坑、米哈游协议已验证事实等）按主题记录在 [AGENTS.md](AGENTS.md)（索引）与 `docs/conventions/`，改代码前先看对应分篇；每次改动在 [docs/changelog.md](docs/changelog.md) 追加一行。
 
 ```bash
 # 纯逻辑回归套件（tests/suite_*.py，逐个子进程隔离）

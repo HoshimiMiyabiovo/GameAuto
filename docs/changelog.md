@@ -12,3 +12,4 @@
 - 新增插件式 `games/` 游戏档案注册表，收敛 nte 等按游戏分支与三处重复更新窗口。
 - `ui/bridge.py` 拆为 `ui/bridge_views/` 按视图 mixin（bridge 745 行，各文件均 <1000 行）。
 - 文档：AGENTS.md 拆为 `docs/conventions/` 索引 + 8 篇；原 overview 技术说明归档，本文件改作 changelog。
+- 修复拆分后 mixin 内相对导入层级（`.bridge_backends` → `..bridge_backends`），并清理 bridge 无用导入。

@@ -11,24 +11,11 @@ slot executes on the main thread — no polling needed.
 
 import atexit
 import json
-import logging
-import os
-import subprocess
 import threading
 import time
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import QObject, Signal, Property, Slot, QTimer
-
-from ..settings.paths import CACHE_DIR, ENDFIELD_SKLAND_CACHE, PROTECTED_CLICK_SEQUENCES, WUWA_DAILY_CACHE
-from ..services.game_update_calendar import (
-    CN_TZ,
-    OPEN_BUFFER_MIN,
-    UPDATE_RETRY_FILE,
-    get_maintenance_state,
-    get_update_info,
-)
 
 from .bridge_views.automation import AutomationView
 from .bridge_views.click_sequence import ClickSequenceView

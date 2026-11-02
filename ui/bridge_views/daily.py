@@ -274,65 +274,65 @@ class DailyView:
             self._request_toast(f"打开失败: {exc}", "#b04b44")
 
     def _refresh_daily_snapshot_for_report(self, *args, **kwargs):
-        from .bridge_backends.daily_progress import _refresh_daily_snapshot_for_report as _impl
+        from ..bridge_backends.daily_progress import _refresh_daily_snapshot_for_report as _impl
         return _impl(self, *args, **kwargs)
 
     def _send_daily_email_report(self, *args, **kwargs):
-        from .bridge_backends.daily_progress import _send_daily_email_report as _impl
+        from ..bridge_backends.daily_progress import _send_daily_email_report as _impl
         return _impl(self, *args, **kwargs)
 
     def _save_preferences_backend(self, *args, **kwargs):
-        from .bridge_backends.daily_progress import _save_preferences_backend as _impl
+        from ..bridge_backends.daily_progress import _save_preferences_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _run_daily_check_backend(self, *args, **kwargs):
-        from .bridge_backends.daily_progress import _run_daily_check_backend as _impl
+        from ..bridge_backends.daily_progress import _run_daily_check_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _serialize_snapshot_games(self, *args, **kwargs):
-        from .bridge_backends.daily_progress import _serialize_snapshot_games as _impl
+        from ..bridge_backends.daily_progress import _serialize_snapshot_games as _impl
         return _impl(self, *args, **kwargs)
 
     def _load_daily_dates_backend(self, *args, **kwargs):
-        from .bridge_backends.daily_progress import _load_daily_dates_backend as _impl
+        from ..bridge_backends.daily_progress import _load_daily_dates_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _load_daily_history_backend(self, *args, **kwargs):
-        from .bridge_backends.daily_progress import _load_daily_history_backend as _impl
+        from ..bridge_backends.daily_progress import _load_daily_history_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _load_daily_stats_backend(self, *args, **kwargs):
-        from .bridge_backends.daily_progress import _load_daily_stats_backend as _impl
+        from ..bridge_backends.daily_progress import _load_daily_stats_backend as _impl
         return _impl(self, *args, **kwargs)
 
     def _load_daily_progress_backend(self, *args, **kwargs):
-        from .bridge_backends.daily_progress import _load_daily_progress_backend as _impl
+        from ..bridge_backends.daily_progress import _load_daily_progress_backend as _impl
         return _impl(self, *args, **kwargs)
 
     @staticmethod
     @staticmethod
     def _real_completion_percent(*args, **kwargs):
-        from .bridge_backends.daily_progress import _real_completion_percent as _impl
+        from ..bridge_backends.daily_progress import _real_completion_percent as _impl
         return _impl(*args, **kwargs)
 
     @staticmethod
     @staticmethod
     def _attach_completion_state(*args, **kwargs):
-        from .bridge_backends.daily_progress import _attach_completion_state as _impl
+        from ..bridge_backends.daily_progress import _attach_completion_state as _impl
         return _impl(*args, **kwargs)
 
     @staticmethod
     @staticmethod
     def _extract_task_counts(*args, **kwargs):
-        from .bridge_backends.daily_progress import _extract_task_counts as _impl
+        from ..bridge_backends.daily_progress import _extract_task_counts as _impl
         return _impl(*args, **kwargs)
 
     def _inject_external_log_progress(self, *args, **kwargs):
-        from .bridge_backends.daily_progress import _inject_external_log_progress as _impl
+        from ..bridge_backends.daily_progress import _inject_external_log_progress as _impl
         return _impl(self, *args, **kwargs)
 
     def _ensure_baijing_placeholder(self, *args, **kwargs):
-        from .bridge_backends.daily_progress import _ensure_baijing_placeholder as _impl
+        from ..bridge_backends.daily_progress import _ensure_baijing_placeholder as _impl
         return _impl(self, *args, **kwargs)
 
     # ── Sign action backends (run in background thread) ─────────────

@@ -19,10 +19,6 @@ TONE_MAP: Dict[str, tuple] = {
     TONE_DANGER:  ("已中断", "#f7dfdd", "#b04b44"),
 }
 
-ENDFIELD_SKLAND_TTL = 300
-WUWA_DAILY_TTL = 300
-
-
 def _mask_address(addr: str) -> str:
     """日志中脱敏邮箱地址：a*c@example.com。"""
     if not addr or "@" not in addr:
