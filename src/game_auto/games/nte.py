@@ -16,7 +16,7 @@ from .registry import register
 # 与 settings.paths.TEMPLATES_DIR 保持一致。这里不 import settings.paths：
 # 注册表会在 settings 包初始化期间被扫描，游戏模块再反向 import settings
 # 会触发 defaults 的半初始化（DEFAULT_APPS 只拿到部分档案）。
-_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "assets" / "templates"
+_TEMPLATES_DIR = Path(__file__).resolve().parents[3] / "assets" / "templates"
 
 PROFILE = GameProfile(
     game_key="nte",

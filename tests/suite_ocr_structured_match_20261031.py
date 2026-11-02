@@ -26,7 +26,7 @@ from pathlib import Path
 from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from game_auto.runtime import ocr_click_tester as oct  # noqa: E402
 from game_auto.runtime import foreground_flow_runner as ffr  # noqa: E402

@@ -20,7 +20,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import game_auto.runtime.baijing_daily as bd  # noqa: E402
 
@@ -163,7 +163,7 @@ def test_scan_snapshot_wiring():
 
 
 def test_source_wiring():
-    src = (PROJECT_ROOT / "runtime" / "baijing_daily.py").read_text(encoding="utf-8")
+    src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "baijing_daily.py").read_text(encoding="utf-8")
     check(
         "process_task_list 调用面板活跃度读取",
         "game_activity = _read_activity_number(logger, hwnd)" in src,

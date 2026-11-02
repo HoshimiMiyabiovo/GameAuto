@@ -12,7 +12,7 @@
 import json
 import sys
 
-sys.path.insert(0, r"E:\GithubProject")
+sys.path.insert(0, r"E:\GithubProject\game_auto\src")
 
 from game_auto.ui.bridge import UiBridge  # noqa: E402
 

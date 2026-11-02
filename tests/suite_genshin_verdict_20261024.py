@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, r"E:\GithubProject")
+sys.path.insert(0, r"E:\GithubProject\game_auto\src")
 
 from game_auto.runtime import bettergi_log_monitor as bm  # noqa: E402
 from game_auto.runtime import task_batch_runner as tbr  # noqa: E402

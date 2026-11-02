@@ -18,9 +18,8 @@ import os
 import sys
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# runtime/ 内部用相对导入（from ..settings.paths import ...），必须以包的形式导入，
-# 因此 sys.path 要指到仓库的父目录（game_auto 本身没有 __init__.py，走命名空间包）
-sys.path.insert(0, os.path.dirname(BASE_DIR))
+# src 布局：包在 <仓库>/src/game_auto，导入时把 src 加进 sys.path
+sys.path.insert(0, os.path.join(BASE_DIR, "src"))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 

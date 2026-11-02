@@ -1546,7 +1546,7 @@ def login_by_qrcode_app() -> Dict[str, Any]:
             if val:
                 cookie_parts.append(f"{key}={val}")
         cookie_str = "; ".join(cookie_parts)
-        config_path = _Path(__file__).resolve().parent.parent / "app_config.json"
+        config_path = _Path(__file__).resolve().parents[3] / "app_config.json"
         if config_path.exists():
             with open(config_path, encoding="utf-8") as f:
                 config = json.load(f)

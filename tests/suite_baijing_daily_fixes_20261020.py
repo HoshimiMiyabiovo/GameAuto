@@ -11,7 +11,7 @@
 
 import sys
 
-sys.path.insert(0, r"E:\GithubProject")
+sys.path.insert(0, r"E:\GithubProject\game_auto\src")
 
 import game_auto.runtime.baijing_daily as bd  # noqa: E402
 

@@ -17,7 +17,7 @@
 import sys
 from datetime import datetime
 
-sys.path.insert(0, r"E:\GithubProject")
+sys.path.insert(0, r"E:\GithubProject\game_auto\src")
 
 import game_auto.ui.bridge_views.scheduler as bridge_mod  # noqa: E402
 from game_auto.runtime import task_batch_runner  # noqa: E402

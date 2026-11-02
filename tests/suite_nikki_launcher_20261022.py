@@ -23,7 +23,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-sys.path.insert(0, r"E:\GithubProject")
+sys.path.insert(0, r"E:\GithubProject\game_auto\src")
 
 from game_auto.runtime import foreground_flow_runner, nikki_launcher as nl  # noqa: E402
 from game_auto.settings import APPS  # noqa: E402

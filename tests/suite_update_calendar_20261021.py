@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
-sys.path.insert(0, r"E:\GithubProject")
+sys.path.insert(0, r"E:\GithubProject\game_auto\src")
 
 import game_auto.services.game_update_calendar as cal  # noqa: E402
 import game_auto.ui.bridge_views.scheduler as bridge_mod  # noqa: E402

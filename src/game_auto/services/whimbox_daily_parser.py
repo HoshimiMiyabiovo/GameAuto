@@ -39,7 +39,7 @@ from typing import Any, Dict, List, Optional, Tuple
 LOGGER = logging.getLogger("GameAutomation")
 RESET_HOUR = 4
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _APP_CONFIG_PATH = _PROJECT_ROOT / "app_config.json"
 
 # 日志行首：日期 时间 | 级别 | logger - 内容

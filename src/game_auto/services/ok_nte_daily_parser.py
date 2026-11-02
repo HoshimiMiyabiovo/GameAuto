@@ -46,7 +46,7 @@ SUMMARY_PATTERN = re.compile(
 # 时间戳：YYYY-MM-DD HH:MM:SS
 TS_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})")
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _APP_CONFIG_PATH = _PROJECT_ROOT / "app_config.json"
 
 

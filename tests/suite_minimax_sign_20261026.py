@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, r"E:\GithubProject")
+sys.path.insert(0, r"E:\GithubProject\game_auto\src")
 
 from game_auto.runtime import wool_claim_logs as wcl  # noqa: E402
 

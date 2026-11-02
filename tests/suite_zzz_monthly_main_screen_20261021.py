@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent  # E:/GithubProject/game_auto
-sys.path.insert(0, str(PROJECT_ROOT.parent))  # E:/GithubProject，供 game_auto 包导入
+sys.path.insert(0, str(PROJECT_ROOT / "src"))  # E:/GithubProject，供 game_auto 包导入
 
 from game_auto.runtime.foreground_flow_runner import (  # noqa: E402
     _load_flow_config,

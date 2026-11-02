@@ -7,7 +7,8 @@ from pathlib import Path
 LOGGER = logging.getLogger("GameAutomation")
 
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+# src 布局：settings/paths.py → settings → game_auto → src → 仓库根
+BASE_DIR = Path(__file__).resolve().parents[3]
 APP_CONFIG_PATH = BASE_DIR / "app_config.json"
 # 运行时数据统一放 data/（日志/失败截图/数据库/缓存），根目录只留源码与资源。
 # 旧版本把 logs/artifacts/workflow.sqlite3/storage/cache 直接放在根目录，

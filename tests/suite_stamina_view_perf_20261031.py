@@ -29,7 +29,7 @@ from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent, QQmlExpression
 from pyhuskarui.husapp import HusApp
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from game_auto.services.stamina_configs import list_configs  # noqa: E402
 
@@ -60,7 +60,7 @@ class _Bridge(QObject):
 
 def test_source():
     print("[1] QML 结构")
-    qml_path = PROJECT_ROOT / "ui" / "qml" / "views" / "StaminaConfigView.qml"
+    qml_path = PROJECT_ROOT / "src" / "game_auto" / "ui" / "qml" / "views" / "StaminaConfigView.qml"
     src = qml_path.read_text(encoding="utf-8")
     check("卡片使用 ListView", "ListView {" in src and 'objectName: "staminaCardList"' in src)
     check("不复用 delegate", "reuseItems: false" in src)
@@ -84,10 +84,10 @@ Window {
   width: 1200; height: 800; visible: true
   Loader { anchors.fill: parent; source: "file:///%s" }
 }
-""" % (PROJECT_ROOT / "ui" / "qml" / "views" / "StaminaConfigView.qml").as_posix()
+""" % (PROJECT_ROOT / "src" / "game_auto" / "ui" / "qml" / "views" / "StaminaConfigView.qml").as_posix()
     comp = QQmlComponent(engine)
     comp.setData(qml.encode("utf-8"), QUrl.fromLocalFile(
-        str(PROJECT_ROOT / "ui" / "qml" / "_stamina_perf_test.qml")))
+        str(PROJECT_ROOT / "src" / "game_auto" / "ui" / "qml" / "_stamina_perf_test.qml")))
     obj = comp.create()
     check("QML 无语法错误", not comp.isError(),
           [e.toString() for e in comp.errors()][:3])

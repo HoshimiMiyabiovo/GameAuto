@@ -39,7 +39,7 @@ import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from game_auto.runtime import foreground_flow_runner as ffr  # noqa: E402
 from game_auto.runtime import monthly_exchange as mx  # noqa: E402
@@ -739,10 +739,10 @@ check("STANDALONE_TASK_ORDER 不再含每月任务",
       STANDALONE_TASK_ORDER)
 check("merge 后 APPS 不再暴露每月任务", "GenshinMonthlyFlow" not in APPS)
 
-bg_src = (PROJECT_ROOT / "runtime" / "background_template_runner.py").read_text(encoding="utf-8")
+bg_src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "background_template_runner.py").read_text(encoding="utf-8")
 check("后台 runner 提供原神每月入口",
       "def run_genshin_monthly_background" in bg_src and '"GENSHIN_MONTHLY"' in bg_src)
-batch_src = (PROJECT_ROOT / "runtime" / "task_batch_runner.py").read_text(encoding="utf-8")
+batch_src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "task_batch_runner.py").read_text(encoding="utf-8")
 check("批次执行器不再按 app_key 分派每月任务",
       'app_key == "GenshinMonthlyFlow"' not in batch_src
       and 'app_key == "HsrMonthlyFlow"' not in batch_src
@@ -750,7 +750,7 @@ check("批次执行器不再按 app_key 分派每月任务",
 check("批次执行器改为日常跑完自动补跑",
       "_append_monthly_report" in batch_src and "_MONTHLY_FLOW_BY_APP" in batch_src)
 
-runner_src = (PROJECT_ROOT / "runtime" / "foreground_flow_runner.py").read_text(encoding="utf-8")
+runner_src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "foreground_flow_runner.py").read_text(encoding="utf-8")
 check("runner 注册 monthly_exchange", '"monthly_exchange"' in runner_src)
 _builtin_count = runner_src.count('"monthly_exchange"')
 check("runner 内建动作清单与分发包含该动作",

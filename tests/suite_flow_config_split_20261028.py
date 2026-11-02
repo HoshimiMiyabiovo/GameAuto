@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from game_auto.settings import paths as p  # noqa: E402
 import game_auto.runtime.foreground_flow_runner as fg  # noqa: E402
@@ -113,9 +113,9 @@ def test_repo_files():
               (data.get("WORKBUDDY") or {}).get("close_process_on_finish") is False)
         check("example 的 QODER 安全默认",
               (data.get("QODER") or {}).get("close_process_on_finish") is False)
-    runner = (PROJECT_ROOT / "runtime" / "foreground_flow_runner.py").read_text(encoding="utf-8")
-    bridge = (PROJECT_ROOT / "ui" / "bridge_views" / "automation.py").read_text(encoding="utf-8")
-    webui = (PROJECT_ROOT / "ui" / "webui" / "api" / "wool.py").read_text(encoding="utf-8")
+    runner = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "foreground_flow_runner.py").read_text(encoding="utf-8")
+    bridge = (PROJECT_ROOT / "src" / "game_auto" / "ui" / "bridge_views" / "automation.py").read_text(encoding="utf-8")
+    webui = (PROJECT_ROOT / "src" / "game_auto" / "ui" / "webui" / "api" / "wool.py").read_text(encoding="utf-8")
     check("流程加载器使用 ensure", "ensure_flow_config_path()" in runner)
     check("GUI 写开关使用 ensure", "ensure_flow_config_path()" in bridge)
     check("WebUI 写开关使用 ensure", "ensure_flow_config_path()" in webui)

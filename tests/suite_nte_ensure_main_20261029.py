@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import game_auto.runtime.foreground_flow_runner as ffr  # noqa: E402
 from game_auto.runtime import nte_launcher as nl  # noqa: E402
@@ -115,7 +115,7 @@ def main():
     print("[6] 配置与接线")
     check("默认配置启用 nte 兜底",
           (DEFAULT_APPS.get("NevernessToEverness") or {}).get("post_launch_ensure_main") == "nte")
-    controller_src = (PROJECT_ROOT / "runtime" / "automation_controller.py").read_text(encoding="utf-8")
+    controller_src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "automation_controller.py").read_text(encoding="utf-8")
     check("控制器调用 ensure_game_main", "ensure_game_main" in controller_src)
     check("控制器读 post_launch_ensure_main", "post_launch_ensure_main" in controller_src)
     check("进入游戏模板存在", Path(nl.ENTRY_TEMPLATE).is_file(), nl.ENTRY_TEMPLATE)

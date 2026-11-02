@@ -16,3 +16,4 @@
 - 根目录整理：`模板/` → `assets/templates/`、`click_sequences/` → `assets/click_sequences/`、`start/`+`launchers/` → `scripts/`；模板路径与本地 flow/app 配置一次性迁移。
 - 视图回收套件改为轮询等待释放（离屏首次编译 1-2s 时固定 0.75s 断言会误报）。
 - `%TEMP%` 参考副本移到 `data/reference/temp_project/`；`webui/` 并入 `ui/webui/`，导入与文档路径同步。
+- 改为 src 布局：Python 包移入 `src/game_auto/`，启动脚本把 `src` 注入 PYTHONPATH，pytest 配 `pythonpath=src`，包内 `__file__` 路径常量上移一层。

@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 LOGGER = logging.getLogger("GameAutomation")
 RESET_HOUR = 4
 
-_APP_CONFIG_PATH = Path(__file__).resolve().parent.parent / "app_config.json"
+_APP_CONFIG_PATH = Path(__file__).resolve().parents[3] / "app_config.json"
 
 LOG_LINE_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}),\d+\s+\|\s+(\w+)\s+\|\s+(.+)$"

@@ -25,7 +25,7 @@ from pathlib import Path
 from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import game_auto.runtime.monthly_exchange as mx  # noqa: E402
 import game_auto.runtime.zzz_monthly_shop as shop  # noqa: E402
@@ -161,7 +161,7 @@ def test_buy_items_uses_scroll_finder():
 
 def test_step_switch():
     print("[5] step.item_scroll_search 开关")
-    src = (PROJECT_ROOT / "runtime" / "monthly_exchange.py").read_text(encoding="utf-8")
+    src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "monthly_exchange.py").read_text(encoding="utf-8")
     check("buy_monthly_exchange 读 step 开关",
           'step.get("item_scroll_search", True)' in src)
     check("_buy_items 默认开翻页",

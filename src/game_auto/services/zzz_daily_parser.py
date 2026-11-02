@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 LOGGER = logging.getLogger("GameAutomation")
 RESET_HOUR = 4
 
-_APP_CONFIG_PATH = Path(__file__).resolve().parent.parent / "app_config.json"
+_APP_CONFIG_PATH = Path(__file__).resolve().parents[3] / "app_config.json"
 
 ONE_DRAGON_END = "全部结束"
 

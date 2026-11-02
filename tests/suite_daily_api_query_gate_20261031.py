@@ -23,7 +23,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import game_auto.clients.daily_checker as dc  # noqa: E402
 import game_auto.runtime.task_batch_runner as tbr  # noqa: E402
@@ -239,7 +239,7 @@ def test_source_wiring():
     check("预查询只跑一次",
           "_api_progress_queried = True" in src and "not _api_progress_queried" in src)
     # 鸣潮的复核增强已收进游戏档案（games/wuwa.py 的 augment_verify）
-    wuwa_src = (Path(__file__).resolve().parent.parent / "games" / "wuwa.py").read_text(encoding="utf-8")
+    wuwa_src = (Path(__file__).resolve().parent.parent / "src" / "game_auto" / "games" / "wuwa.py").read_text(encoding="utf-8")
     check("鸣潮复核也合并 API 关键进度",
           'load_api_tasks("wuwa", logger)' in wuwa_src)
 

@@ -22,7 +22,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, r"E:\GithubProject")
+sys.path.insert(0, r"E:\GithubProject\game_auto\src")
 
 from game_auto.runtime import task_batch_runner as tbr  # noqa: E402
 from game_auto.services import starrail_daily_parser as sp  # noqa: E402

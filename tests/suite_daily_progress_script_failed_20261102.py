@@ -18,7 +18,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import game_auto.services.bettergi_daily_parser as bettergi_parser  # noqa: E402
 import game_auto.services.ok_ef_daily_parser as ok_ef_parser  # noqa: E402

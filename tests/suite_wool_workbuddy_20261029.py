@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import game_auto.runtime.background_template_runner as btr  # noqa: E402
 import game_auto.runtime.foreground_flow_runner as ffr  # noqa: E402
@@ -108,13 +108,13 @@ def test_close_logic():
 def main():
     test_config()
     test_close_logic()
-    src = (PROJECT_ROOT / "runtime" / "background_template_runner.py").read_text(encoding="utf-8")
+    src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "background_template_runner.py").read_text(encoding="utf-8")
     check("调用方把 ok 传给收尾", "_close_wool_flow(logger, flow_key, cfg, ok)" in src)
-    runner_src = (PROJECT_ROOT / "runtime" / "foreground_flow_runner.py").read_text(encoding="utf-8")
+    runner_src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "foreground_flow_runner.py").read_text(encoding="utf-8")
     check("run_flow 不再硬拦截关闭开关", "PROTECTED_CLOSE_FLOWS" not in runner_src)
-    bridge_src = (PROJECT_ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    bridge_src = (PROJECT_ROOT / "src" / "game_auto" / "ui" / "bridge.py").read_text(encoding="utf-8")
     check("GUI 允许用户勾选关闭", "拒绝开启受保护软件的自动关闭" not in bridge_src)
-    qml = (PROJECT_ROOT / "ui" / "qml" / "views" / "WoolView.qml").read_text(encoding="utf-8")
+    qml = (PROJECT_ROOT / "src" / "game_auto" / "ui" / "qml" / "views" / "WoolView.qml").read_text(encoding="utf-8")
     check("QML 开关可用", "受保护（不自动关闭）" not in qml and "saveWoolFlowCloseOnFinish" in qml)
     print("-" * 60)
     if FAILURES:

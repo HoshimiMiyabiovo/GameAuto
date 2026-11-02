@@ -23,7 +23,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import game_auto.clients.daily_checker as dc  # noqa: E402
 import game_auto.runtime.background_template_runner as btr  # noqa: E402
@@ -368,8 +368,8 @@ def test_shop_evidence_capture():
 
 def test_evidence_wiring():
     print("[8f] 两个采购入口都接入了截图")
-    shop_src = (PROJECT_ROOT / "runtime" / "zzz_monthly_shop.py").read_text(encoding="utf-8")
-    me_src = (PROJECT_ROOT / "runtime" / "monthly_exchange.py").read_text(encoding="utf-8")
+    shop_src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "zzz_monthly_shop.py").read_text(encoding="utf-8")
+    me_src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "monthly_exchange.py").read_text(encoding="utf-8")
     check("后勤商店有采购前/后两张", shop_src.count('stage="采购前"') == 1 and shop_src.count('stage="采购后"') == 1,
           (shop_src.count('stage="采购前"'), shop_src.count('stage="采购后"')))
     check("兑换流程有采购前/后两张", me_src.count('stage="采购前"') == 1 and me_src.count('stage="采购后"') == 1,

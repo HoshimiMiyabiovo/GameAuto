@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from game_auto.services.stamina_configs import base as stamina_base  # noqa: E402
 from game_auto.services.stamina_configs.base import ConfigError  # noqa: E402
@@ -330,11 +330,11 @@ def test_roundtrip_and_registry(tmp: Path):
         adapter._yaml().dump(data["config"], buf)
         check(f"{name} 无改动往返零差异", buf.getvalue() == text)
 
-    source = (PROJECT_ROOT / "services" / "stamina_configs" / "yaml_adapter.py").read_text(encoding="utf-8")
+    source = (PROJECT_ROOT / "src" / "game_auto" / "services" / "stamina_configs" / "yaml_adapter.py").read_text(encoding="utf-8")
     check("YAML 适配器使用 ruamel", "from ruamel.yaml import YAML" in source)
     check("未使用 PyYAML dump", "import yaml" not in source and "yaml.dump(" not in source)
 
-    zzz_source = (PROJECT_ROOT / "services" / "stamina_configs" / "zzz_one_dragon.py").read_text(encoding="utf-8")
+    zzz_source = (PROJECT_ROOT / "src" / "game_auto" / "services" / "stamina_configs" / "zzz_one_dragon.py").read_text(encoding="utf-8")
     check("OneDragon 固定单账户 config/01", 'ACCOUNT_SUBDIR = "01"' in zzz_source)
     check("OneDragon 文档手写不支持多账户", "不支持多账户" in zzz_source)
 

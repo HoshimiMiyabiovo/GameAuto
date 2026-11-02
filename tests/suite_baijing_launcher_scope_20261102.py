@@ -34,7 +34,7 @@ from pathlib import Path
 from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import game_auto.runtime.baijing_flow as bf  # noqa: E402
 
@@ -302,7 +302,7 @@ def test_flow_refuses_without_launcher_window():
 
 def test_static_wiring():
     print("[10] 静态断言：调用点把启动器窗口传了进去")
-    src = (PROJECT_ROOT / "runtime" / "baijing_flow.py").read_text(encoding="utf-8")
+    src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "baijing_flow.py").read_text(encoding="utf-8")
     check("流程里定位启动器窗口", "_wait_launcher_window(logger" in src)
     check("点击时传入 hwnd=launcher_hwnd", "hwnd=launcher_hwnd" in src)
     check("点击前调用了置顶", "_focus_game_window(logger, launcher_hwnd)" in src)

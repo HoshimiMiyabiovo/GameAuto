@@ -5,6 +5,8 @@
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# src 布局：包在 src/game_auto，pytest 直接把 src 加进导入路径
+pythonpath = ["src"]
 addopts = "-q"
 # 缓存统一放 data/cache，避免在仓库根目录堆 .pytest_cache 文件夹
 cache_dir = "data/cache/pytest"
@@ -14,7 +16,7 @@ line-length = 140
 target-version = "py310"
 cache-dir = "data/cache/ruff"
 # flet/ 内嵌第三方框架、data/reference/ 为参考项目副本、artifacts/ 为本地证据与真机脚本
-exclude = [".venv", "flet", "data/reference", "artifacts", "tools/flet", "ui/flet", "ui/flet_app.py", "tests/suite_*.py"]
+exclude = [".venv", "data/reference", "artifacts", "tools/flet", "src/game_auto/ui/flet", "src/game_auto/ui/flet_app.py", "tests/suite_*.py"]
 
 [tool.ruff.lint]
 # 先只开能兜住 AGENTS.md 硬规则的窄集合：语法错误、未定义名、裸 except。

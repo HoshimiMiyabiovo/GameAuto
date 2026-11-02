@@ -42,7 +42,7 @@ except ImportError:
 
 LOGGER = logging.getLogger("GameAutomation.EmailReport")
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _APP_CONFIG_PATH = _PROJECT_ROOT / "app_config.json"
 
 _STATUS_LABEL = {

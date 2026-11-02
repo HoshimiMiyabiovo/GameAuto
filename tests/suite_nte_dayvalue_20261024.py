@@ -23,7 +23,7 @@ import logging
 import sys
 from unittest.mock import patch
 
-sys.path.insert(0, r"E:\GithubProject")
+sys.path.insert(0, r"E:\GithubProject\game_auto\src")
 
 from game_auto.clients import daily_checker as dc  # noqa: E402
 from game_auto.clients import tajiduo_sign as tj  # noqa: E402

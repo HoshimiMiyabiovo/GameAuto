@@ -336,8 +336,8 @@ def _register_device_to_account(cookie: str, device: Dict[str, Any],
 
 def _persist_device_cache(device: Dict[str, Any]) -> None:
     """把生成的 device_id/fp 等缓存写回 app_config.json，保证跨次运行稳定。"""
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               "app_config.json")
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    config_path = os.path.join(repo_root, "app_config.json")
     try:
         with open(config_path, encoding="utf-8") as f:
             config = json.load(f)
@@ -1057,7 +1057,7 @@ def _load_app_config() -> Dict[str, Any]:
     """加载应用配置（直接读 JSON，避免相对导入问题）。自动解密敏感字段。"""
     import json as _json
     from pathlib import Path
-    config_path = Path(__file__).resolve().parent.parent / "app_config.json"
+    config_path = Path(__file__).resolve().parents[3] / "app_config.json"
     if not config_path.exists():
         return {}
     try:
@@ -1632,7 +1632,7 @@ def _qr_login_and_update_config() -> bool:
     cookie_str = "; ".join(cookie_parts)
 
     # 更新 app_config.json
-    config_path = Path(__file__).resolve().parent.parent / "app_config.json"
+    config_path = Path(__file__).resolve().parents[3] / "app_config.json"
     if config_path.exists():
         with open(config_path, encoding="utf-8") as f:
             config = _json.load(f)

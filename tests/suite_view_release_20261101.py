@@ -23,7 +23,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from PySide6.QtCore import QObject, QUrl, qInstallMessageHandler  # noqa: E402
 from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
@@ -53,7 +53,7 @@ def build():
     bridge = UiBridge()
     engine.rootContext().setContextProperty("bridge", bridge)
     apply_tokens_to_engine(engine)
-    qml_dir = PROJECT_ROOT / "ui" / "qml"
+    qml_dir = PROJECT_ROOT / "src" / "game_auto" / "ui" / "qml"
     engine.addImportPath(str(qml_dir))
     engine.load(QUrl.fromLocalFile(str(qml_dir / "Main.qml")))
     roots = engine.rootObjects()

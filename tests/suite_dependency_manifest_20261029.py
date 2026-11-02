@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from game_auto.services import dependency_manager as dm  # noqa: E402
 
@@ -100,8 +100,8 @@ def main():
     check("dependency_manager 不再自动安装", not hasattr(dm, "_install_package"))
     check("dependency_manager 提供 missing_packages",
           "missing_packages" in dm.DependencyCheckReport.__dataclass_fields__)
-    gui_src = (PROJECT_ROOT / "app" / "gui.py").read_text(encoding="utf-8")
-    cli_src = (PROJECT_ROOT / "app" / "cli.py").read_text(encoding="utf-8")
+    gui_src = (PROJECT_ROOT / "src" / "game_auto" / "app" / "gui.py").read_text(encoding="utf-8")
+    cli_src = (PROJECT_ROOT / "src" / "game_auto" / "app" / "cli.py").read_text(encoding="utf-8")
     check("GUI 启动不自动装包", "auto_install" not in gui_src)
     check("CLI 启动不自动装包", "auto_install" not in cli_src)
     check("GUI 提示 setup_deps.bat", "setup_deps.bat" in gui_src)
@@ -112,7 +112,7 @@ def main():
     check("锁文件含 ruamel.yaml", "ruamel.yaml" in pins)
 
     print("[6] WebUI 只监听回环")
-    webui_src = (PROJECT_ROOT / "ui" / "webui" / "app.py").read_text(encoding="utf-8")
+    webui_src = (PROJECT_ROOT / "src" / "game_auto" / "ui" / "webui" / "app.py").read_text(encoding="utf-8")
     check("宿主固定 127.0.0.1", webui_src.count('host="127.0.0.1"') >= 2, str(webui_src.count('host="127.0.0.1"')))
     check("不监听 0.0.0.0", "0.0.0.0" not in webui_src)
 

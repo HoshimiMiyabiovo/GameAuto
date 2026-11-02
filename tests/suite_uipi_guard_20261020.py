@@ -5,7 +5,7 @@
 """
 import sys
 
-sys.path.insert(0, "E:/GithubProject")
+sys.path.insert(0, "E:/GithubProject/game_auto/src")
 
 from game_auto.runtime import foreground_flow_runner as ffr
 

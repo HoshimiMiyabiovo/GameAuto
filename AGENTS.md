@@ -17,9 +17,13 @@
 
 ## 游戏档案（插件式）
 
-新增游戏只需在 `games/` 下加一个模块：构造 `GameProfile` 并 `register()`。
+包代码在 `src/game_auto/`（src 布局）。本目录各分篇里出现的包内路径
+（`runtime/`、`ui/`、`services/`、`settings/` 等）都相对 `src/game_auto/`；
+`assets/`、`data/`、`docs/`、`tests/`、`tools/`、`scripts/` 相对仓库根。
+
+新增游戏只需在 `src/game_auto/games/` 下加一个模块：构造 `GameProfile` 并 `register()`。
 身份、默认配置、日常日志解析/合并、月商店、更新窗口、专项视图 key 都由
-[games/registry.py](file:///e:/GithubProject/game_auto/games/registry.py) 自动发现，
+[games/registry.py](file:///e:/GithubProject/game_auto/src/game_auto/games/registry.py) 自动发现，
 settings / bridge / 批处理 / 更新日历无需再改映射表。
 
 ## 变更记录

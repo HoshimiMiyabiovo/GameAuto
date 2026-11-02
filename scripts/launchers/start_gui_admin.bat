@@ -4,6 +4,7 @@ chcp 65001 >nul
 
 for %%I in ("%~dp0..\..") do set "PACKAGE_DIR=%%~fI"
 for %%I in ("%PACKAGE_DIR%\..") do set "PROJECT_DIR=%%~fI"
+set "PYTHONPATH=%PACKAGE_DIR%\src;%PYTHONPATH%"
 set "PYTHON_EXE=%PACKAGE_DIR%\.venv\Scripts\python.exe"
 
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"

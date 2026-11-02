@@ -65,29 +65,37 @@ setup_deps.bat
 
 ```
 game_auto/
-├── app/            # CLI / GUI 包入口（app/cli.py、app/gui.py）
-├── games/          # 游戏档案（插件式）：身份/默认配置/日常日志/月流程/更新窗口/视图 key
-├── ui/             # QML 视图（ui/qml/）、PySide6↔QML 桥接（ui/bridge.py + ui/bridge_views/）、
-│                   #   主题（ui/theme.py）、FastAPI 远程面板（ui/webui/）及保留的 Flet 界面
-│                   #   （ui/flet_app.py，暂停维护）
-├── runtime/        # 运行执行链：编排器、流程执行器、日志监控、OCR 工具
-├── services/       # 依赖检查、启动前签到调度、每日进度、邮件报告、各游戏日志解析器
-├── clients/        # 米游社 / 库街区 / 塔吉多 / 森空岛等外部接口客户端
-├── gacha/          # 各游戏抽卡导入、解析与分析
-├── settings/       # 默认配置、路径常量、配置读写（含原子写入）
-├── storage/        # SQLite 数据访问层（workflow_db.py；不再存放缓存）
+├── src/game_auto/  # Python 包根（导入路径是 game_auto，运行时需把 src/ 加进 PYTHONPATH）
+│   ├── app/            # CLI / GUI 包入口（app/cli.py、app/gui.py）
+│   ├── games/          # 游戏档案（插件式）：身份/默认配置/日常日志/月流程/更新窗口/视图 key
+│   ├── ui/             # QML 视图（ui/qml/）、PySide6↔QML 桥接（ui/bridge.py + ui/bridge_views/）、
+│   │                   #   主题（ui/theme.py）、FastAPI 远程面板（ui/webui/）及保留的 Flet 界面
+│   │                   #   （ui/flet_app.py，暂停维护）
+│   ├── runtime/        # 运行执行链：编排器、流程执行器、日志监控、OCR 工具
+│   ├── services/       # 依赖检查、启动前签到调度、每日进度、邮件报告、各游戏日志解析器
+│   ├── clients/        # 米游社 / 库街区 / 塔吉多 / 森空岛等外部接口客户端
+│   ├── gacha/          # 各游戏抽卡导入、解析与分析
+│   ├── settings/       # 默认配置、路径常量、配置读写（含原子写入）
+│   ├── storage/        # SQLite 数据访问层（workflow_db.py；不再存放缓存）
+│   └── maintenance/    # 维护脚本与一次性工具（旧配置编辑器、模板种子等）
 ├── data/           # 运行时数据（不入库）：logs/、artifacts/、cache/、workflow.sqlite3
-├── maintenance/    # 维护脚本与一次性工具（旧配置编辑器、模板种子等）
-├── tools/          # 内置工具（Tesseract OCR、QML 布局 smoke 测试等）
 ├── assets/         # 随仓库迁移的资源
 │   ├── templates/        # 图像模板流程用的截图模板
 │   ├── click_sequences/  # 固定点击序列（录制/回放）
 │   └── icon.ico
 ├── scripts/        # 启动脚本
 │   ├── start/            # 用户双击入口（.bat）
-│   └── launchers/        # 内部提权与包模式启动脚本
+│   └── launchers/        # 内部提权与包模式启动脚本（自动把 src/ 加进 PYTHONPATH）
+├── tools/          # 内置工具（Tesseract OCR、QML 布局 smoke 测试等）
 ├── app_config.json      # 用户覆盖配置与执行顺序（不入库）
 └── flow_configs.json    # 图像模板流程定义（XM / CJ / NTE；本地文件，不入库）
+```
+
+命令行直接跑模块时需要先加导入路径（启动脚本已自动处理）：
+
+```bat
+set PYTHONPATH=%CD%\src
+.venv\Scripts\python.exe -m game_auto.app.cli
 ```
 
 ### runtime/ 主要模块

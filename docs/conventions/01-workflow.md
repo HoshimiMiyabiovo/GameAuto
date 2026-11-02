@@ -85,7 +85,9 @@
   - `data/artifacts/`：失败截图、白荆验证图、本地真机脚本；
   - `data/cache/`：第三方配置备份、各接口缓存、月度重跑队列；
   - `data/workflow.sqlite3`：本机偏好与运行数据库（含 WAL 文件）。
-- 根目录只保留 Python 包、`assets/`（模板与点击序列）、`scripts/`（启动脚本）、配置与文档。
+- 包代码统一在 `src/game_auto/`（src 布局）；根目录只保留 `src/`、`assets/`（模板与点击序列）、
+  `scripts/`（启动脚本）、`data/`、`docs/`、`tests/`、`tools/` 与配置。
+  运行时导入需把 `src/` 加进 `PYTHONPATH`（启动脚本已自动处理；pytest 由 `pythonpath=src` 处理）。
   资源路径统一由 `settings/paths.py` 的 `ASSETS_DIR` / `TEMPLATES_DIR` / `CLICK_SEQUENCES_DIR`
   给出；新增模板写到 `assets/templates/`，flow 配置里写 `assets/templates/xxx.png` 相对路径。
 - 一次性迁移脚本：`tools/migrate_data_layout_20261029.py`（关闭 GUI/CLI 后运行；

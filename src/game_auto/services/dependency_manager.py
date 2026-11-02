@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-REQUIREMENTS_FILE = Path(__file__).resolve().parent.parent / "requirements.txt"
+REQUIREMENTS_FILE = Path(__file__).resolve().parents[3] / "requirements.txt"
 
 # pip 包名 -> import 名；未列出的按 PEP 503 规范化（点/横线转下划线、小写）。
 # 只放“包名与 import 名不同”的例外，其余自动推导。

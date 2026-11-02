@@ -30,7 +30,12 @@ def test_legacy_suite(suite: str) -> None:
     # 套件里有 ✅ 等 GBK 不可编码字符；子进程被管道捕获时 stdout 默认 cp936，
     # 打 PASS/FAIL 行会 UnicodeEncodeError（2026-11-02 全套跑失败实锤）。
     # 统一让子进程用 UTF-8，包装层按 UTF-8 解码，中文输出也不再乱码。
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    env = {
+        **os.environ,
+        "PYTHONIOENCODING": "utf-8",
+        # src 布局：套件脚本即使没自己插 sys.path，也能导入 game_auto
+        "PYTHONPATH": str(SUITE_DIR.parent / "src") + os.pathsep + os.environ.get("PYTHONPATH", ""),
+    }
     proc = subprocess.run(
         [sys.executable, str(path)],
         cwd=str(SUITE_DIR.parent),

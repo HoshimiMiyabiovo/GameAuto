@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import game_auto.runtime.baijing_daily as bd  # noqa: E402
 
@@ -310,7 +310,7 @@ def test_new_scenes_20261027():
     check("重置锚点推算 + 按钮（截图定标）", pos == (1424, 669), pos)
     check("参考截图已入库", (PROJECT_ROOT / "docs" / "refs" / "baijing_memory_enhance_20261030.png").is_file())
     check("重置 OCR 限定在指定等级行", bd.MEMORY_RESET_REGION == (0.55, 0.58, 0.68, 0.66))
-    src = (PROJECT_ROOT / "runtime" / "baijing_daily.py").read_text(encoding="utf-8")
+    src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "baijing_daily.py").read_text(encoding="utf-8")
     check("重置后弹窗消失时不盲点 +", "重置后强化弹窗消失，停止（不盲点 +）" in src)
 
     # 2026-10-30 10:25：烙痕列表页（记忆烙痕返回后卡住）
@@ -430,7 +430,7 @@ def test_cleanup():
           0.82 <= bd.REST_ROOM_TEA_ENTRY[0] <= 0.95 and 0.76 <= bd.REST_ROOM_TEA_ENTRY[1] <= 0.90,
           bd.REST_ROOM_TEA_ENTRY)
     check("茶憩流程仍用休息室判定", hasattr(bd, "_in_rest_room"))
-    src = Path("runtime/baijing_daily.py").read_text(encoding="utf-8")
+    src = Path("src/game_auto/runtime/baijing_daily.py").read_text(encoding="utf-8")
     check("三个入口都调用 recover_scene", src.count("recover_scene(logger, hwnd") >= 3,
           src.count("recover_scene(logger, hwnd"))
 
