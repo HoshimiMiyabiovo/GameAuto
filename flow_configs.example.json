@@ -326,6 +326,14 @@
     ],
     "steps": [
       {
+        "name": "关闭更新公告弹窗",
+        "action": "wool_dismiss_update",
+        "source": "MINIMAX",
+        "optional_if_missing": true,
+        "timeout_sec": 10,
+        "_comment": "2026-11-02：「MiniMax Code 更新已来」公告只在更新后第一次启动弹（17:05 重开后就没再弹，只剩左上角「更新」角标）。那一次它把点「签到得」的合成点击吞了：api 日志有 signin/config+status、零个 signin/claim，而同一按钮手动点成功。流程第一步先关掉，别等末步日志核验失败才救火。"
+      },
+      {
         "name": "点击左下角昵称",
         "action": "click_template",
         "template": "模板\\minimax-昵称.png",
@@ -803,6 +811,45 @@
           }
         ],
         "_comment": "ESC → 商店 → 左侧兑换商店 → 顶部余烬兑换。2026-11-01 用户确认清单：抽卡道具 星轨专票×5 + 星轨通票×5 + 命运的足迹×2（均买满可兑换数 5/5、5/5、2/2；单价 90/90/60）。**星芒兑换页也有星轨专票/通票/命运的足迹，不能靠商品名判断页签**：tab_content_markers=[\"信用点\"] 做页面内容强校验（星芒页没有信用点；余烬页的「信用点×10000」OCR 0.83），看不到就整步失败、不购买，购买前再复核一次；原页签模板/亮度保留作无内容标记时的兜底。用户 2026-10-25 强调星芒兑换的五星光锥（银河铁道之夜/时节不居/但战斗还未结束/无可取代的东西/以世界之名）一定要消失——forbidden_texts 在购买前做 OCR 反向拦截，看到任意一个就失败不买。confirm_template 来自 2026-11-01 用户弹窗截图（底部「确认」白色按钮），弹窗上 1.000、无弹窗商店页 0.636/0.661（生效阈值 0.8，不误点）。参考图 data/artifacts/ref_starrail_ember_20261101.png / ref_starrail_ember_dialog_20261101.png。"
+      },
+      {
+        "name": "自塑尘脂每月合成",
+        "action": "hsr_resin_craft",
+        "log_label": "自塑尘脂",
+        "bag_open_key": "b",
+        "tab_text": "贵重物",
+        "tab_point_frac": [
+          0.705,
+          0.057
+        ],
+        "item_text": "自塑尘脂",
+        "item_point_frac": [
+          0.401,
+          0.192
+        ],
+        "source_text": "万能合成机",
+        "source_point_frac": [
+          0.825,
+          0.83
+        ],
+        "limit_template": "模板\\崩铁-自塑尘脂-已达上限.png",
+        "craft_button_region_frac": [
+          0.25,
+          0.7,
+          0.76,
+          0.9
+        ],
+        "craft_button_point_frac": [
+          0.574,
+          0.806
+        ],
+        "max_rounds": 30,
+        "exit_marker_template": "模板\\崩铁-主界面.png",
+        "timeout_sec": 300,
+        "post_delay_sec": 2.0,
+        "on_fail": "fail",
+        "max_attempts": 1,
+        "_comment": "主界面 B → 背包 → 顶部倒数第二个图标「贵重物」→ 第一行第 5 格 自塑尘脂 → 右侧获得途径「万能合成机 - 使用遗器残骸合成」→ 合成界面，点到本月上限（材料是遗器残骸，2026-11-01 实机 20940/800，一次 800）。判据只看「本月还可合成：N」：N=0 或按钮「已达上限」/「材料不足」都算正常结束，一次都不点。点合成后 N 每减 1 记一次成功，连续两次不减就判定卡住并失败。limit_template 从 2026-11-01 实机截图裁（自匹配 1.0000 @666,847）。tab/item/source/button 的 point_frac 按 1920x1080 截图量比例，换分辨率跟随窗口；**可合成态（绿色按钮/弹窗形态）尚未实机观察**，首月实跑后按日志校准。"
       }
     ],
     "close_process_on_finish": false
@@ -988,6 +1035,72 @@
     ],
     "close_process_on_finish": false
   },
+  "ZZZ_NOTORIOUS_HUNT": {
+    "enabled": true,
+    "exe_from_app": "ZenlessZoneZero",
+    "window_title_keywords": [],
+    "window_process_names": [
+      "ZenlessZoneZero.exe"
+    ],
+    "startup_wait_sec": 15,
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8
+    ],
+    "match_confidences": [
+      0.88,
+      0.84,
+      0.8
+    ],
+    "steps": [
+      {
+        "name": "点击进入游戏",
+        "action": "click_template",
+        "template": "",
+        "target_text": "点击进入游戏",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 300,
+        "clicks": 1,
+        "post_delay_sec": 3.0,
+        "on_fail": "retry_step",
+        "max_attempts": 2
+      },
+      {
+        "name": "等待进入主界面",
+        "action": "wait_template",
+        "template": "模板\\绝区零-主界面-电台.png",
+        "target_text": "星期",
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 600,
+        "post_delay_sec": 5.0,
+        "on_fail": "retry_prev",
+        "max_attempts": 3,
+        "_comment": "大世界特征：OneDragon normal_world/map 模板 + OCR 兜底「星期」。"
+      },
+      {
+        "name": "恶名狩猎每周挑战",
+        "action": "zzz_notorious_hunt",
+        "log_label": "恶名狩猎",
+        "menu_key": "f2",
+        "weekly_times": 3,
+        "move_w_sec": 2.0,
+        "battle_timeout_sec": 300,
+        "timeout_sec": 3600,
+        "post_delay_sec": 2.0,
+        "on_fail": "fail",
+        "max_attempts": 1,
+        "_comment": "主界面 F2 → 快捷手册「训练」→ 左侧「恶名狩猎」→ 库萨里库「前往」→ 传送确认 → 「下一步」→「出战」（配队不改）→ 等右上角计时器 → 向前 W 2s → 自动战斗 → 结算「完成」，循环到本周 3 次（读「本周核心材料掉落次数 N/3」决定实际打几次），最后「奖励入口」→「全部领取」。自动战斗按**固定配队 蕾米埃尔(流光异常)/菲欧妮(火异常)/维琳娜(风异常)** 手写：三人轮流站场（dwell_sec 6 秒按空格切下一位），站场期间先 E 后普攻，Q 一有就放、闪避用 Shift——三种属性轮流叠异常才能触发紊乱伤害，只站场一个人连点普攻打不动。键位按 ZZZ PC 默认：闪避=dodge_key(shift)、切人=switch_key(space)、特殊技 E、终结技 Q；1/2/3 是连携技不是切人（2026-11-01 核实，OneDragon 的 _KEY_DEFAULTS 同此）。闪光闪避来自 OneDragon 的 flash_classifier 模型（红/黄光→闪避）。各步骤坐标按 2026-11-01 用户截图量的比例（1080x613），每步都有 OCR 校验。**未实机跑过**：首跑看 [自动战斗] 的「帧/普攻/闪避/特殊技/终结技/切人」统计校准。",
+        "dwell_sec": 6.0,
+        "enable_rotation": true,
+        "dodge_key": "shift",
+        "switch_key": "space"
+      }
+    ],
+    "close_process_on_finish": false
+  },
   "GENSHIN_MONTHLY": {
     "enabled": true,
     "_comment": "原神每月任务：直接启动游戏本体（exe_from_game 走 apps.GenshinImpact._discovery.game_exe_path，不能走 exe_from_app——那只配了 BetterGI）→ genshin_enter_main 进主界面 → ESC 商城 → 尘辉兑换 → 星尘兑换 每月采购。2026-11-01 清单已定：纠缠之缘/相遇之缘各买满 5 个；确认模板已补（弹窗截图）。",
@@ -1160,7 +1273,8 @@
     "exe_path": "E://Program Files//Game//InfinityNikki Launcher//launcher.exe",
     "window_title_keywords": [
       "无限暖暖",
-      "Infinity Nikki"
+      "Infinity Nikki",
+      "InfinityNikki"
     ],
     "window_process_names": [
       "launcher.exe",

@@ -165,6 +165,9 @@ def parse_ok_ww_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
             continue
 
         # 检测子任务开始：同时匹配 info_set current task XXX 和 standalone DailyTask:XXX
+        # 注意：开始行只代表「开始执行」，不能直接记成功；成功只认 Task completed /
+        # already completed / can not ... maybe ended。旧实现把开始行记 success，
+        # 导致脚本中途退出时仍算出 100%（2026-11-02 实跑事故）。
         if "DailyTask:" in body and "already completed" not in body and "can not" not in body:
             for keyword in SUBTASK_NAMES:
                 if keyword in body:
@@ -174,10 +177,14 @@ def parse_ok_ww_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
                         subtasks.append({
                             "task_key": keyword,
                             "task_name": SUBTASK_NAMES[keyword],
-                            "status": "success",
-                            "message": "",
+                            "status": "pending",
+                            "message": "进行中",
                         })
                     break
+
+        # 任务完成行 → 当前子任务成功
+        if TASK_COMPLETED_MARKER in line and current_task:
+            _mark_subtask(subtasks, current_task, "success", "任务完成")
 
         # 检测 ERROR 行 → 标记当前子任务为 failed
         if " ERROR " in line and "DailyTask:" in body:

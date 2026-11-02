@@ -78,10 +78,21 @@ def main():
     def ever():
         return bool(root.property("dailyEverLoaded"))
 
+    def wait_ever(timeout=4.0):
+        # 异步 Loader 在机器繁忙/首次编译 QML 时可能超过 1.5s，固定 pump 会误报；
+        # 等到标记出现或超时，再断言。
+        end = time.time() + timeout
+        while time.time() < end:
+            app.processEvents()
+            if ever():
+                return True
+            time.sleep(0.005)
+        return ever()
+
     print("[2] 延迟到了才释放")
     root.setProperty("viewReleaseDelayMs", 400)
     bridge.currentView = "daily"
-    pump(app, 1.5)
+    wait_ever()
     check("首次进入 daily 已加载", ever() is True, ever())
 
     bridge.currentView = "gacha"
@@ -93,7 +104,7 @@ def main():
 
     print("[3] 切回能重建")
     bridge.currentView = "daily"
-    pump(app, 1.5)
+    wait_ever()
     check("重建后重新标记", ever() is True, ever())
 
     print("[4] 任务运行中不释放")
@@ -108,7 +119,7 @@ def main():
     print("[5] delay<=0 关闭回收")
     root.setProperty("viewReleaseDelayMs", 0)
     bridge.currentView = "daily"
-    pump(app, 3.0)   # 重建走异步加载，留足时间
+    wait_ever()
     check("重新加载", ever() is True, ever())
     bridge.currentView = "gacha"
     pump(app, 1.5)

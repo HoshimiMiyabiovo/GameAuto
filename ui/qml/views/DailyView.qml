@@ -361,7 +361,15 @@ Item {
                                             var failed = root.failedTaskCount(modelData)
                                             var p = modelData.progress_percent || 0
                                             var src = modelData.progress_source
-                                            var pctTxt = (src && src !== "script") ? (p + "%") : ("脚本 " + p + "%")
+                                            var pctTxt = ""
+                                            if (src === "script_failed") {
+                                                // 本次脚本没跑完：不能显示上一次 run 的 100%
+                                                pctTxt = "脚本失败"
+                                            } else if (src && src !== "script") {
+                                                pctTxt = p + "%"
+                                            } else {
+                                                pctTxt = "脚本 " + p + "%"
+                                            }
                                             if (st === "completed") return pctTxt
                                             if (st === "failed") return "失败 " + failed + " 项"
                                             if (st === undefined) {
@@ -445,7 +453,8 @@ Item {
                                                     // 时 cur 为 0，不能当真实进度展示
                                                     var ex = modelData.extra
                                                     if (ex && ex.stale === true) {
-                                                        return msg + "  （未刷新）"
+                                                        // 有具体原因就显示原因（如「脚本未完成，活跃度未采集」）
+                                                        return msg + "  （" + (ex.stale_reason || "未刷新") + "）"
                                                     }
                                                     if (cur !== undefined && cur !== null &&
                                                         tot !== undefined && tot !== null && tot > 0) {

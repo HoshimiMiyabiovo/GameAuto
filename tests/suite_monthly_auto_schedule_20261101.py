@@ -184,15 +184,72 @@ def test_monthly_report_helper():
 def test_batch_wiring():
     print("[7] 批次接线（静态）")
     src = Path(tbr.__file__).read_text(encoding="utf-8")
-    check("_append_monthly_report 被调用 2 处（跳过分支 + 正常分支）",
-          src.count("_append_monthly_report(controller, app_key, report, warnings)") == 2,
-          src.count("_append_monthly_report(controller, app_key, report, warnings)"))
+    call = "_append_monthly_report(controller, app_key, report, warnings)"
+    # 2026-11-02 起有 3 处调用：跳过分支、正常分支、批次收尾补漏
+    check("_append_monthly_report 调用点 3 处（跳过分支 + 正常分支 + 收尾补漏）",
+          src.count(call) == 3,
+          src.count(call))
     idx_skip = src.find("今日已完成，跳过")
-    idx_first = src.find("_append_monthly_report(controller, app_key, report, warnings)")
-    check("跳过分支之后才补跑月商店", 0 < idx_skip < idx_first, (idx_skip, idx_first))
+    idx_calls = [i for i in range(len(src)) if src.startswith(call, i)]
+    check("跳过分支与正常分支两处调用都在「今日已完成」之后",
+          sum(1 for i in idx_calls if i > idx_skip) >= 2,
+          (idx_skip, idx_calls))
     check("月商店排在日常执行之后",
-          src.find("result = _run_single_task(") < src.rfind("_append_monthly_report(controller, app_key, report, warnings)"),
+          src.find("result = _run_single_task(") < src.rfind(call),
           True)
+    check("批次收尾调用补漏", "_sweep_pending_monthly_flows(controller, report, warnings)" in src)
+
+
+def test_sweep_runs_monthly_for_apps_not_in_batch():
+    print("[7b] 收尾补漏：当天没进批次的游戏也要补跑月商店")
+    ran = []
+
+    def _fake_runner(label):
+        def _fn(*a, **k):
+            ran.append(label)
+            return True, "✅ 已买"
+        return _fn
+
+    fake_runners = {
+        flow: _fake_runner(flow) for flow, _label in tbr._MONTHLY_FLOW_BY_APP.values()
+    }
+    saved = set(tbr._MONTHLY_CHECKED)
+    try:
+        tbr._MONTHLY_CHECKED.clear()
+        with _no_maintenance(), \
+             patch.object(tbr, "is_monthly_flow_done", return_value=False), \
+             patch.dict(tbr._MONTHLY_RUNNERS, fake_runners):
+            report, warnings = [], []
+            tbr._sweep_pending_monthly_flows(FakeController(), report, warnings)
+        check("四个游戏的月商店都补跑了", len(ran) == 4, ran)
+        check("报告里有补跑行", len(report) == 4, report)
+        check("全部成功不进 warnings", not warnings, warnings)
+
+        # 已经检查过的游戏不重复跑（避免同一批次重复启动客户端）
+        ran.clear()
+        tbr._MONTHLY_CHECKED.clear()
+        tbr._MONTHLY_CHECKED.add("GenshinImpact")
+        with _no_maintenance(), \
+             patch.object(tbr, "is_monthly_flow_done", return_value=False), \
+             patch.dict(tbr._MONTHLY_RUNNERS, fake_runners):
+            report, warnings = [], []
+            tbr._sweep_pending_monthly_flows(FakeController(), report, warnings)
+        check("已检查过的游戏不重复跑", "GENSHIN_MONTHLY" not in ran, ran)
+        check("其余游戏照常补跑", len(ran) == 3, ran)
+
+        # 本月已买过 → 不启动客户端
+        ran.clear()
+        tbr._MONTHLY_CHECKED.clear()
+        with _no_maintenance(), \
+             patch.object(tbr, "is_monthly_flow_done", return_value=True), \
+             patch.dict(tbr._MONTHLY_RUNNERS, fake_runners):
+            report, warnings = [], []
+            tbr._sweep_pending_monthly_flows(FakeController(), report, warnings)
+        check("本月已买过 → 一个都不启动", not ran, ran)
+        check("已买过不写报告", not report, report)
+    finally:
+        tbr._MONTHLY_CHECKED.clear()
+        tbr._MONTHLY_CHECKED.update(saved)
 
 
 def test_monthly_meta_key_shared():
@@ -231,7 +288,8 @@ def test_missing_item_treated_as_bought():
     print("[8c] 商店里看不到商品 → 视为本月已买过")
     items = [{"name": "星轨专票", "count": 5}, {"name": "星轨通票", "count": 5}]
 
-    def fake_buy(logger, hwnd, item, confirm_template, scales, confidences, stop_check, label=""):
+    def fake_buy(logger, hwnd, item, confirm_template, scales, confidences, stop_check,
+                 label="", scroll_finder=None):
         if item["name"] == "星轨专票":
             return me.ITEM_MISSING
         return me.BOUGHT
@@ -391,6 +449,7 @@ def main():
     test_monthly_maintenance_skip()
     test_monthly_report_helper()
     test_batch_wiring()
+    test_sweep_runs_monthly_for_apps_not_in_batch()
     test_monthly_meta_key_shared()
     test_standalone_tasks_removed()
     test_missing_item_treated_as_bought()

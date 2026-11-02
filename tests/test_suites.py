@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -26,11 +27,16 @@ pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="本项目仅支
 @pytest.mark.parametrize("suite", SUITES)
 def test_legacy_suite(suite: str) -> None:
     path = SUITE_DIR / suite
+    # 套件里有 ✅ 等 GBK 不可编码字符；子进程被管道捕获时 stdout 默认 cp936，
+    # 打 PASS/FAIL 行会 UnicodeEncodeError（2026-11-02 全套跑失败实锤）。
+    # 统一让子进程用 UTF-8，包装层按 UTF-8 解码，中文输出也不再乱码。
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     proc = subprocess.run(
         [sys.executable, str(path)],
         cwd=str(SUITE_DIR.parent),
         capture_output=True,
         timeout=300,
+        env=env,
     )
     output = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
     assert proc.returncode == 0, f"{suite} 退出码 {proc.returncode}\n{output[-4000:]}"

@@ -26,7 +26,10 @@ from game_auto.runtime.foreground_flow_runner import (  # noqa: E402
     _resolve_exe_path,
     _resolve_target_text_candidates,
 )
-from game_auto.services.launch_task_catalog import get_standalone_task_config  # noqa: E402
+from game_auto.services.launch_task_catalog import (  # noqa: E402
+    REMOVED_TASK_KEYS,
+    get_standalone_task_config,
+)
 
 FLOW_CONFIG = PROJECT_ROOT / "flow_configs.json"
 
@@ -81,23 +84,35 @@ if len(steps) == 7:
     check("shop_groups 为 2 组（哨站后勤/协会物资）", len(groups) == 2)
     if len(groups) == 2:
         g0, g1 = groups
-        check("哨站后勤组 4 商品", len(g0.get("items", [])) == 4 and g0.get("name") == "哨站后勤")
-        check("协会物资组 4 商品且带页签切换模板", len(g1.get("items", [])) == 4 and g1.get("name") == "协会物资" and bool(g1.get("tab_template")))
+        # 2026-11-01 用户定稿 + 21:07 再次拍板「日常业绩要换」：
+        # 两个页签各卖各的日常业绩（各限购 10），不是重复配置，别合并也别删。
+        check("哨站后勤组 3 商品（音擎残芯/原装母带/日常业绩）",
+              len(g0.get("items", [])) == 3 and g0.get("name") == "哨站后勤", [i.get("name") for i in g0.get("items", [])])
+        check("协会物资组 3 商品且带页签切换模板",
+              len(g1.get("items", [])) == 3 and g1.get("name") == "协会物资" and bool(g1.get("tab_template")),
+              [i.get("name") for i in g1.get("items", [])])
         total = sum(int(i.get("count", 0)) for i in g0.get("items", [])) + sum(int(i.get("count", 0)) for i in g1.get("items", []))
-        check("采购总数 = 2+10+5+1 + 10+5+1+1 = 35", total == 35, f"实际 {total}")
+        check("采购总数 = (6+2+10) + (1+1+10) = 30", total == 30, f"实际 {total}")
         # 音擎残芯：用户确认不是音擎能源模块且本月已购，不应配错商品
         names = [i.get("name") for i in g0.get("items", [])]
         check("哨站组不含误配的「音擎能源模块」", "音擎能源模块" not in names, str(names))
-        # 路径锚定：已存在的商品模板都应被锚定为绝对路径（仓鼠笼无模板，允许保持相对）
+        # 日常业绩：两个页签都要有，且各 10 个（用户 2026-11-01 拍板「日常业绩要换」）
+        daily = [(g.get("name"), [i for i in g.get("items", []) if i.get("name") == "日常业绩"]) for g in groups]
+        check("两个页签都配置了日常业绩",
+              all(len(hit) == 1 for _n, hit in daily), str([(n, len(h)) for n, h in daily]))
+        check("日常业绩各 10 个",
+              all(int(hit[0].get("count", 0)) == 10 for _n, hit in daily if hit),
+              str([(n, hit[0].get("count") if hit else None) for n, hit in daily]))
+        # 路径锚定：已存在的商品模板都应被锚定为绝对路径
         all_items = g0.get("items", []) + g1.get("items", [])
         existing = [i for i in all_items if os.path.isfile(str(i.get("template", "")))]
         anchored = all(os.path.isabs(i.get("template", "")) for i in existing)
         check(f"已存在的 {len(existing)} 个商品模板均已锚定", anchored)
-        # 仓鼠笼访问器：无模板 → OCR 文字兜底
+        # 仓鼠笼访问器：2026-11-01 补了模板（早前只有 OCR 兜底）
         hamster = [i for i in g1.get("items", []) if i.get("name") == "仓鼠笼访问器"]
         check(
-            "仓鼠笼访问器配置 ocr_text 兜底（无模板也能买）",
-            bool(hamster) and hamster[0].get("ocr_text") == "仓鼠笼访问器" and not os.path.isfile(hamster[0].get("template", "")),
+            "仓鼠笼访问器已配模板（补模板后 OCR 兜底不再是必需）",
+            bool(hamster) and os.path.isfile(hamster[0].get("template", "")),
             str(hamster),
         )
 
@@ -108,9 +123,19 @@ check("match_scales 含 1.5/0.67", 1.5 in cfg.get("match_scales", []) and 0.67 i
 exe = _resolve_exe_path(cfg or {}, "ZZZ_MONTHLY")
 check("exe_from_app 解析出游戏本体", bool(exe) and "ZenlessZoneZero" in str(exe), str(exe))
 
-# catalog 说明
-note = get_standalone_task_config("ZzzMonthlyFlow").get("friendly_note", "")
-check("catalog 说明已提主界面确认", "主界面" in note)
+# catalog：2026-11-01 起 ZzzMonthlyFlow 独立任务已删除，改由每日一条龙按
+# monthly_flow:ZZZ_MONTHLY 门控补跑，所以这里只校验它被登记进 REMOVED_TASK_KEYS，
+# 再要求旧的 friendly_note 文案已不成立（任务都不存在了）。
+check(
+    "ZzzMonthlyFlow 已从 catalog 移除（改为随一条龙补跑）",
+    "ZzzMonthlyFlow" in REMOVED_TASK_KEYS,
+    sorted(REMOVED_TASK_KEYS),
+)
+check(
+    "ZzzMonthlyFlow 不再是独立任务",
+    not get_standalone_task_config("ZzzMonthlyFlow"),
+    get_standalone_task_config("ZzzMonthlyFlow"),
+)
 
 print()
 if failures:

@@ -43,6 +43,7 @@ from .foreground_flow_runner import _pyautogui_click_guarded
 from .ocr_click_tester import (
     ocr_and_template_match,
     _find_by_template,
+    _window_obscured_ratio,
     grab_screen,
 )
 
@@ -80,6 +81,8 @@ BAIJING_VERIFY_KEEP_DAYS = 7
 
 # 进入游戏后的固定加载/过场等待秒数（用户要求延长至 60s）
 ENTER_GAME_WAIT_SEC = 60
+# 等待游戏本体进程超过这个秒数仍未启动 → 触发一次启动器状态诊断（写日志+失败原因）
+PROCESS_WAIT_DIAGNOSIS_SEC = 60
 # 常态匹配阶段最大循环次数（每轮约 1~2s，足够覆盖正常载入与过场）
 MAIN_LOOP_MAX_CYCLES = 150
 # 连续 ESC 恢复的最大次数
@@ -192,6 +195,129 @@ def _window_region(hwnd: Optional[int]) -> Optional[Tuple[int, int, int, int]]:
         return left, top, width, height
     except Exception:
         return None
+
+
+def _point_in_window(point: Tuple[int, int], hwnd: Optional[int]) -> bool:
+    """命中点是否落在目标窗口矩形内（hwnd 为空 = 不限制）。"""
+    if not hwnd:
+        return True
+    region = _window_region(hwnd)
+    if not region:
+        return False
+    left, top, width, height = region
+    x, y = point
+    return left <= x < left + width and top <= y < top + height
+
+
+def _point_covered_by_other_window(point: Tuple[int, int], hwnd: Optional[int]) -> bool:
+    """命中点处的顶层窗口不是目标窗口 → 点下去点的是别的窗口（常见：跑日志的控制台）。
+
+    矩形命中还不够：启动器只被控制台压住一角时，坐标仍在启动器矩形内，
+    但那一像素上的窗口是控制台，合成点击会落在控制台上（2026-11-02 事故形态）。
+    """
+    if not hwnd:
+        return False
+    try:
+        top = win32gui.WindowFromPoint((int(point[0]), int(point[1])))
+    except Exception:
+        return False
+    if not top or top == hwnd:
+        return False
+    try:
+        if win32gui.GetParent(top) == hwnd:
+            return False  # 目标窗口自己的子窗口
+    except Exception:
+        pass
+    return True
+
+
+def _find_window_by_process(logger: logging.Logger, process_name: str) -> Optional[int]:
+    """按进程名找可见顶级窗口（不要求窗口有标题），取面积最大的那个。
+
+    `_find_game_window` 要求窗口有标题；启动器窗口标题在部分环境下可能为空，
+    那样就一路落到"拒绝全屏识别"直接失败，所以这里补一条不挑标题的路径。
+    """
+    found = []
+
+    def _enum(hwnd, _):
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if psutil.Process(pid).name().lower() == process_name.lower():
+                found.append(hwnd)
+        except Exception as exc:
+            logger.debug("[白荆回廊] 枚举窗口失败: %s", exc)
+
+    try:
+        win32gui.EnumWindows(_enum, None)
+    except Exception as e:
+        logger.debug("[白荆回廊] EnumWindows 异常: %s", e)
+
+    if not found:
+        return None
+    try:
+        best = max(found, key=lambda h: win32gui.GetWindowRect(h)[2] - win32gui.GetWindowRect(h)[0])
+    except Exception:
+        best = found[0]
+    return best
+
+
+def _resolve_launcher_window(logger: logging.Logger) -> Optional[int]:
+    """定位白荆启动器窗口（Seed_OB_Prod.exe），失败回退标题前缀 '白荆回廊'。
+
+    2026-11-02 事故根因：点「开始游戏」时没限定窗口，OCR 全屏识别把跑日志的
+    cmd 控制台里自己那行「启动: 点击启动器「开始游戏」按钮」当成了按钮，点在了
+    控制台日志上 → 启动器没被点到 → 游戏本体进程 300s 起不来（失败 #145/#146）。
+    定位到启动器窗口，识别范围才能被限定在窗口矩形内。
+    """
+    hwnd = _find_game_window(logger, LAUNCHER_PROCESS)
+    if hwnd:
+        logger.info(f"[白荆回廊] 启动器窗口已定位（进程 {LAUNCHER_PROCESS}）HWND={hwnd}")
+        return hwnd
+    # 启动器窗口没有标题时，按进程找（不挑标题）
+    hwnd = _find_window_by_process(logger, LAUNCHER_PROCESS)
+    if hwnd:
+        logger.info(f"[白荆回廊] 启动器窗口已定位（进程 {LAUNCHER_PROCESS}，无标题）HWND={hwnd}")
+        return hwnd
+    # 回退：标题含「白荆回廊」（启动器主窗口标题实测带该前缀）。
+    # 游戏本体窗口标题同样含该前缀，这里要排除掉。
+    try:
+        found = []
+
+        def _cb(h, _):
+            if not win32gui.IsWindowVisible(h):
+                return
+            if "白荆回廊" not in (win32gui.GetWindowText(h) or ""):
+                return
+            try:
+                _, pid = win32process.GetWindowThreadProcessId(h)
+                if psutil.Process(pid).name().lower() == GAME_PROCESS.lower():
+                    return  # 游戏本体窗口，不是启动器
+            except Exception:
+                pass
+            found.append(h)
+
+        win32gui.EnumWindows(_cb, None)
+        if found:
+            best = max(found, key=lambda h: win32gui.GetWindowRect(h)[2] - win32gui.GetWindowRect(h)[0])
+            logger.info(f"[白荆回廊] 通过标题回退定位启动器窗口 HWND={best}")
+            return best
+    except Exception as exc:
+        logger.debug(f"[白荆回廊] 标题回退定位启动器窗口失败: {exc}")
+    return None
+
+
+def _wait_launcher_window(logger: logging.Logger, timeout: float = 30.0, interval: float = 1.0) -> Optional[int]:
+    """等待启动器窗口出现（启动器渲染/启动都要时间），超时返回 None。"""
+    deadline = time.time() + timeout
+    while True:
+        hwnd = _resolve_launcher_window(logger)
+        if hwnd:
+            return hwnd
+        if time.time() >= deadline:
+            return None
+        time.sleep(interval)
 
 
 def _match_template_in_screenshot(
@@ -358,9 +484,21 @@ def _match_template(
     return None
 
 
-def _wait_process(logger: logging.Logger, process_name: str, timeout: int = 300, stop_check=None) -> Optional[int]:
-    """等待指定进程启动，返回 PID。stop_check 命中则立即返回 None。"""
+def _wait_process(
+    logger: logging.Logger,
+    process_name: str,
+    timeout: int = 300,
+    stop_check=None,
+    on_wait=None,
+) -> Optional[int]:
+    """等待指定进程启动，返回 PID。stop_check 命中则立即返回 None。
+
+    on_wait：等待超过 60s 仍未启动时回调一次（用于中途诊断并落日志），
+    回调异常不影响主流程。
+    """
     deadline = time.time() + timeout
+    started_at = time.time()
+    diagnosed = False
     while time.time() < deadline:
         if stop_check and stop_check():
             logger.info(f"[白荆回廊] 等待 {process_name} 期间收到停止信号，中止等待")
@@ -373,9 +511,46 @@ def _wait_process(logger: logging.Logger, process_name: str, timeout: int = 300,
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 # 进程已退出或无权限读取，继续轮询
                 pass
+        if not diagnosed and on_wait is not None and (time.time() - started_at) >= PROCESS_WAIT_DIAGNOSIS_SEC:
+            diagnosed = True
+            try:
+                on_wait()
+            except Exception as exc:
+                logger.debug(f"[白荆回廊] 等待进程期间诊断失败（已忽略）: {exc}")
         time.sleep(2)
     logger.warning(f"[白荆回廊] 等待游戏本体进程超时: {process_name} ({timeout}s)")
     return None
+
+
+def _diagnose_launcher_state(logger: logging.Logger, hwnd: Optional[int]) -> str:
+    """点完「开始游戏」后仍没等到游戏进程时，给出可行动的诊断文本。
+
+    2026-11-02：失败只写「游戏本体进程未启动」，事后看不出点击到底生效没有。
+    这里补三件事：启动器窗口还在不在、「开始游戏」按钮是否还在原位、窗口被谁挡住。
+    """
+    if not hwnd or not win32gui.IsWindow(hwnd):
+        return "启动器窗口已消失（可能点击后自动关闭，也可能是误关）"
+    parts = [f"启动器窗口 HWND={hwnd}"]
+    region = _window_region(hwnd)
+    if region:
+        parts.append(f"区域={region}")
+    try:
+        ratio = _window_obscured_ratio(hwnd)
+    except Exception as exc:
+        logger.debug(f"[白荆回廊] 诊断遮挡比例失败: {exc}")
+        ratio = None
+    if ratio is not None:
+        parts.append(f"被遮挡 {ratio * 100:.0f}%")
+    try:
+        still = _find_by_template(logger, _TPL.get("launcher_start", ""), region=region)
+    except Exception as exc:
+        logger.debug(f"[白荆回廊] 诊断时模板匹配异常: {exc}")
+        still = None
+    if still:
+        parts.append(f"「开始游戏」按钮仍在原位 {still}（点击未生效，疑似点到控制台/日志窗口）")
+    else:
+        parts.append("「开始游戏」按钮已消失（点击已生效，游戏可能仍在加载）")
+    return "；".join(parts)
 
 
 def _find_and_click(
@@ -385,16 +560,79 @@ def _find_and_click(
     timeout: int = 60,
     poll_interval: float = 1.5,
     stop_check=None,
+    hwnd: Optional[int] = None,
 ) -> bool:
-    """联合模板+OCR 定位启动器「开始游戏」并点击，返回是否成功。"""
+    """联合模板+OCR 定位启动器「开始游戏」并点击，返回是否成功。
+
+    传 hwnd 时，模板匹配与 OCR 都被限定在该窗口矩形内；命中点还会二次校验是否
+    落在窗口内，窗外命中（典型是日志/控制台窗口里的同名文字）一律丢弃。
+    窗口几乎被别的窗口盖住时先置顶、本轮不识别——屏幕合成里那个矩形根本不是
+    启动器画面，识别结果必假。
+
+    2026-11-02 事故：hwnd=None（=全屏）时，OCR 读到 cmd 控制台里自己那行
+    「启动: 点击启动器「开始游戏」按钮」，点击落在控制台日志上，启动器没被点到，
+    游戏本体进程 300s 起不来。**不要**再退回全屏识别——没拿到目标窗口时直接失败。
+    """
+    if not hwnd:
+        logger.error(
+            "[白荆回廊] 未指定目标窗口，拒绝全屏识别"
+            "（全屏会把日志/控制台窗口的文字当成按钮，2026-11-02 就是这么点歪的）"
+        )
+        return False
     tpl = _TPL.get(template_key, "")
     deadline = time.time() + timeout
     while time.time() < deadline:
         if stop_check and stop_check():
             logger.info("[白荆回廊] 点击等待期间收到停止信号，中止")
             return False
-        center, method = ocr_and_template_match(target_text, tpl, logger, hwnd=None)
+        region = _window_region(hwnd)
+        if not region:
+            logger.warning("[白荆回廊] 目标窗口不可用（已关闭/最小化），本轮跳过识别")
+            time.sleep(poll_interval)
+            continue
+        try:
+            ratio = _window_obscured_ratio(hwnd)
+        except Exception as exc:
+            logger.debug(f"[白荆回廊] 遮挡检测失败: {exc}")
+            ratio = None
+        if ratio is not None and ratio >= 0.3:
+            logger.warning(
+                f"[白荆回廊] 目标窗口被遮挡 {ratio * 100:.0f}%，置顶后重试"
+                "（不识别被遮挡区域，避免点到日志/控制台窗口）"
+            )
+            _focus_game_window(logger, hwnd)
+            time.sleep(0.5)
+            try:
+                ratio2 = _window_obscured_ratio(hwnd)
+            except Exception:
+                ratio2 = None
+            if ratio2 is not None and ratio2 >= 0.9:
+                logger.warning(
+                    f"[白荆回廊] 置顶后目标窗口仍被遮挡 {ratio2 * 100:.0f}%，本轮不识别"
+                )
+                time.sleep(poll_interval)
+                continue
+        center, method = ocr_and_template_match(target_text, tpl, logger, hwnd=hwnd, region=region)
         if center:
+            if not _point_in_window(center, hwnd):
+                logger.warning(
+                    f"[白荆回廊] 命中点 {center} 不在目标窗口内，已丢弃"
+                    "（疑似命中日志/控制台窗口的文字）"
+                )
+                time.sleep(poll_interval)
+                continue
+            # 命中点若被别的窗口压着（控制台只盖住启动器一角时最常见），
+            # 合成点击会落到那个窗口上 → 先把自己抬高再确认一次。
+            if _point_covered_by_other_window(center, hwnd):
+                _focus_game_window(logger, hwnd)
+                time.sleep(0.3)
+                if _point_covered_by_other_window(center, hwnd):
+                    logger.warning(
+                        f"[白荆回廊] 命中点 {center} 仍被别的窗口盖住，已丢弃"
+                        "（点下去会点到日志/控制台窗口）"
+                    )
+                    time.sleep(poll_interval)
+                    continue
             _pyautogui_click_guarded(center[0], center[1])
             logger.info(
                 f"[白荆回廊] 已点击启动器\"{target_text}\" [方式: {method}] @ ({center[0]}, {center[1]})"
@@ -434,6 +672,35 @@ def _click_template_until(
     return False
 
 
+def _record_baijing_flow_failure(
+    logger: logging.Logger,
+    step: str,
+    error: str,
+    hwnd=None,
+) -> None:
+    """白荆启动/进入阶段失败 → 落 flow_failures（含截图）。
+
+    2026-11-02：启动器阶段现在能拿到启动器窗口句柄（Seed_OB_Prod.exe），
+    截图按启动器窗口区域抓（flow_diagnostics 传 hwnd 时只截该窗口矩形）；
+    拿不到句柄才退回全屏——2026-11-02 之前白荆失败一条截图都没有，事后完全
+    看不出启动器长什么样、卡在哪一步。
+    """
+    try:
+        from .flow_diagnostics import record_failure
+
+        record_failure(
+            logger,
+            flow_key="BaiJing",
+            step=step,
+            error=error,
+            hwnd=hwnd,
+            game_key=BAIJING_GAME_KEY,
+            extra={"stage": "baijing_ingame"},
+        )
+    except Exception as e:  # noqa: BLE001 - 取证失败不能影响主流程
+        logger.debug(f"[白荆回廊] 失败取证记录异常（已忽略）: {e}")
+
+
 def run_baijing_ingame_flow(config: dict, logger: logging.Logger, stop_check=None) -> bool:
     """白荆回廊启动器 + 游戏内自动化主流程。
 
@@ -455,11 +722,38 @@ def run_baijing_ingame_flow(config: dict, logger: logging.Logger, stop_check=Non
 
     # ════════════ 启动阶段（线性，状态确定） ════════════
     logger.info("[白荆回廊] 启动: 点击启动器「开始游戏」按钮")
-    if not _find_and_click(logger, "launcher_start", "开始游戏", timeout=60, stop_check=stop_check):
+    # 启动器渲染慢（这台机器冷启动常常要几十秒才出按钮），2026-11-02 用 60s
+    # 只等到 14 次重试全失败就退出，现在放宽到 120s。
+    # 2026-11-02 事故：识别不限定窗口 → OCR 读到 cmd 控制台里自己那行「开始游戏」
+    # 日志，点击落在控制台上，启动器没被点到 → 游戏本体进程 300s 起不来。
+    # 现在先定位启动器窗口、置顶，再只在窗口矩形内识别；定位不到就拒绝全屏识别。
+    launcher_hwnd = _wait_launcher_window(logger, timeout=30)
+    if launcher_hwnd:
+        _focus_game_window(logger, launcher_hwnd)
+        time.sleep(0.5)
+    else:
+        logger.warning(
+            "[白荆回廊] 未定位到启动器窗口，拒绝全屏识别"
+            "（全屏会把日志/控制台窗口的文字当成按钮，2026-11-02 就是这么点歪的）"
+        )
+    if not _find_and_click(
+        logger, "launcher_start", "开始游戏", timeout=120, stop_check=stop_check, hwnd=launcher_hwnd
+    ):
         if _stopped():
             logger.info("[白荆回廊] 用户停止，退出进入流程")
         else:
             logger.error("[白荆回廊] 启动器「开始游戏」按钮未找到")
+            _record_baijing_flow_failure(
+                logger,
+                "启动器开始游戏",
+                "启动器「开始游戏」按钮未找到"
+                + (
+                    "（未定位到启动器窗口，已拒绝全屏识别）"
+                    if not launcher_hwnd
+                    else "（模板+OCR 均未在启动器窗口内命中）"
+                ),
+                hwnd=launcher_hwnd,
+            )
         return False
     for _ in range(6):
         if _stopped():
@@ -468,12 +762,28 @@ def run_baijing_ingame_flow(config: dict, logger: logging.Logger, stop_check=Non
         time.sleep(0.5)
 
     logger.info(f"[白荆回廊] 启动: 等待游戏本体进程 {GAME_PROCESS}")
-    game_pid = _wait_process(logger, GAME_PROCESS, timeout=300, stop_check=stop_check)
+    diagnosis = {"text": ""}
+
+    def _diagnose():
+        text = _diagnose_launcher_state(logger, launcher_hwnd)
+        diagnosis["text"] = text
+        logger.warning(f"[白荆回廊] 等待游戏进程已超过 60s 仍未启动：{text}")
+
+    game_pid = _wait_process(
+        logger, GAME_PROCESS, timeout=300, stop_check=stop_check, on_wait=_diagnose
+    )
     if not game_pid:
         if _stopped():
             logger.info("[白荆回廊] 用户停止，退出进入流程")
         else:
-            logger.error(f"[白荆回廊] 游戏本体进程 {GAME_PROCESS} 未启动")
+            detail = diagnosis.get("text") or _diagnose_launcher_state(logger, launcher_hwnd)
+            logger.error(f"[白荆回廊] 游戏本体进程 {GAME_PROCESS} 未启动：{detail}")
+            _record_baijing_flow_failure(
+                logger,
+                "等待游戏进程",
+                f"游戏本体进程 {GAME_PROCESS} 未启动（超时 300s）；{detail}",
+                hwnd=launcher_hwnd,
+            )
         return False
 
     # 查找游戏窗口句柄

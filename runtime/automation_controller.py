@@ -653,43 +653,125 @@ class AutomationController:
         candidates.sort(reverse=True)
         return candidates[0][1]
 
-    def _wait_game_window_ready(self, config: dict, game_display: str,
-                                timeout: int = 120, min_area: int = 307200) -> bool:
-        """拉脚本前等游戏窗口稳定（防脚本误判游戏没起而重复启动客户端）。
+    def _game_related_pids(self, proc_name: str) -> List[int]:
+        """游戏进程及其子进程 PID（UE 游戏窗口可能由子进程持有，只匹配主进程名会漏）。"""
+        wanted = str(proc_name or "").strip().lower()
+        if not wanted:
+            return []
+        pids: List[int] = []
+        for proc in psutil.process_iter(["name"]):
+            if (proc.info.get("name") or "").strip().lower() != wanted:
+                continue
+            pids.append(proc.pid)
+            try:
+                pids.extend(child.pid for child in proc.children(recursive=True))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return pids
 
-        条件：游戏进程名下出现面积达标的可见窗口，且句柄+位置连续 2 轮不变。
-        超时返回 True（不断路，保持旧行为）；用户停止返回 False。
+    def _find_visible_windows_for_pids(self, pids: List[int]) -> List[Tuple[int, int]]:
+        """返回这些 PID 的可见顶层窗口 [(area, hwnd)]，面积从大到小。"""
+        wanted = set(pids)
+        if not wanted:
+            return []
+        return [(area, hwnd) for area, hwnd, pid in self._visible_window_candidates() if pid in wanted]
+
+    def _wait_game_window_ready(self, config: dict, game_display: str,
+                                timeout: int = 300, min_area: int = 307200) -> Optional[bool]:
+        """拉脚本前等游戏窗口就绪（防脚本误判游戏没起而重复启动客户端）。
+
+        返回值（三态）：
+          True  = 可以拉脚本（窗口已稳定；或窗口已出现但仍在加载抖动）
+          False = 用户停止
+          None  = 超时且从未出现游戏窗口 / 进程已退出 → 不拉脚本
+
+        2026-11-02 17:54 事故：鸣潮 17:54:02 进程已起，120s 后仍判「窗口未就绪」
+        并把正在加载的游戏直接杀掉。旧判据只认主进程名下的可见窗口、且要求尺寸
+        连续 2 轮完全不变——加载中切分辨率就会一直抖。现在：
+          - 默认等 300s；只要看到过游戏窗口就放行（加载抖动不再算失败）；
+          - 窗口按进程树匹配（UE 游戏窗口可能由子进程持有）；
+          - 每 15s 打一条诊断（进程数/窗口数/最大面积），超时时能直接定位；
+          - 超时不杀游戏进程（用户可能正看着加载），只拒绝拉脚本。
         """
         proc_name = self._configured_game_process_name(config)
         if not proc_name:
             return True
+        timeout = max(5, int(timeout))
         self.logger.info(f"[{game_display}] 等游戏窗口就绪再拉脚本（防重复启动客户端，超时{timeout}s）")
+        deadline = time.time() + timeout
         last_key = None
         stable = 0
-        end = time.time() + max(5, int(timeout))
-        while time.time() < end:
+        window_seen = False
+        last_report = 0.0
+        last_state = ""
+        while time.time() < deadline:
             if self.stop_current_task:
                 return False
+            pids = self._game_related_pids(proc_name)
+            windows = self._find_visible_windows_for_pids(pids)
             key = None
-            hwnd = self._find_visible_window_by_process_names([proc_name])
-            if hwnd:
-                try:
-                    l, t, r, b = win32gui.GetWindowRect(hwnd)
-                    if max(0, r - l) * max(0, b - t) >= max(1, int(min_area)):
+            biggest = None
+            if windows:
+                area, hwnd = max(windows)
+                biggest = (hwnd, area)
+                if not window_seen:
+                    self.logger.info(
+                        f"[{game_display}] 游戏窗口已出现（{area}px² @ hwnd={hwnd}），等尺寸稳定"
+                    )
+                # 任意可见窗口都算「游戏已经在显示」：超时后据此放行拉脚本，
+                # 不再把加载中的游戏判死。
+                window_seen = True
+                if area >= max(1, int(min_area)):
+                    try:
+                        l, t, r, b = win32gui.GetWindowRect(hwnd)
                         key = (hwnd, l, t, r, b)
-                except Exception:
-                    key = None
-            if key is not None and key == last_key:
-                stable += 1
-                if stable >= 2:
-                    self.logger.info(f"[{game_display}] 游戏窗口已稳定，可以拉脚本了")
-                    return True
+                    except Exception:
+                        key = None
+            if key is not None:
+                if key == last_key:
+                    stable += 1
+                    if stable >= 2:
+                        self.logger.info(f"[{game_display}] 游戏窗口已稳定，可以拉脚本了")
+                        return True
+                else:
+                    stable = 0
+                last_key = key
             else:
                 stable = 0
-                last_key = key
+                last_key = None
+            now = time.time()
+            if now - last_report >= 15:
+                last_report = now
+                if biggest:
+                    state = f"窗口 {biggest[1]}px² 未达阈值 {int(min_area)}px²"
+                elif pids:
+                    state = f"进程 {len(pids)} 个但无可见窗口"
+                else:
+                    state = "游戏进程尚未出现"
+                if state != last_state:
+                    self.logger.info(
+                        f"[{game_display}] 等待窗口就绪: {state}（剩余 {int(deadline - now)}s）"
+                    )
+                    last_state = state
             time.sleep(1.0)
-        self.logger.warning(f"[{game_display}] 游戏窗口未就绪（超时{timeout}s），仍继续拉脚本")
-        return True
+        pids = self._game_related_pids(proc_name)
+        if not pids:
+            self.logger.error(
+                f"[{game_display}] 游戏进程 {proc_name} 已退出且窗口始终未就绪，"
+                f"提前止损（不再拉脚本空跑）"
+            )
+            return None
+        if window_seen:
+            self.logger.warning(
+                f"[{game_display}] 游戏窗口已出现但 {timeout}s 内尺寸仍在变化（可能在加载），"
+                f"继续拉脚本（脚本会自己等加载完成）"
+            )
+            return True
+        self.logger.error(
+            f"[{game_display}] 游戏进程在但 {timeout}s 内从未出现可见窗口，"
+            f"提前止损（不拉脚本空跑；游戏进程保留，不主动结束）"
+        )
+        return None
 
     def _find_best_visible_window(self, ignored_names: Optional[set] = None) -> Optional[int]:
         ignored_names = {str(name).strip().lower() for name in (ignored_names or set()) if str(name).strip()}
@@ -1381,12 +1463,21 @@ class AutomationController:
             # 拉脚本前先等游戏窗口稳定，防止脚本误判游戏没起而重复启动客户端
             # （只对配了 wait_game_window_before_script 的游戏生效，默认关闭）
             if config.get("wait_game_window_before_script", False):
-                if not self._wait_game_window_ready(
+                wait_sec = int(config.get("game_window_wait_sec", 300))
+                window_ready = self._wait_game_window_ready(
                     config, game_display,
-                    timeout=int(config.get("game_window_wait_sec", 120)),
+                    timeout=wait_sec,
                     min_area=int(config.get("game_window_min_area", 307200)),
-                ):
+                )
+                if window_ready is False:
                     return False, "用户终止", 0
+                if window_ready is None:
+                    # 始终没有窗口 → 不拉脚本空跑；游戏进程保留（可能只是加载慢，
+                    # 用户能看到界面），别再像 11-02 那样把正在加载的游戏杀掉。
+                    return False, (
+                        f"游戏窗口未就绪（等 {wait_sec}s），"
+                        f"已提前止损（不拉脚本空跑，游戏进程保留）"
+                    ), 0
 
             # 定义 script_type（必须在这里定义！）
             script_type = config.get("type", "normal")

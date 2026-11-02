@@ -135,6 +135,69 @@ def _run_monthly_flow(logger: logging.Logger, flow_key: str, label: str) -> Tupl
     return False, f"❌ {msg}（下次运行重试）"
 
 
+def weekly_flow_meta_key(flow_key: str) -> str:
+    """每周流程的门控键（workflow.sqlite3 的 task_meta）。"""
+    return f"weekly_flow:{flow_key}"
+
+
+def weekly_flow_week_key(now=None) -> str:
+    """「本周」的键：ISO 周（%G-W%V），整体后移 4 小时。
+
+    绝区零是**周一 04:00** 刷新。周一 01:00 跑的时候游戏里还是上一周的数据，
+    直接按自然周记会把标记写到新的一周，真正的新一周反而被跳过。后移 4 小时
+    让 00:00-04:00 仍算上一周。ISO 周（%G-W%V）以周一为一周起点，与此一致。
+    """
+    from datetime import datetime, timedelta
+
+    stamp = (now or datetime.now()) - timedelta(hours=4)
+    return stamp.strftime("%G-W%V")
+
+
+def is_weekly_flow_done(flow_key: str, week_key: Optional[str] = None) -> bool:
+    """本周是否已成功跑过该每周流程。读库失败按「没做过」处理（宁可多跑一次）。"""
+    from ..storage.workflow_db import WorkflowDB
+    from ..settings.paths import WORKFLOW_DB_PATH
+
+    week = week_key or weekly_flow_week_key()
+    try:
+        db = WorkflowDB(str(WORKFLOW_DB_PATH))
+        return db.get_task_meta(weekly_flow_meta_key(flow_key)) == week
+    except Exception as exc:  # noqa: BLE001 - 读不到标记就当没做过，不影响主流程
+        LOGGER.warning("[每周] 读取周标记失败(%s): %s", flow_key, exc)
+        return False
+
+
+def _run_weekly_flow(logger: logging.Logger, flow_key: str, label: str) -> Tuple[bool, str]:
+    """每周流程通用门控：ISO 周（周一 04:00 刷新）记录，本周已跑过则跳过。
+
+    注意「本周已打完」有两种情况都算成功：
+    1. 标记已写过（本周跑过）；
+    2. 流程自己读到游戏内剩余次数为 0（比如手动打过了），流程内部按成功返回，
+       这里照常写标记，避免每天白启动一次客户端。
+    """
+    from ..storage.workflow_db import WorkflowDB
+    from ..settings.paths import WORKFLOW_DB_PATH
+
+    week_key = weekly_flow_week_key()
+    meta_key = weekly_flow_meta_key(flow_key)
+    db = WorkflowDB(str(WORKFLOW_DB_PATH))
+    if db.get_task_meta(meta_key) == week_key:
+        logger.info("[%s] 本周已执行，跳过", label)
+        return True, "本周已执行，跳过"
+
+    ok, msg = run_flow(logger, flow_key)
+    if ok:
+        db.set_task_meta(meta_key, week_key)
+        return True, f"✅ {msg}（本周已记录，下周再执行）"
+    return False, f"❌ {msg}（下次运行重试）"
+
+
+def run_zzz_notorious_hunt_background(logger: logging.Logger) -> Tuple[bool, str]:
+    """绝区零恶名狩猎（每周三次）：_run_weekly_flow 门控 + run_flow。"""
+    return _run_weekly_flow(logger, "ZZZ_NOTORIOUS_HUNT", "绝区零恶名狩猎")
+
+
+
 def run_hsr_monthly_background(logger: logging.Logger) -> Tuple[bool, str]:
     return _run_monthly_flow(logger, "HSR_MONTHLY", "崩铁每月")
 

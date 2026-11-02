@@ -715,6 +715,18 @@ def _inject_external_log_progress(bridge, games_data: List[Dict[str, Any]]):
                                 if (t.get("task_key") or t.get("task_name")) not in log_keys
                                 and not (t.get("task_key") or "").startswith("sign_")
                             ]
+                            # 本次脚本 run 是否失败：DB 里 script_ok-ww 行的状态是最终判据。
+                            # 日志解析器可能只找到上一次 run 的 open_daily，不能拿它的
+                            # 100% 覆盖本次失败（2026-11-02 实跑事故）。
+                            script_failed = any(
+                                (t.get("task_key") or t.get("task_name")) == "script_ok-ww"
+                                and t.get("status") == "failed"
+                                for t in existing_tasks
+                            )
+                            if script_failed:
+                                for t in log_tasks:
+                                    if t.get("status") in ("success", "already"):
+                                        t["message"] = "上次运行"
                             game["tasks"] = sign_tasks + log_tasks + kept_api_tasks
                             game["is_all_success"] = data.get(
                                 "is_all_success", game.get("is_all_success"))
@@ -722,6 +734,10 @@ def _inject_external_log_progress(bridge, games_data: List[Dict[str, Any]]):
                             if data.get("errors"):
                                 game["errors"] = (game.get("errors") or []) + list(data.get("errors"))
                             game["nickname"] = data.get("nickname") or game.get("nickname", "")
+                            if script_failed:
+                                # 脚本本次失败时卡片结论不能停留在「未刷新」：
+                                # 这是失败，不是等服务器刷新。
+                                game["completion_state"] = "failed"
 
                             # 完成度必须反映真实游玩进度，不能用脚本子任务比例代替：
                             # ok-ww 的 progress_percent 是"脚本跑了几步"（全跑完就 100%），
@@ -731,6 +747,23 @@ def _inject_external_log_progress(bridge, games_data: List[Dict[str, Any]]):
                             if real_pct is not None:
                                 game["progress_percent"] = real_pct
                                 game["progress_source"] = real_src
+                            elif script_failed:
+                                game["progress_percent"] = 0
+                                game["progress_source"] = "script_failed"
+                                for t in game["tasks"]:
+                                    if (t.get("task_key") or t.get("task_name")) == "今日活跃":
+                                        ex = t.get("extra") or {}
+                                        if isinstance(ex, str):
+                                            try:
+                                                import json as _json
+                                                ex = _json.loads(ex)
+                                            except Exception:  # noqa: BLE001 - 坏 JSON 按空处理
+                                                ex = {}
+                                        else:
+                                            ex = dict(ex)
+                                        ex["stale"] = True
+                                        ex["stale_reason"] = "脚本未完成，活跃度未采集"
+                                        t["extra"] = ex
                             else:
                                 game["progress_percent"] = data.get(
                                     "progress_percent", game.get("progress_percent"))

@@ -228,7 +228,14 @@ class Harness:
         if s == "hub":
             return [
                 _row("奇迹之冠", 180, 52),
-                _row("奇迹之冠搭配赛", 531, 667, 0.84),
+                # 真实 OCR 框（ref_nikki_crown_hub_20261101.png 实测宽度 326），
+                # 点击点是文字右侧的多边形，不是文字中心
+                {
+                    "text": "奇迹之冠搭配赛",
+                    "confidence": 0.84,
+                    "center": (531, 667),
+                    "box": (369, 645, 695, 690),
+                },
                 _row("奇迹之冠争锋赛", 1514, 392, 0.78),
             ]
         if s == "stage_claim":
@@ -300,8 +307,11 @@ class Harness:
         s = self.state
         if s == "calendar" and _points_near((x, y), (971, 600)):
             self.state = "hub"
-        elif s == "hub" and _points_near((x, y), (531, 667)):
-            self.state = "stage_claim" if self.claim != "none" else "stage"
+        elif s == "hub":
+            # 真实界面：文字本身点不动（2026-11-02 用户实锤），
+            # 要点文字左上方那块多边形玻璃碎片（亮白区约 x 450-650 / y 520-630）
+            if 450 <= x <= 650 and 520 <= y <= 630:
+                self.state = "stage_claim" if self.claim != "none" else "stage"
         elif s == "stage_claim" and _points_near((x, y), (961, 752)):
             self.state = "stage_claim" if self.claim == "forever" else "reward"
         elif s == "stage" and _points_near((x, y), (150, 775)):
@@ -472,10 +482,27 @@ def test_reference_ocr(refs):
 
     rows, size = refs["hub"]
     rect = (0, 0, size[0], size[1])
-    check("「奇迹之冠搭配赛」可定位",
-          nc._pick(rows, (nc.PAIR_ENTRY,), 0.5, region=nc._abs_region(rect, nc.HUB_PAIR_REGION)) is not None)
+    pair = nc._pick(rows, (nc.PAIR_ENTRY,), 0.5, region=nc._abs_region(rect, nc.HUB_PAIR_REGION))
+    check("「奇迹之冠搭配赛」可定位", pair is not None)
     check("hub 两个入口都能识别", len(nc._markers_present(rows, nc.CROWN_HUB_MARKERS)) == 2,
           nc._markers_present(rows, nc.CROWN_HUB_MARKERS))
+    if pair:
+        point = nc._pair_click_point(pair, rect)
+        box = pair["box"]
+        in_text = box[0] <= point[0] <= box[2] and box[1] <= point[1] <= box[3]
+        check("搭配赛点击点落在文字左上方多边形内（不在文字上）",
+              not in_text and 450 <= point[0] <= 650 and 520 <= point[1] <= 630
+              and point[1] < box[1],
+              (point, box))
+        try:
+            from PIL import Image
+
+            pixel = Image.open(REFS["hub"]).convert("RGB").getpixel(point)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  SKIP 像素采样不可用: {exc}")
+        else:
+            check("点击点在参考图上是亮白碎片（不是背景/文字）",
+                  min(pixel) > 220, (point, pixel))
 
     rows, size = refs["claim"]
     check("领奖弹窗「巅峰赛速报」识别", nc._pick(rows, (nc.STAGE_CLAIM_MODAL,), 0.5) is not None)

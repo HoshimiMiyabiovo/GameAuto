@@ -228,9 +228,10 @@ DEFAULT_APPS = {
         # （否则 272s 的成功会被记成 skipped，并跳过每日 API 回填）。
         "skip_min_run_warning": True,
         # 拉 ok-ww 前必须等游戏窗口稳定，否则 ok-ww 会误判游戏没起而重复启动客户端。
-        # 这是条件等待（窗口一稳立刻走），不是盲睡。
+        # 这是条件等待（窗口一稳立刻走），不是盲睡。300s 是给首启/着色器编译留余量：
+        # 11-02 用 120s 时窗口还在加载，流程把游戏杀了（用户实际已看到启动画面）。
         "wait_game_window_before_script": True,
-        "game_window_wait_sec": 120,
+        "game_window_wait_sec": 300,
         "game_window_min_area": 307200,
         "post_launch_click_game": True,
         "post_launch_click_timeout": 8,

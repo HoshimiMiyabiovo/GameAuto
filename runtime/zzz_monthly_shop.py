@@ -165,28 +165,22 @@ def _frac_point(hwnd: int, frac) -> Optional[Tuple[int, int]]:
         return None
 
 
-def _buy_once(
+def _locate_item(
     logger: logging.Logger,
     hwnd: int,
     item: Dict,
-    confirm_template: str,
     scales,
     confidences,
     stop_check: Optional[Callable[[], bool]],
-    label: str = "商店采购",
-) -> str:
-    """执行一次「点商品 → 确认」。返回 BOUGHT/NO_POPUP/ITEM_MISSING/CONFIRM_GONE_FAIL/STOPPED。
+    label: str,
+) -> Optional[Tuple[int, int]]:
+    """按 point_frac → 模板 → OCR 的优先级定位商品，返回窗口局部中心坐标。
 
-    商品定位优先级：point_frac（固定比例坐标）→ 模板 → OCR 文字兜底。
-    point_frac 是给「图标灰度相同、OCR 也认不准」的商品用的（异环两个骰子），
-    点完同样要等确认弹窗出现，点空/点错照样会暴露成 NO_POPUP。
-    label 只影响日志前缀（信源残响兑换复用本函数，避免日志里出现"商店采购"字样）。
+    point_frac 是给「图标灰度相同、OCR 也认不准」的商品用的（异环两个骰子）。
+    拆成独立函数是为了让「当前视图找不到 → 翻页再找」能复用同一套定位逻辑
+    （2026-11-02：崩铁余烬兑换的商品网格同屏只有 2~3 行，票类商品在折叠区以下，
+    一次整窗 OCR 根本看不到，会被"看不到=已买过"吞成静默漏买）。
     """
-    from .foreground_flow_runner import _click_window_local
-
-    if stop_check is not None and stop_check():
-        return STOPPED
-
     item_name = str(item.get("name", "商品") or "商品")
     item_template = _abs_template(str(item.get("template", "") or ""))
     ocr_text = str(item.get("ocr_text", "") or "").strip()
@@ -212,10 +206,45 @@ def _buy_once(
             logger.warning(f"[{label}] {item_name} 比例坐标无效: {point_frac}")
     if center is None and ocr_text:
         if stop_check is not None and stop_check():
-            return STOPPED
+            return None
         way = "OCR文字定位（无模板）" if not has_template else "OCR兜底（模板未命中）"
         logger.info(f"[{label}] {item_name} 改用{way}: {ocr_text}")
         center = _locate_ocr(logger, hwnd, ocr_text, OCR_TIMEOUT_SEC, stop_check)
+    return center
+
+
+def _buy_once(
+    logger: logging.Logger,
+    hwnd: int,
+    item: Dict,
+    confirm_template: str,
+    scales,
+    confidences,
+    stop_check: Optional[Callable[[], bool]],
+    label: str = "商店采购",
+    scroll_finder: Optional[Callable[..., Optional[Tuple[int, int]]]] = None,
+) -> str:
+    """执行一次「点商品 → 确认」。返回 BOUGHT/NO_POPUP/ITEM_MISSING/CONFIRM_GONE_FAIL/STOPPED。
+
+    商品定位优先级：point_frac（固定比例坐标）→ 模板 → OCR 文字兜底。
+    point_frac 是给「图标灰度相同、OCR 也认不准」的商品用的（异环两个骰子），
+    点完同样要等确认弹窗出现，点空/点错照样会暴露成 NO_POPUP。
+    label 只影响日志前缀（信源残响兑换复用本函数，避免日志里出现"商店采购"字样）。
+    scroll_finder：当前视图定位不到时的翻页兜底（见 monthly_exchange._scroll_find_item）；
+    为 None 时保持旧行为（找不到 = 已买过，不做额外操作）。
+    """
+    from .foreground_flow_runner import _click_window_local
+
+    if stop_check is not None and stop_check():
+        return STOPPED
+
+    item_name = str(item.get("name", "商品") or "商品")
+    center = _locate_item(logger, hwnd, item, scales, confidences, stop_check, label)
+    if center is None and scroll_finder is not None:
+        if stop_check is not None and stop_check():
+            return STOPPED
+        logger.info(f"[{label}] {item_name} 当前视图没找到，翻页再找")
+        center = scroll_finder(logger, hwnd, item, scales, confidences, stop_check, label)
     if center is None:
         if stop_check is not None and stop_check():
             return STOPPED

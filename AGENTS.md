@@ -954,6 +954,18 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
   `data/logs/auto_runner.log` 的 `[无限暖暖·奇想日历]/[无限暖暖·晶石兑换]/[无限暖暖·共鸣商店]`
   与 `data/artifacts/flow_failures/` 证据图。
 
+#### whimbox「奇迹之冠巅峰赛」12/24 也被跳过（2026-11-02）
+
+- **现象**：用户勾选了「完成奇迹之冠」（`config.json → OneDragonDefaultSteps.step_mira_crown
+  = true`），但 whimbox 日志写「奇迹之冠巅峰赛进度为12/24 → 已做过，直接跳过」，不再做。
+- **根因**：第三方脚本 `whimbox/task/mira_crown_task/mira_crown_task.py::check_mira_crown`
+  只要 `finished_count != 0` 就 `return False`。12/24 是**本期累计进度**（10-30/31 是
+  24/24，11-01/02 是 12/24），不是「今天已做过」，所以本周只要打过一次就整周跳过。
+- **修法**（改的是实际运行的 `whimbox_app/python-embedded/.../site-packages`，
+  **whimbox 更新会覆盖**，原文件已备份 `data/artifacts/whimbox_mira_crown_task_20261102.py.bak`）：
+  `finished_count >= total_count` 才算打满跳过，没满继续做剩余场次；
+  `total_count <= 0` 按识别异常处理。日志会多一行「还剩 N 场，继续完成」。
+
 ### 崩铁进入主界面（复刻三月七方法, 2026-10-24, 默认不启用）
 
 - `StarRailLauncher` 流程 + `action=starrail_enter_main`（`runtime/starrail_launcher.py`）
@@ -1031,6 +1043,14 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
   暖暖真实进度**只存在于 whimbox 日志**，判定必须以 whimbox 侧为准。
 - `KEY_PROGRESS_TASKS` 的任务名必须与解析器产出的**精确字符串一致**（大小写、全角）：
   zzz 实测是「活跃度奖励」不是「活跃度」，nikki 是「朝夕心愿」（whimbox 侧）。
+- **ok-ww 子任务开始行 ≠ 成功（2026-11-02 实跑事故）**：`ok_ww_daily_parser` 旧逻辑
+  在 `DailyTask:<task>` 开始行就记 success，导致 80 秒退出的脚本仍算出 100%；
+  现在只在 `DailyTask:Task completed` / already 时记 success，开始行记 pending。
+  `script_ok-ww=failed` 时 bridge 用 `progress_source=script_failed` 覆盖上一次 run 的
+  100%，旧子任务标「上次运行」，`今日活跃` 的 stale_reason 写「脚本未完成，活跃度未采集」，
+  `completion_state` 记 failed（不能因为活跃度 0/100 显示「未刷新」而掩盖失败）。
+  **查询成功但返回 0 不是「未刷新」**，只有查询失败/接口频繁才是。
+  回归 `tests/suite_daily_progress_script_failed_20261102.py`。
 
 ### 关键判定任务分两类口径 (重要)
 
@@ -1257,6 +1277,56 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
     already / 窗口丢失 / 用户停止 / 默认清单静态断言 / 新参考图 OCR）+ 旧
     `data/artifacts/test_baijing_cat_exchange_20261025.py`（几何定标 + 月度门控等；
     月度断言已改为当前月份动态生成，避免过月假失败）。
+
+### 白荆启动器「开始游戏」定位范围 (重要, 2026-11-02)
+
+**事故**：2026-11-02 17:53 / 18:01 两次白荆一条龙失败（flow_failures #145/#146），
+日志表现是「游戏本体进程 GateMK-Win64-Shipping.exe 未启动（超时 300s）」。
+**模板 `模板/白荆回廊-开始游戏.png` 没问题**（181x54，模板连续 3 次「定位失败」是
+对的——按钮当时根本不在屏幕上）。
+
+**根因链（自己干扰自己）**：
+
+1. 跑日志的 cmd 控制台把白荆启动器整个盖住（失败截图
+   `data/artifacts/flow_failures/20261102_180142_BaiJing_等待游戏进程.jpg`
+   全屏只有 `C:\WINDOWS\system32\cmd.exe`）。`automation_controller._click_game_window_after_launch`
+   只是「点游戏窗口中心」，盖住的窗口点不到，控制台照样在最上层。
+2. `runtime/baijing_flow.py::_find_and_click` 调的是
+   `ocr_and_template_match(target_text, tpl, logger, hwnd=None)`——**既没 hwnd 也没 region**，
+   模板匹配和 OCR 都是全屏。
+3. 模板找不到 → 兜底的全屏 OCR 读到**控制台里自己的日志行**
+   `[白荆回廊] 启动: 点击启动器「开始游戏」按钮` / `已点击启动器"开始游戏"`，
+   RapidOCR 把「开始游戏」读成独立文本框（conf 0.80），落点 (918, 976) / (827, 976)
+   **都在控制台区域内** → 点击打在日志上 → 启动器没被点到 → 300s 超时。
+4. 防护网漏了：`[OCR防护] 🚫 硬拦截日志污染文本 0 条（保留 130 条）`——硬拦截只剔
+   「带日志特征串」（`GameAutomation:xxx` / `Traceback`）的条目，那行「开始游戏」不含
+   特征串反而被保留；`⚠️ 识别区域疑似包含日志/控制台窗口（命中 7 条特征文本）」只告警不拦截。
+
+**修法**（`runtime/baijing_flow.py`）：
+
+- 新增 `_resolve_launcher_window()`：按进程 `Seed_OB_Prod.exe` 找启动器窗口，回退标题含
+  「白荆回廊」（要排除游戏本体窗口，标题同款）。`_wait_launcher_window(timeout=30)` 等它出现。
+- 点「开始游戏」前 `_focus_game_window()` 置顶；之后模板匹配与 OCR **都传
+  `hwnd=启动器窗口` + `region=窗口矩形`**，物理上不可能再命中控制台。
+- 命中点二次校验 `_point_in_window()`，窗外命中（控制台里的同名文字）一律丢弃。
+- 再加一道精确防线 `_point_covered_by_other_window()`：用 `win32gui.WindowFromPoint`
+  看命中点那一像素的顶层窗口是不是目标窗口——矩形命中还不够，控制台只压住启动器
+  一角时坐标仍在矩形内，但合成点击会落在控制台上；压住就先抬高自己再确认一次。
+- 窗口被遮挡 ≥30% → 先置顶再识别；置顶后仍 ≥90% 被挡 → 本轮**不识别**。
+- **拿不到目标窗口就拒绝全屏识别**直接失败（`_find_and_click` hwnd=None 直接 return False）。
+  这条是本条事故的核心教训，别再加回去。
+- 点击后校验：`_wait_process(..., on_wait=_diagnose)` 在等待超 60s 时调
+  `_diagnose_launcher_state()`，把「启动器窗口还在吗 / 按钮是否还在原位 / 被遮挡多少」
+  写进日志，并**写进 flow_failures 的 error 字段**（以后一眼能看出点击是否生效）。
+- 失败取证现在传 `hwnd=启动器窗口`，截图按启动器窗口区域抓（不是全屏）。
+
+**通用教训**：日志里出现的文字（按钮名、页签名）就是 OCR 的高危诱饵。
+凡是「点某个按钮」，都必须限定在目标窗口内识别；全屏 OCR + 日志窗口 = 必然点歪。
+参见「OCR 防护两条铁律」与 `ocr_click_tester._ocr_scan` 的窗口遮挡检测。
+
+回归：`tests/suite_baijing_launcher_scope_20261102.py`（11 组：点内判定 / 拒绝全屏 /
+限定窗口识别 / 窗外命中丢弃 / 命中点被别窗压住 / 遮挡不识别 / 窗口不可用 /
+等待期诊断回调 / 点击后诊断文案 / 流程层拒绝全屏 / 静态接线断言）。
 
 ### 白荆回廊任务列表防护 + 零售/俱乐部自保 (重要, 2026-10-22)
 
@@ -1700,3 +1770,292 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
   两个软件关闭开关、收尾四种组合）。
 - **待实机确认**：20:16 那次点击「立即领取」后页面关闭，是否真的到账需要
   下次运行用「今日已领取」验证；若仍失败，先看新截图再改。
+
+## 崩铁自塑尘脂每月合成（HSR_MONTHLY 第 3 步，2026-11-01）
+
+- **路径**（用户 4 张截图 + 实机确认）：主界面 `B` → 背包 → 顶部**倒数第二个**图标「贵重物」
+  → 第一行第 5 格 自塑尘脂 → 右侧「获得途径」第二条「万能合成机 - 使用遗器残骸合成」
+  → 合成界面（材料合成）→ 点到「本月还可合成 0」。
+- **成本与上限**：一次消耗**遗器残骸 ×800**（2026-11-01 实机：持有 20940/800）；自塑尘脂
+  **每月限购**，本月满了之后右侧显示「本月还可合成：0」、底部按钮变红「已达上限」。
+  用户口径（2026-11-01）：**能合多少合多少**，材料用完或到月上限都算正常结束。
+- **判据只有一个**：右侧「本月还可合成：N」。
+  - N=0 / 按钮「已达上限」/「材料不足」→ 一次都不点，正常返回；
+  - N>0 → 点底部合成 → 重读 N，每减 1 记一次成功；**连续两次不减**判定卡住并失败（不无限点）。
+  - 注意「材料合成」标题里也有「合成」二字，按钮 OCR 必须限定 `craft_button_region_frac`
+    （默认窗口下半部中间），否则会把标题当按钮点。
+- **模板**：`模板/崩铁-自塑尘脂-已达上限.png`（873×47，红条 + 白字，从实机截图
+  `data/artifacts/ref_starrail_resin_synth_20261101.png` 裁，自匹配 **1.0000 @ (666,847)**）。
+  贵重物页签 / 自塑尘脂格子 / 万能合成机条**没有裁模板**——用户给的是 1091×613 缩略图，
+  到 1920 画面是 1.76 倍，现有 `match_scales=[1.0,1.25,0.8]` 匹配不上，所以改用 `point_frac`。
+- **比例坐标是唯一依据，未实机跑过（务必知道）**：`tab/item/source/craft_button` 四个
+  `point_frac` 按 1920×1080 截图量的，2026-11-01 用户选择「先不验，等 12 月实跑」。跑偏的后果可控：
+  页签/格子点歪 → 详情不显示「自塑尘脂」→ 整步失败；来源条点歪 → 看不到「本月还可合成/所需材料」
+  → 整步失败；**任何一步失败都会先 `_leave_to_main` 退回主界面**再返回，不会把游戏留在背包页
+  （留在背包页会让下一次 `starrail_enter_main` 认不出主界面）。
+- **接线**：`runtime/hsr_resin_craft.py::craft_self_modeling_resin`；
+  `foreground_flow_runner._dispatch_step_action` 新增 `hsr_resin_craft` 分支；
+  `flow_configs[.example].json` 的 `HSR_MONTHLY.steps` 追加第 3 步（余烬兑换之后）。
+  不独立成任务，随 `HSR_MONTHLY` 每月一次。
+- **回归**：`tests/suite_hsr_resin_craft_20261101.py`（47 项断言，ALL PASS）：
+  「0 次不点」「N 递减到 0」「材料不足」「已达上限模板」「卡住失败」「用户停止」
+  「背包已开不按 B」「按钮区域排除标题」「失败必退回主界面」「dispatch 接线」「配置/模板自匹配」。
+- **首次实跑看什么**：日志 `[自塑尘脂]` 前缀会逐条打印「已在/已切到」「模板/比例坐标 @ (x,y)」。
+  12 月 1 日若失败，先看命中坐标与失败截图，再按实机画面补模板（补了模板就会自动优先走模板，
+  比例坐标自动降级为兜底）。
+
+## 绝区零恶名狩猎每周三次 + 自动战斗移植（2026-11-01）
+
+- **路径**（用户 9 张截图逐步确认）：主界面 `F2` → 快捷手册「训练」页签 → 左侧「恶名狩猎」
+  → 「库萨里库」行「前往」→「是否立即传送？」确认 → 详情页「下一步」→ 配队页「出战」
+  （**配队不改**）→ 等右上角开始计时 → 向前 `W` 走 2 秒 → 自动战斗 → 结算「完成」
+  → 循环到本周 3 次 → 左下「奖励入口」→「周期挑战 → 全部领取」→ 返回。
+- **自动战斗是照抄 OneDragon 的代码，不是调它的 exe/接口**（用户 2026-11-01 原话：
+  「照抄自动战斗代码，那玩意不一定能接出来」）。移植清单：
+  - `one_dragon/yolo/yolov8_onnx_cls.py` + `onnx_utils.py` → `FlashClassifier`
+    （letterbox 640×640、左上补 114、/255、CHW）；
+  - `zzz_od/auto_battle/auto_battle_dodge_context.py` → 闪光闪避（1=红→闪避，2=黄→格挡，都是空格）；
+  - `screen_info/battle.yml` → `zzz_battle_assist.py` 顶部的 4 个区域常量（1920×1080 基准）；
+  - `template/battle/btn_*.png` → `模板/绝区零-战斗-*.png`（9 张）；
+  - `models/flash_classifier/yolov8n-640-flash-20250921/model.onnx` →
+    `data/models/flash_classifier/...`（5.7MB，走 `data/` 不进版本库）。
+  - **GPL-3.0 本地自用**，与之前复制 OneDragon 模板同一口径。
+- **主动砍掉的（不是忘做）**：Yolo 距离识别 + 自动转向（用户给了「W 走两秒」）；
+  音频闪避（soundcard/librosa/scipy/sklearn 四个重依赖）；24k 行 YAML 配队策略 + 条件状态机
+  （换成**针对固定配队手写的轮转**，见下条）；逐角色 agent_state 层数识别（先用固定节奏代替）；
+  连携技头像模板匹配（换成区域亮度，**实测不可靠所以默认关闭**）。
+- **固定配队是紊乱队（2026-11-01 核实）**：用户配队是 蕾米埃尔 / 菲欧妮 / 维琳娜。查
+  `src/zzz_od/game_data/agent.py` 确认三人**全是 `AgentTypeEnum.ANOMALY`**：
+  - 蕾米埃尔 `remielle`：`DmgTypeEnum.LUMIFLUX`（流光），状态「浮晖」层数条 +「虚曜」连接；
+  - 菲欧妮 `phoenix`：`FIRE`（火），状态「燔焰」层数条 +「升变」连接；
+  - 维琳娜 `velina`：`WIND`（风），状态「风华」层数条。
+  三种属性 = 典型**紊乱队**：A 打出异常 → B 用另一种属性再打出异常 → 触发紊乱高伤。
+  所以正确打法不是「谁站场谁连点」，而是**三人轮流上场各自把 E 打出去**。
+  **更正（2026-11-01 22:25）**：上一版这里写成「通用策略一次都没引用这三个人的状态模板」，
+  是**搜错了关键字**（搜英文 `remielle/phoenix` 未命中，配置里用的是中文状态名）。实际上
+  `config/auto_battle/全配队通用.merged.yml` 里 蕾米埃尔 52 行、菲欧妮 20 行、维琳娜 24 行引用，
+  另有 `auto_battle_state_handler/速切模板-{菲欧妮,维琳娜}.sample.yml`、
+  `蕾米埃尔-入场.sample.yml`、`连携模板-蕾米埃尔.sample.yml`、
+  `auto_battle_operation/{菲欧妮-长按普攻-焚罪,蕾米埃尔-入场技}.sample.yml`。
+  **OneDragon 是给这三人做过适配的**，而且写得比固定节奏轮转精细得多（见下）。
+- **战斗循环（`zzz_battle_assist.py`）**：优先级 闪避 > 终结技 Q > 到点切人 > 特殊技 E > 普攻。
+- **键位（2026-11-01 二次核实，之前写反过一次，务必按这个来）**：ZZZ PC 默认
+  **闪避 = Shift（或鼠标右键）、切换下一位 = 空格、切换上一位 = C、特殊技 = E、
+  终结技 = Q、普攻 = 鼠标左键；1/2/3 是连携队友，不是切人**。
+  依据：OneDragon `_KEY_DEFAULTS`（`dodge: shift` / `switch_next: space` / `switch_prev: c`）
+  与 ZZZ 官方默认完全一致；用户截图里 Space 标在黄色圆环按钮上，那个是**切人**按钮。
+  踩过的坑：曾误判成「空格闪避 + 1/2/3 切人」，那样会变成该闪避时切人、该切人时按连携。
+  配置项 `dodge_key` / `switch_key` 可覆盖（改过键位的用户）。
+  `dwell_sec=6` 秒到点按空格切下一位；切人动画 0.6s 内不出招。
+- **状态驱动（2026-11-01 补齐，`runtime/zzz_agent_state.py`）**：按 OneDragon
+  `agent_state_checker.check_length_by_foreground_color` 的算法实现「HSV 前景色过滤 →
+  外接矩形宽度 / 条宽 × max_length」，H 环绕（如菲欧妮 H=4±9 → -5~13）拆两段掩码处理。
+  参数全抄官方：菲欧妮-燔焰 hsv(4,128,255)±(9,128,55) 上限 120；维琳娜-风华
+  hsv(0,255,255)±(90,220,200) 上限 135；蕾米埃尔-浮晖 hsv(143,140,174)±(7,37,81) 上限 100。
+  取样坐标：1 号位来自 agent_state/*/config.yml 原值，2/3 号位按同位置其他角色推算
+  （OneDragon 只给了菲欧妮 1 号位、维琳娜 1 号位 + 2 人队 2 号位），**首跑必须用日志核对数值**。
+- **决策循环（`_decide`）**：站场角色资源条读数值，按 OneDragon 策略分支——
+  菲欧妮 燔焰≥90 长按普攻 3.5s 放焚罪（7×0.5s，异放伤害）、<30 切走；
+  维琳娜 风华≥85 长按普攻 3s（6×0.5s）、<30 切走；
+  蕾米埃尔 浮晖=100 长按强化特殊技 2.5s（模板结尾自带切下一位）、<20 切走。
+  长按实现照抄「按下 → 每 0.5s 重复按下 → 松开」；长按期间阻塞主循环不闪避
+  （OneDragon 同样用「无视闪光」屏蔽，刻意为之）。
+  **资源条读不到（None）自动退回固定 6 秒节奏轮转**，保证不会站着不动。
+- **仍未做**：黄光「招架支援」的支援攻击键（简化成同闪避）；连携技触发的主动选择；
+  蕾米埃尔「整套入场技」的 3 次切人细节。这些不影响能否打死 boss，影响的是上限。
+- **实测阈值（2026-11-01 用户战斗截图 1919×1079）**：普攻 0.982/0.966；特殊技 0.865/0.876；
+  大招**可用 0.820 / 灰 0.602**。OneDragon 用 0.9 是因为它自己截 PNG 无损，这里源图有压缩，
+  所以拆成 `ATTACK_THRESHOLD=0.85 / SKILL_THRESHOLD=0.78 / ULTIMATE_THRESHOLD=0.72`。
+  另：OneDragon 的「禁用 X」图标模板在当前 UI 完全不命中（得分 ≈0），只能靠亮/灰模板区分。
+- **周门控**：`weekly_flow:ZZZ_NOTORIOUS_HUNT=YYYY-Www`，键由 `weekly_flow_week_key()` 生成，
+  **整体后移 4 小时**（游戏周一 04:00 刷新）——周一 01:00 仍算上一周，否则会把真正的新一周跳过。
+  实测：周日 23:00→W44、周一 01:00→W44、周一 05:00→W45。
+- **接线**：`runtime/zzz_notorious_hunt.py`（导航+领奖）、`runtime/zzz_battle_assist.py`（战斗）、
+  `foreground_flow_runner` 的 `zzz_notorious_hunt` 分支 + `_BUILTIN_ACTIONS`；
+  `flow_configs[.example].json` 新增流程 `ZZZ_NOTORIOUS_HUNT`（3 步：点进入游戏 → 等主界面 →
+  恶名狩猎）；`task_batch_runner` 新增 `_WEEKLY_FLOW_BY_APP`/`_WEEKLY_RUNNERS`/`_append_weekly_report`，
+  在**两个出口**（正常跑完 / 今日已完成）都调用，与 `_append_monthly_report` 并列。
+- **打几次**：流程自己读「本周核心材料掉落次数 N/3」，`min(每周3次, 3-N)`；读不到就按 3 次打；
+  读到已满则一次都不打、直接成功返回（并让上层写本周标记，避免每天白启动客户端）。
+- **定位策略**：比例坐标点击 + **每步 OCR 校验**（`P_TRAINING_TAB/P_HUNT_ENTRY/P_GO/P_CONFIRM/
+  P_NEXT/P_START/P_REWARD_ENTRY/P_CLAIM_ALL`，来自 1080×613 截图）；点完看不到预期文字就整步失败，
+  绝不盲点。任何一步失败都 `_leave_to_world()` 退回大世界，避免把游戏留在菜单里。
+- **回归**：`tests/suite_zzz_notorious_hunt_20261101.py`（ALL PASS）：周门控三个边界、
+  次数解析四种写法、真实截图两帧识别分离、模型缺失降级、3/3 跳过零点击、读不到次数打 3 次、
+  进战斗失败判失败并退菜单、dispatch/内建动作/批次调度接线、配置与资源存在。
+- **未实机跑过（务必知道）**：8 个导航比例坐标和「W 两秒是否够到 boss」都还没在真机上验证
+  （2026-11-01 游戏已关）。首次实跑看 `[恶名狩猎]` 日志的命中坐标与 `[自动战斗]` 的
+  「帧/普攻/闪避/特殊技/终结技」统计：帧数高但普攻为 0 说明按钮识别没命中；闪避一直不触发
+  说明闪光模型没吃到画面。跑偏时优先补模板、再改 `*_frac`。
+
+### 为什么 OneDragon 自己的恶名狩猎「从来没跑成」（2026-11-01 排查）
+
+用户反馈「我明明启用了，但一次都没成功跑过」。实测日志（`.log/log.txt` 11:43）：
+
+```
+节点 开始恶名狩猎 -> 查找下一条计划 返回状态 本轮计划已完成
+节点 查找下一条计划 -> 点击奖励入口 返回状态 奖励入口
+节点 点击奖励入口 -> 全部领取 返回状态 未找到 全部领取   ×3
+指令[ 恶名狩猎 ] 执行成功 返回状态 大世界-普通
+```
+
+- **根因**：`config/01/one_dragon/notorious_hunt.yml` 里 `run_times: 3 / plan_times: 3 / loop: false`。
+  OneDragon 有**两个次数**，只有一个按周重置：
+  - `app_run_record/notorious_hunt.yml` 的 `left_times`（游戏内剩余奖励）→ `AppRunRecordPeriod.WEEKLY`，
+    周一 04:00 回 3；
+  - `config` 里 `plan.run_times`（该计划已执行次数）→ **不按周重置**，只有 `loop: true` 时
+    `reset_plans()` 才会把它减回去（`notorious_hunt_app.py::find_next_plan`）。
+  所以第一周打满 3 次后 `run_times=3`，之后每周 `left_times` 刷回 3、应用照常被调度，
+  但 `all_plan_finished()` 立刻判「本轮计划已完成」，直接跳到领奖。
+  **修法**：GUI「恶名狩猎 → 循环执行」打开（= `loop: true`），或手动把 `run_times` 改回 0。
+- **次要问题**：`claim_all` 节点没设失败语义，「全部领取」OCR 找不到也照样报 `执行成功`，
+  领奖失败被吞掉（`screen_info/notorious_hunt.yml` 的「全部领取」是 `text: 全部领取` 纯 OCR，
+  在灰色/已领状态下认不出）。
+- **用户决定（2026-11-01）**：OneDragon 的这个应用已在 `config/01/one_dragon/_group.yml` 里
+  `notorious_hunt: enabled: false`，改用本项目的 `ZZZ_NOTORIOUS_HUNT`。
+  **注意 OneDragon 的 `run_times` 坑没动**：将来若重新启用，必须同时打开「循环执行」。
+
+
+
+
+### 2026-11-02 失败复盘（11 个 failed → 逐条定性 + 5 处修复）
+
+当日 `daily_progress` 统计：success 22 / already 6 / pending 6 / skipped 2 / **failed 11**。
+**11 个失败里只有 4 个是"当天新坏"的**，其余是存量问题（1 个还是假的）。
+
+| 任务 | 真因 | 定性 |
+|---|---|---|
+| zzz「等待大世界画面」 | OneDragon 日志里它 12:12:25~32 连挂 6 次「未到达大世界」，12:12:33 **执行成功（大世界-普通）**；解析器只扫「执行失败」行 → 把重试中间态当成最终结果 | **假失败，连报 14 天（10-20~11-02）** |
+| zzz「迷失之地-邦布商店/层间移动/迷失之地/执行应用组」 | 12:29:27 OneDragon 抛 `RuntimeError('游戏窗口未就绪')`（pc_controller_base.py:172 截图失败） | 真失败 |
+| baijing enter_game | 启动器「开始游戏」模板+OCR 双失配，14 次重试 61s 全败 | 真失败（10-22/10-23 同款，老毛病复发） |
+| wuwa script_ok-ww | 游戏窗口 120s 没就绪 → 脚本空跑 30 分 8 秒 → 判「超时」 | 真失败 |
+| nikki script_whimbox | **复用了上一个游戏（鸣潮）的残留窗口** HWND=6491822（PID 15492，标题='鸣潮'），把鸣潮启动器的「进入游戏」当暖暖的点了 | 真失败（跨游戏串窗口） |
+| CJFlow | 客户端自动更新弹「检测到新版本 V2.8.7」挡住登录界面 | 真失败（客户端侧） |
+| WoolFlow MINIMAX | UI 步骤 1~4 全中（点「签到得」@182,958），但 api 日志只有 `signin/config`+`signin/status`，**没有 `signin/claim`** → 点击没被应用接收 | 真失败（老毛病复发） |
+
+**已修 5 处（回归 `tests/suite_failures_20261102.py`）**：
+1. **ZZZ 解析器假失败**（`services/zzz_daily_parser.py`）：通用失败收录改为「同一任务**最后一次**
+   执行成功/失败」为准。重试后成功的任务不再上失败卡；全程真失败的照旧报 failed。
+   用真实 OneDragon 日志复验：「等待大世界画面」已从失败列表消失。
+2. **窗口归属校验**（`runtime/foreground_flow_runner.py`）：`GENERIC_LAUNCHER_PROCESS_NAMES`
+   （launcher.exe / launcher_main.exe / client.exe / game.exe / start.exe / update.exe / krlauncher.exe）
+   是**多游戏通用启动器名**，这类进程名命中时**必须再核对窗口标题**才认这个窗口
+   （`_is_window_owned`）。游戏专属进程名（xstarter.exe / X6Game-Win64-Shipping.exe 等）本身即归属证据。
+   → 暖暖不会再接管鸣潮启动器窗口。**注意 `launcher.exe`/`launcher_main.exe` 千万别当"专属名"**。
+3. **鸣潮提前止损**（`runtime/automation_controller.py::_wait_game_window_ready`）：三态返回
+   （True=就绪 / False=用户停止 / None=超时未就绪），调用点按 `is None` 不拉脚本，
+   **不再空跑 30 分钟**。只有鸣潮配了 `wait_game_window_before_script`。
+   **2026-11-02 18:xx 二次修正（17:54 误杀正在加载的游戏）**：
+   - 120s → **300s**（`settings/defaults.py` + 本机 `app_config.json`）。实测鸣潮从
+     「进入游戏」到窗口出现约 **43s**（18:34:14 开始等 → 18:34:57 窗口出现 → 18:34:59 拉 ok-ww）。
+   - 判据放宽：**只要看到过任意可见窗口就放行**（加载中切分辨率会让 rect 每轮都变，
+     旧逻辑的「连续 2 轮完全不变」会一直判不稳定）；窗口按**进程树 PID** 匹配（UE 窗口可能由子进程持有）。
+   - 新增每 15s 诊断日志（进程数/窗口数/最大面积），下次超时看日志就知道卡在哪。
+   - **超时不再杀游戏进程**：用户可能正看着加载画面；只拒绝拉脚本，游戏留给下一轮/用户。
+   - 教训：`execute_task` 开头本来就会「终止已有游戏进程」，所以让用户「先手动进主世界再跑」
+     **没有意义**——程序会把游戏杀掉重来。要么自动等够，要么别跑。
+   - 回归 `tests/suite_wuwa_window_wait_20261102.py`（稳定即走/加载抖动放行/小窗口放行/
+     从未出现窗口→None/进程退出→None/用户停止/子进程窗口/默认值+失败不杀）。
+4. **失败必留证据**（`runtime/flow_diagnostics.py::record_failure`）：原来 `save_image and hwnd`
+   才截图，**启动器级失败（还没有窗口句柄）一条图都没有**（11-02 白荆失败就是如此，事后完全看不出
+   启动器长什么样）。改成没有 hwnd 时抓**全屏**；给了 hwnd 但窗口已关/最小化仍不退化成全屏
+   （避免把用户桌面存进证据目录）。白荆侧新增 `_record_baijing_flow_failure` 把启动器/进游戏阶段
+   失败写进 flow_failures，启动器按钮等待 60s → **120s**。
+5. **薅羊毛 MINIMAX 判据**（`runtime/wool_claim_logs.py`）：末步日志核验现在能区分
+   「日志没落盘」与「**卡片打开但没有 signin/claim**（点击没生效）」，并在核验失败时**自动重新定位
+   再点一次**「签到得」（`_click_minimax_sign_button`）。失败文案要直说"点击没被应用接收"。
+
+   **根因已锁定（2026-11-02 18:31 用户确认）**：
+   - **已证实**：15:10 自动化那次，api 日志里有 `signin/config`+`signin/status`（卡片确实打开了），
+     **一个 `signin/claim` 都没有**；而 **17:08:30 用户手动点同一个按钮，claim 成功发出**。
+     坐标没错（OCR 框 (140,948)-(225,968)，点击 (182,958) 正在文字正中）→
+     **人点得动、程序点不动**。
+   - **公告弹窗的真相**：用户实测「**没再弹，但能看到有更新**」（左上角常驻「更新」角标）。
+     → 公告只在**更新后第一次启动**弹一次，不是每次都弹；
+       15:10 恰好是更新后首次启动 → 弹窗在场 → 合成点击被吞；
+       17:05 重开后弹窗不再出现 → 手动点击成功。
+     **用户的直觉「关掉重开就能避免」是对的**（对"一次性公告"成立，对"服务端每次下发"不成立）。
+   - **所以修法**：新增动作 `wool_dismiss_update`（`runtime/wool_claim_logs.py::
+     dismiss_minimax_update_popup`），**接成 MINIMAX 流程的第一步**（`flow_configs.json`
+     与 `flow_configs.example.json` 同步），签到前先把「更新已来」公告关掉（先 ESC，
+     不行就按「更新已来」标题 + 偏移点 X：实测标题中心 (699,411)、X 在 (1333,349)，
+     全屏 1936x1048 → 偏移 frac (+0.327,-0.059)）。没弹窗就算成功（`optional_if_missing`）。
+   - 另外三层通用兜底（与根因无关，防所有可能性）：点击前 `_focus_window` 提前台
+     （窗口不在前台时第一次点击只会激活窗口）；点两个候选位（文字中心 + 左侧 18px 硬币图标位）；
+     末步日志核验失败时自动重试点击一次 + 读 UI「今日已签到」。
+   - **遗留的流程缺陷**：步骤1~3 是"假成功"——签到面板本来就是上次会话恢复打开的，
+     这几步只是"找到本来就可见的东西"，没有校验状态变化。仓库早就有规矩
+     「optional 点击后必须有非 optional 验证」，MINIMAX 这条链只靠末步一个 30s 窗口兜。
+
+**已排除的误判（别再重复踩）**：
+- **白荆启动器模板没坏**。用 2026-11-02 用户提供的启动器截图（`data/artifacts/ref_baijing_launcher_20261102.png`，
+  1304x723）实测：旧模板 `模板/白荆回廊-开始游戏.png` 在 **scale=1.0 匹配分 1.000**，位置 (1083,665)。
+  模板、界面、分辨率**都没问题** → 11-02 失败是**运行时那 60s 里启动器还没渲染出来**（或被别的东西盖住），
+  不是"界面改版"。**别再去重裁模板**，要修的是等待时长 + 失败取证。
+- **自塑尘脂是崩铁的道具**，不是原神。出现在 `HSR_MONTHLY` 第 3 步（`runtime/hsr_resin_craft.py`：
+  背包 B→贵重物→第一行第 5 格自塑尘脂→万能合成机）；原神月度是星尘兑换。
+- **有猫兑换 11-02 不需要补跑**：11-01 05:01 那次一条龙已经买完（`monthly success 已购买 11 件：
+  同调线索×5、一刹闪回×5、心迹`），月度 meta `monthly_sequence:baijing_cat_exchange=2026-11` 已写。
+- **重聚 CJ 的更新**：用户 2026-11-02 手动处理过 —— 点「自动更新」→ 下载 → 删旧 exe → 起新 exe。
+  自动化侧目前只能识别到更新公告页（步骤1 连着重试 3 次失败）；要自动化需等客户端更新完再跑。
+
+### 2026-11-02 晚：三处「月商店/周店没买成」的根因与修法
+
+**先说清楚 11-02 当天的事实**（DB + 日志实查，别再当成"跑了只是没买"）：
+- 白荆**月度有猫兑换 11-01 已买完**（meta `monthly_sequence:baijing_cat_exchange=2026-11`）；
+  白荆**每周商店购买没买**——标记停在 `2026-W44`（实际买于 10-26 周一），周口径是
+  `%G-W%V`，11-02 是 **W45** → 本周该重买，白荆当天三次一条龙都卡在启动器，没进游戏。
+- 崩铁/绝区零/原神/异环/暖暖的 11 月月商店**全都没成**
+  （`is_monthly_flow_done` 四项全 False，暖暖两个 marker 为 None）。
+
+**坑 1：月流程只在「该游戏当天在批次里」时触发（已修）**
+- 实锤：10:18 那批跑到原神时被 GUI 中途退出打断，11:20 / 17:26 两批都没带原神 →
+  `GENSHIN_MONTHLY` 一次都没触发，11 月星尘兑换到月底都没买。
+  **原神当天在进度里有记录，是因为米游社签到（`run_startup_sign_tasks`）跟批次 app 列表无关，
+  跟月流程无关**——别拿"进度里有原神"推断月商店跑过。
+- 修法（`runtime/task_batch_runner.py`）：批次收尾 `_sweep_pending_monthly_flows()` 把
+  **当天没进批次、但本月还没买**的月商店补跑一遍（`_MONTHLY_CHECKED` 记录本批次已查过的，
+  不重复启动客户端；已买过的只读一次标记返回）。「月初自动随日常跑」从此不依赖用户每次都勾上那个游戏。
+
+**坑 2：月商店只做一次整窗 OCR，长列表页必然静默漏买（已修）**
+- 实锤：崩铁余烬兑换页同屏只有 2~3 行商品，证据图
+  `data/artifacts/monthly_shop/20261102_120641_余烬兑换_采购前.jpg` 可见「命运的足迹 /
+  冒险记录 / 信用点 / 无生残刃…」，清单里的**星轨专票、星轨通票在折叠区以下** → 一次整窗
+  OCR 看不到 → 被「看不到=已买过」吞掉 → 日志里两条 0/5，实际是**漏买**。
+- 修法：`runtime/monthly_exchange.py::_scroll_find_item` —— 当前视图定位不到就往下翻页找，
+  用**列表区域截图指纹**判断滚轮有没有生效（像素没变就停，别白等几轮 OCR）；找到后**不滚回去**
+  （坐标马上要用来点击）；翻遍仍没有才滚回顶部并按已买过处理。
+  `zzz_monthly_shop._locate_item` 是拆出来的商品定位（point_frac → 模板 → OCR），
+  `_buy_once(..., scroll_finder=...)` 注入兜底；后勤商店 `zzz_shop_buy` 不传 → 行为不变。
+  step 可用 `item_scroll_search: false` 关掉（默认开）。
+
+**坑 3：暖暖奇想日历链一断，晶石兑换 + 共鸣商店整段没买（已修）**
+- 实锤：11-01 失败截图 `20261101_122627_NikkiLauncher_晶石兑换-入口.jpg` 显示**还停在
+  奇迹之冠 hub 页** → 点「奇迹之冠搭配赛」没进去 → 左列「晶石兑换」入口（只在搭配赛页有）
+  自然找不到 → 又因为回不到主界面 → **共鸣商店整段被跳过** → 两个每月清单一件没买。
+- 修法（`runtime/nikki_calendar.py`）：
+  1. 奇想日历页面判定把**标题「奇想日历」**也算特征（正文是艺术字，OCR 常认不出）；
+     `_open_calendar` 重试改成「认不出 → ESC 收起 → 再按 L」，**不再连按 L**
+     （L 是开关，第一次很可能已经打开，再按就是关掉；11-02 失败截图就停在主界面）。
+  2. 点「奇迹之冠搭配赛」最多重试 3 次（`CROWN_PAIR_CLICK_ATTEMPTS`），每次重新 OCR 取位置；
+     还进不去就 `_leave_crown_hub()` 点左上角返回箭头退出 hub（全屏 overlay，ESC 关不掉）。
+     **点击目标不是文字（2026-11-02 用户实锤）**：「奇迹之冠搭配赛」文字本身点不动，
+     真正可点的是文字**左上方**的多边形玻璃碎片（用户原话「哪是右侧，难道不是左上方」）。
+     `_pair_click_point()` 按 OCR 文字框偏移：右移 0.03 个字宽、上移 2.2 个字高
+     （参考图实测文字框 (369,645)-(695,690)、文字中心 (531,667) → 亮白碎片重心
+     (541,569)，像素 (247,247,250)）；box 缺失时退固定比例 (0.28,0.53)。
+     回归里 hub 行改用真实 OCR 框 + 参考图像素采样，并模拟「点文字中心无效、
+     点左上方碎片才进入」。
+  3. 搭配赛页左列「晶石兑换」入口轮询 3 次再判失败（菜单渲染慢）。
+  4. `_back_to_main_for_shop()`：ESC 回不去时先退出 hub 再回一次，**别让共鸣商店被整段跳过**。
+
+回归：`tests/suite_monthly_scroll_find_20261102.py`（翻页查找 6 组）、
+`tests/suite_nikki_calendar_retry_20261102.py`（暖暖断链修复 8 组）、
+`tests/suite_monthly_auto_schedule_20261101.py`（新增 [7b] 收尾补漏 3 组）；
+`tests/suite_monthly_exchange_20261025.py` 要把新加的 `mx._scroll_find_item` mock 掉
+（否则测试会真的移动鼠标滚轮）。
+
+**陈旧回归（不是本次改动引入，stash 验证过）**：`data/artifacts/test_wool_claim_logs_20261024.py`
+3 项（UI 兜底已从模板改 OCR、WorkBuddy 关进程策略 10-30 改过、`wool_verify_log` 分发已挪进
+`_dispatch_step_action`）、`data/artifacts/test_flow_diagnostics_20261018.py` 1 项
+（`ocr_results=ocr_failed` 变量名已变）。改断言或重写，别当成新 bug。

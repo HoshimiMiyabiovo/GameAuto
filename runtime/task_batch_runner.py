@@ -37,6 +37,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .automation_controller import GAME_UPDATING_SKIP
 from .background_template_runner import (
     is_monthly_flow_done,
+    is_weekly_flow_done,
     run_cj_background,
     run_genshin_monthly_background,
     run_hsr_monthly_background,
@@ -45,6 +46,7 @@ from .background_template_runner import (
     run_wool_flow_background,
     run_xm_background,
     run_zzz_monthly_background,
+    run_zzz_notorious_hunt_background,
 )
 from .bettergi_log_monitor import BetterGIDailyRewardSummary, format_bettergi_daily_reward_summary, start_bettergi_log_monitor
 from .foreground_flow_runner import FailSafeAborted
@@ -134,6 +136,11 @@ _MONTHLY_RUNNERS: Dict[str, Callable[..., Tuple[bool, str]]] = {
     "NTE_MONTHLY": run_nte_monthly_background,
 }
 
+# 本批次已检查过月商店的游戏（批次开始时清空）。
+# 用来在收尾时补跑「当天没进批次、但本月还没买」的月商店，避免同一个批次里
+# 对同一个游戏重复启动客户端。
+_MONTHLY_CHECKED: set = set()
+
 
 def _run_pending_monthly_flow(controller, app_key: str) -> Optional[Tuple[str, bool]]:
     """该游戏本月还没买月商店时补跑一次，返回 (报告行, 是否成功)。
@@ -179,10 +186,107 @@ def _append_monthly_report(
     controller, app_key: str, report: List[str], warnings: List[str]
 ) -> None:
     """跑月商店并把结果写进批次报告/警告（供 run_task_batch 的两条出口复用）。"""
+    # 记下"本批次已检查过这个游戏的月商店"，收尾补漏时不再重复查。
+    _MONTHLY_CHECKED.add(app_key)
     monthly = _run_pending_monthly_flow(controller, app_key)
     if monthly is None:
         return
     line, ok = monthly
+    report.append(line)
+    if not ok:
+        warnings.append(line)
+
+
+def _sweep_pending_monthly_flows(
+    controller, report: List[str], warnings: List[str]
+) -> None:
+    """批次收尾补漏：把当天没在批次里、但本月还没买月商店的游戏补跑一次。
+
+    2026-11-02 实锤的洞：月流程只在「该游戏当天在批次里」时触发（_append_monthly_report
+    在每个 app 的日常之后调用）。10:18 那批跑到原神时被 GUI 中途退出打断，之后 11:20 /
+    17:26 两批都没带原神 → GENSHIN_MONTHLY 一次都没触发，11 月星尘兑换到月底都没买；
+    原神当天只有米游社签到记录（启动前签到走的是另一条路，与批次 app 列表无关），
+    所以「进度里有原神」并不代表月流程跑过。
+
+    月初「自动随日常跑」要真正成立，就不能依赖用户每次都勾上那个游戏：这里统一
+    把当月没买过的月商店补一遍，已买过的只读一次标记直接返回（零窗口操作）。
+    """
+    if controller.stop_current_task:
+        return
+    pending = [app_key for app_key in _MONTHLY_FLOW_BY_APP if app_key not in _MONTHLY_CHECKED]
+    if not pending:
+        return
+    controller.logger.info(
+        "[一条龙] 收尾补跑本月未买的月商店：%s", "、".join(pending)
+    )
+    for app_key in pending:
+        if controller.stop_current_task:
+            controller.logger.info("[一条龙] 收尾补跑月商店期间用户已请求停止，中止")
+            return
+        _append_monthly_report(controller, app_key, report, warnings)
+
+
+# ---------------------------------------------------------------------------
+# 每周流程（2026-11-01）：绝区零恶名狩猎，每周三次。
+#
+# 和月商店同一套思路：该游戏日常跑完后，本周还没跑过就补跑一次。打几次由流程
+# 自己读「本周核心材料掉落次数 N/3」决定（用户已手动打过就自动少打或不打），
+# 跑完写 weekly_flow:<FLOW>=YYYY-Www 标记；失败不写标记，下次批次自动重试。
+# 周口径见 background_template_runner.weekly_flow_week_key（周一 04:00 刷新）。
+# ---------------------------------------------------------------------------
+_WEEKLY_FLOW_BY_APP: Dict[str, Tuple[str, str]] = {
+    "ZenlessZoneZero": ("ZZZ_NOTORIOUS_HUNT", "绝区零恶名狩猎"),
+}
+
+_WEEKLY_RUNNERS: Dict[str, Callable[..., Tuple[bool, str]]] = {
+    "ZZZ_NOTORIOUS_HUNT": run_zzz_notorious_hunt_background,
+}
+
+
+def _run_pending_weekly_flow(controller, app_key: str) -> Optional[Tuple[str, bool]]:
+    """该游戏本周还没跑每周流程时补跑一次，返回 (报告行, 是否成功)。
+
+    本周已跑过、该游戏没有每周流程、或游戏维护中时返回 None（零成本）。
+    """
+    entry = _WEEKLY_FLOW_BY_APP.get(app_key)
+    if entry is None or controller.stop_current_task:
+        return None
+    flow_key, label = entry
+    if is_weekly_flow_done(flow_key):
+        return None
+
+    try:
+        from ..services.game_update_calendar import get_maintenance_state
+
+        maintenance = get_maintenance_state(app_key)
+    except Exception as exc:  # noqa: BLE001 - 日历模块不可用就当没维护
+        controller.logger.debug("[%s] 维护状态检查失败: %s", label, exc)
+        maintenance = None
+    if maintenance:
+        controller.logger.info("[%s] 游戏维护中，本周挑战顺延到下次批次", label)
+        return None
+
+    controller.logger.info("[%s] 本周还没打，随日常自动补跑一次", label)
+    runner = _WEEKLY_RUNNERS.get(flow_key)
+    if runner is None:
+        controller.logger.warning("[%s] 没有对应的执行入口（flow_key=%s），跳过", label, flow_key)
+        return None
+    try:
+        ok, msg = runner(controller.logger)
+    except Exception as exc:  # noqa: BLE001 - 每周流程失败不能拖垮当天一条龙
+        controller.logger.warning("[%s] 执行异常: %s", label, exc)
+        return (f"{label:20} ❌ 执行异常: {exc}", False)
+    return (f"{label:20} {'✅' if ok else '❌'} {msg}", ok)
+
+
+def _append_weekly_report(
+    controller, app_key: str, report: List[str], warnings: List[str]
+) -> None:
+    """跑每周流程并把结果写进批次报告/警告（两条出口共用）。"""
+    weekly = _run_pending_weekly_flow(controller, app_key)
+    if weekly is None:
+        return
+    line, ok = weekly
     report.append(line)
     if not ok:
         warnings.append(line)
@@ -927,6 +1031,9 @@ def run_task_batch(
     # 完整重启程序会新建 controller 从而恢复，历史上即"重启程序恢复"。
     controller.stop_current_task = False
 
+    # 新批次开始：本批次已检查过月商店的游戏清空（收尾补漏要用）。
+    _MONTHLY_CHECKED.clear()
+
     has_regular_tasks = any(not is_standalone_task(app_key) for app_key, _ in target_apps)
     if has_regular_tasks:
         ensure_qbittorrent_running(controller)
@@ -983,6 +1090,8 @@ def run_task_batch(
             # 日常已完成也要检查月商店：月初前几天补跑时，日常早就跑过了，
             # 不能因为"今日已完成"把当月采购一起跳过。
             _append_monthly_report(controller, app_key, report, warnings)
+            # 每周流程（恶名狩猎）同理：今日已完成也可能本周还没打。
+            _append_weekly_report(controller, app_key, report, warnings)
             if index < len(target_apps) - 1:
                 _interruptible_sleep(controller, inter_task_delay_sec)
             continue
@@ -1019,6 +1128,8 @@ def run_task_batch(
         # 日常跑完再补月商店：此时游戏已被脚本关闭，月度流程自己启动客户端；
         # 本月已买过则只读一次标记直接返回，不产生任何窗口操作。
         _append_monthly_report(controller, app_key, report, warnings)
+        # 每周三次的恶名狩猎（每周只跑一次，内部打满当周次数）
+        _append_weekly_report(controller, app_key, report, warnings)
 
         if index < len(target_apps) - 1:
             # 任务间隔冷却：期间持续清理刚结束任务弹出的残留启动器，避免干扰下一个脚本
@@ -1079,5 +1190,9 @@ def run_task_batch(
             except ValueError:
                 # 结果对象可能已被并发清理，找不到就保留原批次结果
                 pass
+
+    # 收尾补跑月商店：当天没进批次的游戏（用户没勾/批次被打断）也要在本月内买过。
+    # 放在统一重试之后，避免和重试里的日常抢窗口。
+    _sweep_pending_monthly_flows(controller, report, warnings)
 
     return TaskBatchResult(report=report, warnings=warnings, startup_lines=startup_lines)

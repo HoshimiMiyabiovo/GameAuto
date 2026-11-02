@@ -459,10 +459,55 @@ def _process_matches_filters(
         return False
 
 
+# 多个游戏共用的启动器进程名：单靠进程名无法区分是哪个游戏的启动器，
+# 必须再核对窗口标题才能确认归属。
+# 2026-11-02 实锤：暖暖流程把鸣潮的启动器窗口（launcher_main.exe，标题='鸣潮'）
+# 当成自己的接管了 → 把鸣潮的「进入游戏」当暖暖的点了，等 5 分钟暖暖游戏窗口
+# 一直没出现。xstarter.exe 是叠纸/暖暖专属，不在此列（暖暖窗口进程=xstarter.exe）。
+GENERIC_LAUNCHER_PROCESS_NAMES = frozenset({
+    "launcher.exe",
+    "launcher_main.exe",
+    "client.exe",
+    "game.exe",
+    "start.exe",
+    "update.exe",
+    "krlauncher.exe",
+})
+
+
+def _process_name_of(pid: Optional[int]) -> str:
+    """取窗口所属进程的进程名（小写）；取不到返回空串。"""
+    if not pid:
+        return ""
+    try:
+        return (psutil.Process(pid).name() or "").lower()
+    except Exception:
+        return ""
+
+
+def _is_window_owned(
+    pid: Optional[int],
+    title_matched: bool,
+    title_keywords: Optional[List[str]],
+) -> bool:
+    """窗口归属判定：通用启动器进程名 + 标题不命中本流程 → 不认这个窗口。
+
+    2026-11-02 实锤：暖暖流程（title_keywords=['无限暖暖','Infinity Nikki']）
+    把鸣潮启动器窗口（launcher_main.exe，标题='鸣潮'）当自己的接管了 →
+    把鸣潮的「进入游戏」当暖暖的点了，等 5 分钟暖暖游戏窗口一直没出现。
+    游戏专属进程名（如 xstarter.exe / X6Game-Win64-Shipping.exe）本身就是归属
+    证据，不要求标题命中。
+    """
+    if not title_keywords or title_matched:
+        return True
+    return _process_name_of(pid) not in GENERIC_LAUNCHER_PROCESS_NAMES
+
+
 def _find_window_by_filters(
     title_keywords: Optional[List[str]] = None,
     process_names: Optional[List[str]] = None,
     launched_after: float = 0.0,
+    logger: Optional[logging.Logger] = None,
 ) -> Optional[Tuple[int, int]]:
     candidates: List[int] = []
 
@@ -480,6 +525,17 @@ def _find_window_by_filters(
             return
         if title_keywords and not process_names and not title_matched:
             return
+        # 归属校验：进程名是"多游戏通用启动器名"时，窗口标题必须命中本流程的
+        # title_keywords，否则一律不认（防止把别的游戏的启动器当自己的）。
+        if process_names and title_keywords and not title_matched:
+            if not _is_window_owned(pid, title_matched, title_keywords):
+                if logger:
+                    logger.warning(
+                        f"窗口归属不符已跳过: HWND={hwnd} PID={pid} "
+                        f"进程={_process_name_of(pid)!r} 标题={_window_title(hwnd)!r} "
+                        f"（通用启动器名需标题命中 {list(title_keywords)}）"
+                    )
+                return
         candidates.append(hwnd)
 
     win32gui.EnumWindows(callback, None)
@@ -578,6 +634,7 @@ def _wait_window_for_flow(
             title_keywords=title_keywords,
             process_names=process_names,
             launched_after=launched_after,
+            logger=logger,
         )
         if fallback:
             return fallback
@@ -589,6 +646,7 @@ def _wait_window_for_flow(
             title_keywords=title_keywords,
             process_names=process_names,
             launched_after=0.0,
+            logger=logger,
         )
         if stale:
             if logger:
@@ -1530,12 +1588,15 @@ def close_flow_processes(
 _BUILTIN_ACTIONS = (
     "zzz_shop_buy",
     "monthly_exchange",
+    "hsr_resin_craft",
+    "zzz_notorious_hunt",
     "nikki_enter_game",
     "nikki_calendar",
     "starrail_enter_main",
     "genshin_enter_main",
     "qoder_open_campaign",
     "qoder_verify_claim",
+    "wool_dismiss_update",
     "wool_verify_log",
 )
 
@@ -1589,6 +1650,36 @@ def _dispatch_step_action(
         if not exchange_ok:
             return False, f"[{flow_key}] 步骤失败: {name} ({exchange_msg})", hwnd, pid
         logger.info(f"[{flow_key}] 步骤{step_no}每月兑换完成: {exchange_msg}")
+    elif action == "hsr_resin_craft":
+        # 崩铁：背包 → 贵重物 → 自塑尘脂 → 万能合成机 → 合成到本月上限
+        from .hsr_resin_craft import craft_self_modeling_resin
+
+        resin_ok, resin_msg = craft_self_modeling_resin(
+            logger,
+            hwnd,
+            step,
+            scales=scales,
+            confidences=confidences,
+            stop_check=stop_check,
+        )
+        if not resin_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({resin_msg})", hwnd, pid
+        logger.info(f"[{flow_key}] 步骤{step_no}自塑尘脂合成完成: {resin_msg}")
+    elif action == "zzz_notorious_hunt":
+        # 绝区零：F2 → 训练 → 恶名狩猎 → 库萨里库 → 出战 → 自动战斗 → 周期挑战全部领取
+        from .zzz_notorious_hunt import run_notorious_hunt
+
+        hunt_ok, hunt_msg = run_notorious_hunt(
+            logger,
+            hwnd,
+            step,
+            scales=scales,
+            confidences=confidences,
+            stop_check=stop_check,
+        )
+        if not hunt_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({hunt_msg})", hwnd, pid
+        logger.info(f"[{flow_key}] 步骤{step_no}恶名狩猎完成: {hunt_msg}")
     elif action == "nikki_enter_game":
         # 无限暖暖：启动器 → 登录页 → 加载 → 主界面（聊天气泡特征）
         from .nikki_launcher import enter_main_interface
@@ -1647,6 +1738,17 @@ def _dispatch_step_action(
         if not claim_ok:
             return False, f"[{flow_key}] 步骤失败: {name} ({claim_msg})", hwnd, pid
         logger.info(f"[{flow_key}] 步骤{step_no}领取状态确认: {claim_msg}")
+    elif action == "wool_dismiss_update":
+        # MiniMax：关掉「更新已来」公告弹窗。
+        # 2026-11-02 实锤：公告只在**更新后第一次启动**弹（用户 17:05 重开后就没再弹，
+        # 只剩左上角一个「更新」角标），但那一次恰好把自动化点「签到得」的点击吞了
+        # —— api 日志有 signin/config+status、零个 signin/claim，同一按钮手动点却成功。
+        # 所以在签到流程**第一步**就先把它关掉，别等末步日志核验失败才救火。
+        from .wool_claim_logs import dismiss_minimax_update_popup
+
+        dismissed, dismiss_msg = dismiss_minimax_update_popup(logger, hwnd)
+        logger.info(f"[{flow_key}] 步骤{step_no}公告弹窗处理: {dismiss_msg}")
+        # 非致命：关不掉也继续走（末步日志核验会再兜一次），这里只留痕
     elif action == "wool_verify_log":
         # MiniMax/TRAE 以接口日志为准，避免 UI 确认误报
         from .wool_claim_logs import verify as verify_wool_log
@@ -1809,6 +1911,7 @@ def run_flow(
             title_keywords=window_title_keywords,
             process_names=window_process_names,
             launched_after=0.0,
+            logger=logger,
         )
         if existing:
             pid = existing[1]

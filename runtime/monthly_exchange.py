@@ -65,6 +65,16 @@ PAGE_SETTLE_SEC = 2.0        # 页面切换稳定等待
 EXIT_MAX_ESC = 3             # 退出时最多按几次 ESC
 EXIT_CHECK_SEC = 5           # 每次 ESC 后等主世界特征出现的超时
 
+# ── 商品列表翻页（2026-11-02）────────────────────────────────────────────
+# 兑换页的商品排成可滚动网格，同屏只有 2~3 行：崩铁余烬兑换实测可见「命运的足迹 /
+# 冒险记录 / 信用点 / 无生残刃…」，清单里的星轨专票/星轨通票在折叠区以下。
+# 一次整窗 OCR 看不到 → 被"看不到=已买过"吞掉，静默漏买。
+# 改成：当前视图定位不到就往下翻着找，翻遍列表仍没有才算"已买过"。
+SCROLL_STEP = -5                    # pyautogui.scroll 负值 = 向下滚
+SCROLL_SETTLE_SEC = 0.6             # 滚完等列表重绘
+SCROLL_MAX_PAGES = 8                # 最多往下翻几屏
+SCROLL_ANCHOR_DEFAULT = (0.60, 0.55)  # 滚轮落点（窗口比例）：商品网格中部
+
 # 已选中页签的亮度判据：选中态是亮色胶囊（绝区零黄底 / 崩铁白底），
 # 未选中态是暗底白字。实测 1919x1079：绝区零 145 vs 78，崩铁 188 vs 53。
 # 取区块尺寸按窗口比例换算，阈值可用 step.tab_selected_brightness 覆盖。
@@ -511,6 +521,124 @@ def _open_exchange_page(
     return False, last_reason or "未能进入目标页面"
 
 
+def _scroll_anchor_point(hwnd: int, anchor_frac) -> Optional[Tuple[int, int]]:
+    """滚轮落点的屏幕坐标（窗口相对比例 → 屏幕绝对坐标）。"""
+    try:
+        from .foreground_flow_runner import _window_rect
+
+        rect = _window_rect(hwnd)
+        if not rect:
+            return None
+        left, top, width, height = rect
+        fx, fy = float(anchor_frac[0]), float(anchor_frac[1])
+        if not (0.0 < fx < 1.0 and 0.0 < fy < 1.0):
+            return None
+        return (int(left + width * fx), int(top + height * fy))
+    except Exception as exc:  # noqa: BLE001 - 换算失败就当不能滚
+        LOGGER.debug("[每月兑换] 滚轮落点换算失败: %s", exc)
+        return None
+
+
+def _scroll_shop_list(
+    logger: logging.Logger,
+    hwnd: int,
+    amount: int,
+    anchor_frac,
+    stop_check: Optional[Callable[[], bool]] = None,
+) -> bool:
+    """在商品网格上滚一屏。返回是否成功滚动。"""
+    point = _scroll_anchor_point(hwnd, anchor_frac)
+    if not point:
+        return False
+    try:
+        from .foreground_flow_runner import _focus_window
+
+        _focus_window(hwnd)
+        pyautogui.moveTo(point[0], point[1])
+        pyautogui.scroll(amount)
+    except Exception as exc:  # noqa: BLE001 - 滚不动不影响主流程
+        logger.debug(f"[每月兑换] 滚动商品列表失败: {exc}")
+        return False
+    _sleep(SCROLL_SETTLE_SEC, stop_check)
+    return True
+
+
+def _list_signature(hwnd: int, anchor_frac) -> str:
+    """商品区粗哈希：判断滚轮到底有没有把列表滚动（取不到返回空串）。"""
+    try:
+        import hashlib
+
+        from .foreground_flow_runner import _window_rect
+
+        rect = _window_rect(hwnd)
+        if not rect:
+            return ""
+        left, top, width, height = rect
+        fx, fy = float(anchor_frac[0]), float(anchor_frac[1])
+        box = (
+            int(left + width * max(0.0, fx - 0.25)),
+            int(top + height * max(0.0, fy - 0.25)),
+            max(1, int(width * 0.5)),
+            max(1, int(height * 0.5)),
+        )
+        img = pyautogui.screenshot(region=box).convert("L").resize((32, 18))
+        return hashlib.md5(img.tobytes()).hexdigest()
+    except Exception as exc:  # noqa: BLE001 - 取不到指纹按"未知"处理
+        LOGGER.debug("[每月兑换] 取列表指纹失败: %s", exc)
+        return ""
+
+
+def _scroll_find_item(
+    logger: logging.Logger,
+    hwnd: int,
+    item: Dict,
+    scales,
+    confidences,
+    stop_check: Optional[Callable[[], bool]],
+    label: str,
+) -> Optional[Tuple[int, int]]:
+    """当前视图没有该商品时，往下翻着找（长列表页必备）。
+
+    2026-11-02 实锤：崩铁余烬兑换页同屏只有 2~3 行商品，证据图里能看到的只有
+    「命运的足迹 / 冒险记录 / 煤油以太 / 遗失碎金 / 信用点 / 无生残刃…」，
+    清单里的**星轨专票、星轨通票在折叠区以下**，一次整窗 OCR 根本看不到 →
+    被"看不到=已买过"吞掉，静默漏买。这里翻页找完，找不到再滚回顶部。
+
+    翻页是否真的滚动用列表区域截图指纹判断：像素没变说明这个页面滚不动，
+    立刻停止，别白等几轮 OCR。
+    """
+    from .zzz_monthly_shop import _locate_item
+
+    anchor = SCROLL_ANCHOR_DEFAULT
+    try:
+        before = _list_signature(hwnd, anchor)
+        for page in range(1, SCROLL_MAX_PAGES + 1):
+            if stop_check is not None and stop_check():
+                return None
+            if not _scroll_shop_list(logger, hwnd, SCROLL_STEP, anchor, stop_check):
+                logger.info(f"[{label}] 商品列表滚不动，停止翻页查找")
+                break
+            sig = _list_signature(hwnd, anchor)
+            if sig and before and sig == before:
+                logger.info(f"[{label}] 列表内容没变化，停止翻页查找")
+                break
+            if sig:
+                before = sig
+            center = _locate_item(logger, hwnd, item, scales, confidences, stop_check, label)
+            if center:
+                logger.info(f"[{label}] 翻到第 {page} 屏后找到商品 @ {center}")
+                # 不滚回去：返回的坐标马上要用来点击，回滚会点错位置
+                return center
+        # 没找到：滚回顶部，下一个商品从头找
+        for _ in range(SCROLL_MAX_PAGES):
+            if not _scroll_shop_list(logger, hwnd, -SCROLL_STEP, anchor, stop_check):
+                break
+        return None
+    except Exception as exc:  # noqa: BLE001 - 翻页兜底失败不能拖垮采购
+        logger.warning(f"[{label}] 翻页查找异常（已忽略）: {exc}")
+        return None
+
+
 def _buy_items(
     logger: logging.Logger,
     hwnd: int,
@@ -520,6 +648,7 @@ def _buy_items(
     scales,
     confidences,
     stop_check: Optional[Callable[[], bool]],
+    scroll_search: bool = True,
 ) -> Tuple[bool, List[str]]:
     """按清单逐项兑换。返回 (是否全部成功, 每项摘要)。
 
@@ -527,10 +656,14 @@ def _buy_items(
     中断该项剩余次数）；**模板与 OCR 都定位不到也按"已买过"处理**（用户 2026-11-01
     拍板：兑换页商品到月上限后就不展示了，看不到 ≠ 失败）；只有确认后弹窗不关
     才算真失败。
+
+    scroll_search=True 时，当前视图定位不到会先往下翻页找（长列表页必备），
+    翻遍列表仍没有才按"已买过"处理。
     """
     summaries: List[str] = []
     all_ok = True
     missing_count = 0
+    scroll_finder = _scroll_find_item if scroll_search else None
 
     for raw in items:
         if stop_check is not None and stop_check():
@@ -556,6 +689,7 @@ def _buy_items(
                 logger, hwnd, item, confirm_template,
                 scales, confidences, stop_check,
                 label=label,
+                scroll_finder=scroll_finder,
             )
             if result == BOUGHT:
                 bought += 1
@@ -655,6 +789,8 @@ def buy_monthly_exchange(
     - forbidden_texts: 错页签拦截词（如原神星辉兑换的宗室武器），命中即失败、不购买
     - confirm_template: 兑换确认弹窗的「确认」按钮模板
     - exit_marker_template: 买完后用于确认已回主世界的模板（主世界特征）
+    - item_scroll_search: 当前视图找不到商品时是否往下翻页找（默认开；关掉就是
+      旧行为——一次整窗 OCR，看不到即按已买过）
 
     返回 (是否成功, 摘要)。空清单也算成功（本月无采购需求），摘要写明「待定」。
     """
@@ -699,6 +835,7 @@ def buy_monthly_exchange(
 
     buy_ok, summaries = _buy_items(
         logger, hwnd, items, confirm_template, label, scales, confidences, stop_check,
+        scroll_search=bool(step.get("item_scroll_search", True)),
     )
     if not buy_ok and any("用户停止" in s for s in summaries):
         return False, "用户停止 | " + "，".join(summaries)

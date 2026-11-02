@@ -180,7 +180,13 @@ def record_failure(
                 sample = collect_ocr_sample(logger, hwnd=hwnd)
 
         image_name = ""
-        if save_image and hwnd:
+        if save_image:
+            # 没有窗口句柄时也抓（capture_failure_image 内部 hwnd=None → 全屏）：
+            # 2026-11-02 白荆「启动器『开始游戏』按钮未找到」就是卡在启动器阶段、
+            # 还没有游戏窗口句柄，旧的 `and hwnd` 判定导致这条失败**完全没有截图**，
+            # 事后无从判断启动器长什么样。启动器级失败只有全屏才看得见。
+            # 注意：给了 hwnd 但窗口已关/最小化时，capture_failure_image 仍会返回空串
+            # （不退化成全屏），避免把用户桌面存进证据目录。
             image_name = capture_failure_image(logger, hwnd=hwnd, tag=f"{flow_key}_{step}")
         prune_old_failure_images(logger)
 

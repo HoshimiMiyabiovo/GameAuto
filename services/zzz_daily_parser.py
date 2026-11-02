@@ -218,21 +218,37 @@ def parse_zzz_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
             })
 
     # 通用失败收录：KEY_TASKS 之外的执行失败（如 进入游戏/打开并登录游戏）
-    # 也要上卡，否则登录挂了卡片还是一片空白
-    seen_names = {t["task_name"] for t in subtasks}
+    # 也要上卡，否则登录挂了卡片还是一片空白。
+    #
+    # 口径修正（2026-11-02）：**以同一任务最后一次「执行成功/失败」为准**。
+    # 旧实现只扫「执行失败」行，等于把重试过程中的中间失败当成最终结果 →
+    # 「等待大世界画面」这种会先失败几次再成功的任务，从 2026-10-20 起每天都被
+    # 记成 failed（2026-11-02 实跑日志：12:12:25~32 连挂 6 次「未到达大世界」，
+    # 12:12:33 明明「执行成功 返回状态 大世界-普通」，卡片还是红叉）。
+    last_result: Dict[str, Dict[str, str]] = {}
     for line in run_lines:
-        fail_m = TASK_RESULT_RE.search(line)
-        if not fail_m or fail_m.group(2) != "失败":
+        res_m = TASK_RESULT_RE.search(line)
+        if not res_m:
             continue
-        fail_name = fail_m.group(1).strip()
-        if not fail_name or fail_name in seen_names or fail_name == "一条龙":
+        name = res_m.group(1).strip()
+        if not name or name == "一条龙":
             continue
+        last_result[name] = {
+            "status": "success" if res_m.group(2) == "成功" else "failed",
+            "message": res_m.group(3).strip(),
+        }
+    seen_names = {t["task_name"] for t in subtasks}
+    for fail_name, res in last_result.items():
+        if not fail_name or fail_name in seen_names:
+            continue
+        if res["status"] != "failed":
+            continue  # 成功的不上失败卡（KEY_TASKS 之外的成功项不入卡）
         seen_names.add(fail_name)
         subtasks.append({
             "task_key": fail_name,
             "task_name": fail_name,
             "status": "failed",
-            "message": fail_m.group(3).strip(),
+            "message": res["message"],
         })
 
     has_failed = any(t["status"] == "failed" for t in subtasks)

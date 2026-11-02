@@ -254,6 +254,7 @@ def run_case(step, game, fake, stop_after_clicks=None):
         "brightness": mx._tab_brightness,
         "visible": mx._visible_texts,
         "content": mx._content_markers_present,
+        "scroll_find": mx._scroll_find_item,
     }
     mx._locate = lambda hwnd, template, scales, confs, timeout, stop_check=None, interval=0.5: fake.locate_nav(template)
     mx._locate_ocr = lambda logger, hwnd, text, timeout, stop_check=None, interval=0.5: fake.ocr_nav(text)
@@ -272,6 +273,8 @@ def run_case(step, game, fake, stop_after_clicks=None):
         markers[0] if (fake.page == "shop" and fake.tab_selected and fake.content_ok and markers)
         else None
     )
+    # 翻页兜底会真的移动鼠标+滚轮，测试里必须 mock 掉（2026-11-02 新增）
+    mx._scroll_find_item = lambda *a, **k: None
     shop._locate = lambda hwnd, template, scales, confs, timeout, stop_check=None, interval=0.5: fake.locate_shop(template)
     shop._locate_ocr = lambda logger, hwnd, text, timeout, stop_check=None, interval=0.5: fake.ocr_shop(text)
     shop._wait_gone = lambda hwnd, template, scales, confs, timeout, stop_check=None, interval=0.5: fake.wait_gone(template)
@@ -297,6 +300,7 @@ def run_case(step, game, fake, stop_after_clicks=None):
         mx._tab_brightness = saved["brightness"]
         mx._visible_texts = saved["visible"]
         mx._content_markers_present = saved["content"]
+        mx._scroll_find_item = saved["scroll_find"]
     return ok, msg, fake, regions
 
 
@@ -549,8 +553,8 @@ for key in ("shop_entry_template", "tab_template", "confirm_template", "exit_mar
 
 hsr_cfg = _load_flow_config("HSR_MONTHLY")
 hsr_names = [s.get("name") for s in hsr_cfg["steps"]]
-check("崩铁步骤顺序：进入主界面 → 余烬兑换",
-      hsr_names == ["进入崩铁主界面", "余烬兑换每月兑换"], f"{hsr_names}")
+check("崩铁步骤顺序：进入主界面 → 余烬兑换 → 自塑尘脂合成",
+      hsr_names == ["进入崩铁主界面", "余烬兑换每月兑换", "自塑尘脂每月合成"], f"{hsr_names}")
 check("崩铁进入主界面复用 starrail_enter_main",
       hsr_cfg["steps"][0].get("action") == "starrail_enter_main", hsr_cfg["steps"][0].get("action"))
 hsr = load_step("HSR_MONTHLY", "余烬兑换每月兑换")

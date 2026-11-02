@@ -74,6 +74,18 @@ STAGE_MENU_REGION = (0.00, 0.55, 0.22, 0.92)
 DIALOG_REGION = (0.20, 0.15, 0.80, 0.88)
 EXCHANGE_GRID_REGION = (0.15, 0.10, 0.90, 0.78)
 BLANK_CONTINUE_POINT = (0.50, 0.82)
+# 奇迹之冠 hub 左上角返回箭头（参考图 ref_nikki_crown_hub_20261101.png 实测）
+CROWN_BACK_POINT = (0.031, 0.045)
+# 点「奇迹之冠搭配赛」的点击重试次数（2026-11-02：点一次没进去）
+CROWN_PAIR_CLICK_ATTEMPTS = 3
+# 「奇迹之冠搭配赛」文字本身不是按钮（2026-11-02 用户实锤：点文字没反应），
+# 真正可点的是文字**左上方**的多边形玻璃碎片。ref_nikki_crown_hub_20261101.png
+# 实测文字框 (369,645)-(695,690)，亮白碎片重心 (541,569)（像素 247,247,250），
+# 即文字中心上方约 2 个字高、x 几乎不变。
+# 偏移按文字框宽/高算（换分辨率自适应），算不出来时退固定比例。
+PAIR_CLICK_DX_RATIO = 0.03
+PAIR_CLICK_DY_RATIO = -2.2
+PAIR_FALLBACK_POINT = (0.28, 0.53)
 
 # 商品名 → 本月限购的相对位置（实测：名中心上方 0.18 窗高、右移 0.026 窗宽）
 LIMIT_DX = 0.026
@@ -166,6 +178,26 @@ def _press_key(key: str) -> None:
         raise FailSafeAborted(
             "PyAutoGUI 紧急停止已触发：鼠标位于屏幕左上角 (0,0)。"
         ) from exc
+
+
+def _focus_and_press(hwnd: int, key: str) -> None:
+    """聚焦游戏窗口，等它真正拿到前台后再按键。
+
+    SetForegroundWindow 是异步的：原实现 `_focus()` 后立刻 `pyautogui.press`
+    会把按键发给旧前台窗口（2026-11-02 17:31 连按 3 次 L 都没打开奇想日历，
+    截图却停在主世界的典型表现）。
+    """
+    import win32gui
+
+    _focus(hwnd)
+    time.sleep(0.35)
+    try:
+        if win32gui.GetForegroundWindow() != hwnd:
+            _focus(hwnd)
+            time.sleep(0.25)
+    except Exception:  # noqa: BLE001 - 前台查询失败不阻断按键
+        pass
+    _press_key(key)
 
 
 def _press_esc() -> None:
@@ -274,6 +306,10 @@ def _markers_present(items: List[Dict], markers, min_conf: float = 0.45) -> set:
 
 
 def _is_calendar_page(items: List[Dict]) -> bool:
+    # 标题「奇想日历」也算页面特征：正文特征（每日灵感/幻境挑战…）是艺术字，
+    # OCR 认不出来时靠标题兜底（2026-11-02 失败截图停在主界面就是这么丢的）
+    if _pick(items, (CALENDAR_TITLE,), min_conf=0.5):
+        return True
     return len(_markers_present(items, CALENDAR_MARKERS)) >= 2
 
 
@@ -601,18 +637,79 @@ def _buy_one(
 
 
 def _open_calendar(logger: logging.Logger, hwnd: int, stop_check=None) -> bool:
+    """按 L 打开奇想日历。
+
+    2026-11-02 事故：连按 3 次 L 都没识别到日历，失败截图却停在**主界面**——
+    L 是开关，第一次很可能已经打开了（日历正文是艺术字，OCR 没认出来），
+    再按 L 就是把它关掉，越按越回不到日历。
+    现在改成：认不出就先用 ESC 收起当前页，再按 L；并且页面判定把标题
+    「奇想日历」也算进去（正文特征认不出时的兜底）。
+    """
     for attempt in range(1, 4):
         if _stop(stop_check):
             return False
-        _focus(hwnd)
-        _press_key("l")
+        if _is_calendar_page(_ocr_full(logger, hwnd)):
+            logger.info("[无限暖暖·奇想日历] 已在奇想日历页")
+            return True
+        _focus_and_press(hwnd, "l")
         logger.info("[无限暖暖·奇想日历] 按 L 打开奇想日历（第 %s/3 次）", attempt)
         items = _wait_for(logger, hwnd, _is_calendar_page, timeout=6.0, stop_check=stop_check)
         if items:
             logger.info("[无限暖暖·奇想日历] 已进入奇想日历")
             return True
+        # 认不出当前页：先用 ESC 收起（别再按 L 把已经打开的日历关掉）
+        _focus(hwnd)
+        _press_esc()
+        time.sleep(0.8)
         _dismiss_continue_screens(logger, hwnd, stop_check, max_rounds=2)
     return False
+
+
+def _leave_crown_hub(logger: logging.Logger, hwnd: int, stop_check=None) -> bool:
+    """从奇迹之冠 hub 退回上一层（点左上角返回箭头）。
+
+    2026-11-02 实锤：搭配赛页点不进去时流程停在 hub，而 hub 是全屏 overlay，
+    ESC 关不掉 →「回主界面」失败 → 共鸣商店被整段跳过，晶石兑换入口也找不到
+    （左列菜单在搭配赛页才有）。hub 左上角有返回箭头，点它能退回奇想日历。
+    """
+    items = _ocr_full(logger, hwnd)
+    if not _pick(items, CROWN_HUB_MARKERS, min_conf=0.5):
+        return False
+    if not _window_rect(hwnd):
+        return False
+    _click_ratio(logger, hwnd, CROWN_BACK_POINT, "奇迹之冠左上角返回")
+    time.sleep(1.2)
+    after = _ocr_full(logger, hwnd)
+    left = not _pick(after, CROWN_HUB_MARKERS, min_conf=0.5)
+    logger.info("[无限暖暖·奇想日历] 退出奇迹之冠 hub：%s", "成功" if left else "未确认")
+    return left
+
+
+def _pair_click_point(pair: Dict, rect) -> Tuple[int, int]:
+    """「奇迹之冠搭配赛」的实际可点坐标：文字左上方的多边形碎片内部。
+
+    OCR 的 box 是截图局部坐标（宽高可用），center 是屏幕坐标；
+    文字中心点击不生效，向上偏移约 2.2 个文字高度才对上碎片
+    （参考图实测文字中心 (531,667) → 碎片重心 (541,569)）。
+    """
+    cx, cy = pair["center"]
+    box = pair.get("box")
+    if box:
+        try:
+            x1, y1, x2, y2 = (int(v) for v in box)
+            box_w = max(1, x2 - x1)
+            box_h = max(1, y2 - y1)
+            return (
+                int(cx + box_w * PAIR_CLICK_DX_RATIO),
+                int(cy + box_h * PAIR_CLICK_DY_RATIO),
+            )
+        except (TypeError, ValueError):
+            pass
+    left, top, width, height = rect
+    return (
+        int(left + width * PAIR_FALLBACK_POINT[0]),
+        int(top + height * PAIR_FALLBACK_POINT[1]),
+    )
 
 
 def _claim_pair_rewards(logger: logging.Logger, hwnd: int, stop_check=None) -> Tuple[int, str]:
@@ -641,17 +738,39 @@ def _claim_pair_rewards(logger: logging.Logger, hwnd: int, stop_check=None) -> T
     if not hub:
         _record_failure(logger, "奇迹之冠-页面", "点击后未进入奇迹之冠", hwnd)
         return 0, "未进入奇迹之冠"
-    pair = _pick(hub, (PAIR_ENTRY,), min_conf=0.5, region=_abs_region(rect, HUB_PAIR_REGION))
-    if not pair:
-        _record_failure(logger, "奇迹之冠搭配赛-入口", "奇迹之冠里未找到「奇迹之冠搭配赛」", hwnd, hub)
-        return 0, "未找到「奇迹之冠搭配赛」"
-    _click(pair["center"])
-    logger.info("[无限暖暖·奇想日历] 点击「奇迹之冠搭配赛」@ %s", pair["center"])
-    time.sleep(1.2)
-
-    stage = _wait_for(logger, hwnd, _is_stage_page, timeout=10.0, stop_check=stop_check)
+    # 点「奇迹之冠搭配赛」必须重试：2026-11-02 实锤，点击没生效（失败截图
+    # 20261101_122627_NikkiLauncher_晶石兑换-入口.jpg 仍停在奇迹之冠 hub 页），
+    # 后面「晶石兑换」左列入口自然找不到（那菜单只在搭配赛页才有）。
+    stage = None
+    for attempt in range(1, CROWN_PAIR_CLICK_ATTEMPTS + 1):
+        if _stop(stop_check):
+            return 0, "用户停止"
+        hub_items = _ocr_full(logger, hwnd)
+        pair = _pick(hub_items, (PAIR_ENTRY,), min_conf=0.5, region=_abs_region(rect, HUB_PAIR_REGION))
+        if not pair:
+            if attempt == 1:
+                _record_failure(logger, "奇迹之冠搭配赛-入口", "奇迹之冠里未找到「奇迹之冠搭配赛」", hwnd, hub_items)
+                return 0, "未找到「奇迹之冠搭配赛」"
+            break
+        target = _pair_click_point(pair, rect)
+        _click(target)
+        logger.info(
+            "[无限暖暖·奇想日历] 点击「奇迹之冠搭配赛」多边形 @ %s"
+            "（文字中心 %s，第 %s/%s 次）",
+            target, pair["center"], attempt, CROWN_PAIR_CLICK_ATTEMPTS,
+        )
+        time.sleep(1.5)
+        stage = _wait_for(logger, hwnd, _is_stage_page, timeout=12.0, stop_check=stop_check)
+        if stage:
+            break
+        logger.warning(
+            "[无限暖暖·奇想日历] 搭配赛页面未就绪，重试点击（第 %s/%s 次）",
+            attempt, CROWN_PAIR_CLICK_ATTEMPTS,
+        )
     if not stage:
         _record_failure(logger, "奇迹之冠搭配赛-页面", "搭配赛页面未就绪", hwnd)
+        # 退不出 hub 就回不去主界面 → 共鸣商店会被整段跳过，先自己退出来
+        _leave_crown_hub(logger, hwnd, stop_check=stop_check)
         return 0, "搭配赛页面未就绪"
 
     claimed = 0
@@ -784,8 +903,16 @@ def _exchange_crystals(logger: logging.Logger, hwnd: int, stop_check=None) -> st
     if not rect:
         return "窗口不可用，跳过晶石兑换"
     _dismiss_continue_screens(logger, hwnd, stop_check, max_rounds=2)
-    items = _ocr_full(logger, hwnd)
-    entry = _pick(items, (EXCHANGE_TITLE,), min_conf=0.5, region=_abs_region(rect, STAGE_MENU_REGION))
+    # 左列「晶石兑换」入口要轮询几次：搭配赛页刚切出来时左列菜单还在渲染，
+    # 一次 OCR 认不到就当"没有入口"，后面整段兑换都做不了。
+    entry = None
+    for attempt in range(1, 4):
+        items = _ocr_full(logger, hwnd)
+        entry = _pick(items, (EXCHANGE_TITLE,), min_conf=0.5, region=_abs_region(rect, STAGE_MENU_REGION))
+        if entry:
+            break
+        if attempt < 3:
+            time.sleep(1.2)
     if not entry:
         _record_failure(logger, "晶石兑换-入口", "搭配赛页未找到左侧「晶石兑换」", hwnd, items)
         return "未找到「晶石兑换」入口"
@@ -832,8 +959,7 @@ def _open_shop(logger: logging.Logger, hwnd: int, stop_check=None) -> bool:
     for attempt in range(1, 4):
         if _stop(stop_check):
             return False
-        _focus(hwnd)
-        _press_key("h")
+        _focus_and_press(hwnd, "h")
         logger.info("[无限暖暖·共鸣商店] 按 H 打开商城（第 %s/3 次）", attempt)
         items = _wait_for(logger, hwnd, _is_shop_page, timeout=6.0, stop_check=stop_check)
         if items:
@@ -983,6 +1109,21 @@ def _close_game_for_whimbox_restart(logger: logging.Logger) -> None:
         logger.warning("[无限暖暖·交接] 关闭游戏失败: %s", exc)
 
 
+def _back_to_main_for_shop(logger, hwnd, scales, confidences, stop_check=None) -> bool:
+    """回主界面（共鸣商店要从主界面按 H 进商城）。
+
+    ESC 回不去时，先试着退出奇迹之冠 hub（全屏 overlay，ESC 关不掉）再回一次：
+    2026-11-02 就是卡在 hub 上 → 回不去主界面 → 共鸣商店整段被跳过，
+    晶石兑换和共鸣商店两个每月清单一件都没买。
+    """
+    if _return_to_main(logger, hwnd, scales, confidences, stop_check=stop_check):
+        return True
+    if _leave_crown_hub(logger, hwnd, stop_check=stop_check):
+        if _return_to_main(logger, hwnd, scales, confidences, stop_check=stop_check):
+            return True
+    return False
+
+
 def _ensure_main_or_close(logger: logging.Logger, hwnd: int, scales, confidences, stop_check=None) -> str:
     """交接前检查：主界面 → main；回不去 → 关游戏 → closed；用户停止 → stopped。"""
     if _stop(stop_check):
@@ -1036,7 +1177,7 @@ def _run_flow_inner(
         _, claim_note = _claim_pair_rewards(logger, hwnd, stop_check=stop_check)
         notes.append(claim_note)
         notes.append(_exchange_crystals(logger, hwnd, stop_check=stop_check))
-        if _return_to_main(logger, hwnd, scales, confidences, stop_check=stop_check):
+        if _back_to_main_for_shop(logger, hwnd, scales, confidences, stop_check=stop_check):
             notes.append(_run_resonance_shop(logger, hwnd, stop_check=stop_check))
         else:
             notes.append("未回到主界面，跳过共鸣商店")
