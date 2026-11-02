@@ -19,7 +19,7 @@ from game_auto.runtime.foreground_flow_runner import (
     _match_template_cv2_once,
 )
 
-TEMPLATES = PROJECT_ROOT / "模板"
+TEMPLATES = PROJECT_ROOT / "assets" / "templates"
 SHOT_DIR = Path(r"C:/Users/admin/Pictures/Screenshots")
 SHOTS = {
     "menu": SHOT_DIR / "屏幕截图 2026-10-21 225210.png",

@@ -73,7 +73,7 @@
 
 ## 关键设计
 - **坐标策略**：录制时同时保存屏幕绝对坐标 `(x,y)` 与目标窗口相对坐标 `(rel_x,rel_y)`。回放优先用窗口相对坐标（当前窗口左上角 + rel，**窗口移动也不怕**），找不到目标窗口则回退绝对坐标（双保险）。
-- **录制**：`ClickRecorder` 用 pynput 全局鼠标钩子监听点击（只记按下），按窗口标题关键字过滤（默认仅录该窗口内点击），按 **ESC / q** 停止，保存为 `click_sequences/<name>.json`。
+- **录制**：`ClickRecorder` 用 pynput 全局鼠标钩子监听点击（只记按下），按窗口标题关键字过滤（默认仅录该窗口内点击），按 **ESC / q** 停止，保存为 `assets/click_sequences/<name>.json`。
 - **回放**：`ClickSequencePlayer.play()` 按序 `pyautogui.click`，支持 `loop` 循环、`min_gap/max_gap` 间隔裁剪、`default_gap` 兜底、`dry_run`（只打印坐标不真点）、`stop_event` 线程安全中止；启用 `pyautogui.FAILSAFE`（鼠标甩到屏幕角落即停）。
 - **存储目录**：`settings/paths.CLICK_SEQUENCES_DIR` = `BASE_DIR/click_sequences`（新增常量）。
 

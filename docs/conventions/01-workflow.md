@@ -85,7 +85,9 @@
   - `data/artifacts/`：失败截图、白荆验证图、本地真机脚本；
   - `data/cache/`：第三方配置备份、各接口缓存、月度重跑队列；
   - `data/workflow.sqlite3`：本机偏好与运行数据库（含 WAL 文件）。
-- 根目录只保留源码、资源（`模板/`、`click_sequences/`）、配置与文档。
+- 根目录只保留 Python 包、`assets/`（模板与点击序列）、`scripts/`（启动脚本）、配置与文档。
+  资源路径统一由 `settings/paths.py` 的 `ASSETS_DIR` / `TEMPLATES_DIR` / `CLICK_SEQUENCES_DIR`
+  给出；新增模板写到 `assets/templates/`，flow 配置里写 `assets/templates/xxx.png` 相对路径。
 - 一次性迁移脚本：`tools/migrate_data_layout_20261029.py`（关闭 GUI/CLI 后运行；
   会同步把 app_config 的 `log.dir` 改成 `data/logs`，并修正本地 artifacts 脚本的相对路径）。
 - 本文旧段落里出现的 `logs/…`、`artifacts/…`、`storage/cache/…`、根目录

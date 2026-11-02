@@ -6,7 +6,7 @@
 - ``src/zzz_od/auto_battle/auto_battle_dodge_context.py`` → 闪光闪避判定
   （class_idx 1=红闪光→闪避，2=黄闪光→格挡）
 - ``assets/game_data/screen_info/battle.yml`` → 下面这些识别区域（1920×1080 基准）
-- ``assets/template/battle/btn_*.png`` → 按钮模板（已复制到 ``模板/绝区零-战斗-*.png``）
+- ``assets/template/battle/btn_*.png`` → 按钮模板（已复制到 ``assets/templates/绝区零-战斗-*.png``）
 - ``src/zzz_od/auto_battle/auto_battle_context.py`` → 「普攻按钮在=在战斗」
   「禁用图标=按键被封」这两条判定
 
@@ -54,15 +54,15 @@ AREA_CHAIN_1 = (479, 828, 597, 946)            # 连携技-1（屏幕中偏左�
 AREA_CHAIN_2 = (1322, 828, 1440, 946)          # 连携技-2（屏幕中偏右）
 
 # 模板（相对项目根目录）
-TPL_NORMAL_ATTACK = "模板/绝区零-战斗-普通攻击.png"
-TPL_BAN_NORMAL = "模板/绝区零-战斗-普攻禁用.png"
-TPL_BAN_ULTIMATE = "模板/绝区零-战斗-大招禁用.png"
-TPL_SPECIAL_1 = "模板/绝区零-战斗-特殊技1.png"
-TPL_SPECIAL_2 = "模板/绝区零-战斗-特殊技2.png"
-TPL_ULTIMATE_1 = "模板/绝区零-战斗-大招1.png"
-TPL_ULTIMATE_2 = "模板/绝区零-战斗-大招2.png"
-TPL_DODGE = "模板/绝区零-战斗-闪避.png"
-TPL_INTERACT = "模板/绝区零-战斗-交互.png"
+TPL_NORMAL_ATTACK = "assets/templates/绝区零-战斗-普通攻击.png"
+TPL_BAN_NORMAL = "assets/templates/绝区零-战斗-普攻禁用.png"
+TPL_BAN_ULTIMATE = "assets/templates/绝区零-战斗-大招禁用.png"
+TPL_SPECIAL_1 = "assets/templates/绝区零-战斗-特殊技1.png"
+TPL_SPECIAL_2 = "assets/templates/绝区零-战斗-特殊技2.png"
+TPL_ULTIMATE_1 = "assets/templates/绝区零-战斗-大招1.png"
+TPL_ULTIMATE_2 = "assets/templates/绝区零-战斗-大招2.png"
+TPL_DODGE = "assets/templates/绝区零-战斗-闪避.png"
+TPL_INTERACT = "assets/templates/绝区零-战斗-交互.png"
 
 # 闪光分类器（照抄 OneDragon 的模型目录结构；5.7MB 放 data/ 不进版本库）
 FLASH_MODEL_DIR = "data/models/flash_classifier/yolov8n-640-flash-20250921"

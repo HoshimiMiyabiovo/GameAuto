@@ -645,7 +645,7 @@ def _max_match_score(tpl_path, img_path):
 
 
 ART = PROJECT_ROOT / "data" / "artifacts"
-confirm_tpl = PROJECT_ROOT / "模板" / "原神-兑换确认.png"
+confirm_tpl = PROJECT_ROOT / "assets" / "templates" / "原神-兑换确认.png"
 old_page = ART / "ref_genshin_exchange_shop_20261025.png"
 selected_page = ART / "ref_genshin_stardust_20261101.png"
 dialog_img = ART / "ref_genshin_stardust_dialog_20261101.png"
@@ -685,7 +685,7 @@ else:
 zzz_page = ART / "ref_zzz_signal_resonance_20261101.png"
 zzz_old = ART / "ref_zzz_signal_exchange_shop_20261025.png"
 zzz_dialog = ART / "ref_zzz_signal_resonance_dialog_20261101.png"
-zzz_confirm = PROJECT_ROOT / "模板" / "绝区零-商店-确认.png"
+zzz_confirm = PROJECT_ROOT / "assets" / "templates" / "绝区零-商店-确认.png"
 if zzz_page.exists() and zzz_old.exists():
     zzz_new_texts = _ocr_texts(zzz_page)
     zzz_old_texts = _ocr_texts(zzz_old)
@@ -708,7 +708,7 @@ else:
 hsr_page = ART / "ref_starrail_ember_20261101.png"
 hsr_old = ART / "ref_starrail_exchange_shop_20261025.png"
 hsr_dialog = ART / "ref_starrail_ember_dialog_20261101.png"
-hsr_confirm = PROJECT_ROOT / "模板" / "崩铁-兑换确认.png"
+hsr_confirm = PROJECT_ROOT / "assets" / "templates" / "崩铁-兑换确认.png"
 if hsr_page.exists() and hsr_old.exists():
     hsr_new_texts = _ocr_texts(hsr_page)
     hsr_old_texts = _ocr_texts(hsr_old)

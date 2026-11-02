@@ -75,7 +75,7 @@ if len(steps) == 7:
     check("步骤2 模板文件存在", os.path.isfile(tpl), tpl)
     check("步骤2 超时 600s 且回退上一步重试", s1.get("timeout_sec") == 600 and s1.get("on_fail") == "retry_prev" and s1.get("max_attempts") == 3)
 
-    candidates = _resolve_target_text_candidates("模板\\绝区零-主界面-电台.png", "星期")
+    candidates = _resolve_target_text_candidates("assets/templates\\绝区零-主界面-电台.png", "星期")
     check("OCR 候选包含「星期」", "星期" in candidates, str(candidates))
 
     # 采购步骤：确认模板 + 两组商品

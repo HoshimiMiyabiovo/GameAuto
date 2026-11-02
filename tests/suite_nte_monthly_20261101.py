@@ -54,7 +54,7 @@ def main():
           [s.get("action") for s in steps[:6]])
 
     print("[2] 模板就位")
-    for rel in ("模板/异环-商城入口.png", "模板/异环-购买确认.png"):
+    for rel in ("assets/templates/异环-商城入口.png", "assets/templates/异环-购买确认.png"):
         check(f"{rel} 存在", (PROJECT_ROOT / rel).is_file(), rel)
 
     print("[3] 兑换清单与坐标")
@@ -116,7 +116,7 @@ def main():
             with Image.open(path) as im:
                 return cv2.cvtColor(np.asarray(im.convert("RGB")), cv2.COLOR_RGB2GRAY)
 
-        tpl = _gray(PROJECT_ROOT / "模板/异环-购买确认.png")   # PIL 读中文路径，别用 cv2.imread
+        tpl = _gray(PROJECT_ROOT / "assets/templates/异环-购买确认.png")   # PIL 读中文路径，别用 cv2.imread
         if ref_dialog.is_file():
             dialog = _gray(ref_dialog)
             r = cv2.matchTemplate(dialog, tpl, cv2.TM_CCOEFF_NORMED)
@@ -136,8 +136,8 @@ def main():
 
         confs = (0.9, 0.85, 0.8)
         shot = _Image.open(ref_list)
-        red_tpl = _Image.open(PROJECT_ROOT / "模板/异环-质感骰子.png")
-        blue_tpl = _Image.open(PROJECT_ROOT / "模板/异环-捏造骰子.png")
+        red_tpl = _Image.open(PROJECT_ROOT / "assets/templates/异环-质感骰子.png")
+        blue_tpl = _Image.open(PROJECT_ROOT / "assets/templates/异环-捏造骰子.png")
         hit = _match_template_cv2_once(shot, red_tpl, confs, use_color=True)
         check("红骰子彩色定位命中", hit is not None, hit)
 

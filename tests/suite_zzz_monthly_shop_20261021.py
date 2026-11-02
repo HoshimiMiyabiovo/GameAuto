@@ -144,22 +144,22 @@ def run_case(step, fake, stop_after_clicks=None):
 
 
 STEP = {
-    "confirm_template": "模板\\绝区零-商店-确认.png",
+    "confirm_template": "assets/templates\\绝区零-商店-确认.png",
     "shop_groups": [
         {
             "name": "哨站后勤",
-            "tab_selected_template": "模板\\绝区零-商店-哨站后勤页签.png",
+            "tab_selected_template": "assets/templates\\绝区零-商店-哨站后勤页签.png",
             "items": [
-                {"name": "原装母带", "template": "模板\\绝区零-商店-原装母带.png", "count": 2},
-                {"name": "日常业绩", "template": "模板\\绝区零-商店-日常业绩.png", "count": 10},
+                {"name": "原装母带", "template": "assets/templates\\绝区零-商店-原装母带.png", "count": 2},
+                {"name": "日常业绩", "template": "assets/templates\\绝区零-商店-日常业绩.png", "count": 10},
             ],
         },
         {
             "name": "协会物资",
-            "tab_template": "模板\\绝区零-商店-协会物资页签.png",
+            "tab_template": "assets/templates\\绝区零-商店-协会物资页签.png",
             "items": [
-                {"name": "邦布券", "template": "模板\\绝区零-商店-邦布券.png", "count": 5},
-                {"name": "仓鼠笼访问器", "template": "模板\\绝区零-商店-仓鼠笼访问器.png", "ocr_text": "仓鼠笼访问器", "count": 1},
+                {"name": "邦布券", "template": "assets/templates\\绝区零-商店-邦布券.png", "count": 5},
+                {"name": "仓鼠笼访问器", "template": "assets/templates\\绝区零-商店-仓鼠笼访问器.png", "ocr_text": "仓鼠笼访问器", "count": 1},
             ],
         },
     ],
@@ -206,7 +206,7 @@ print("== 用例4：模板与 OCR 都找不到仓鼠笼访问器（按本月已�
 step_missing_tpl = copy.deepcopy(step_norm)
 for _it in step_missing_tpl["shop_groups"][1]["items"]:
     if _it.get("name") == "仓鼠笼访问器":
-        _it["template"] = "模板\\__not_exist__.png"
+        _it["template"] = "assets/templates\\__not_exist__.png"
         _it["ocr_text"] = "仓鼠笼访问器"
 fake = FakeGame(ocr_missing_items={"仓鼠笼访问器"})
 ok, msg, n_clicks = run_case(step_missing_tpl, fake)

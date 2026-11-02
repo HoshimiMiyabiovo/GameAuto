@@ -13,3 +13,5 @@
 - `ui/bridge.py` 拆为 `ui/bridge_views/` 按视图 mixin（bridge 745 行，各文件均 <1000 行）。
 - 文档：AGENTS.md 拆为 `docs/conventions/` 索引 + 8 篇；原 overview 技术说明归档，本文件改作 changelog。
 - 修复拆分后 mixin 内相对导入层级（`.bridge_backends` → `..bridge_backends`），并清理 bridge 无用导入。
+- 根目录整理：`模板/` → `assets/templates/`、`click_sequences/` → `assets/click_sequences/`、`start/`+`launchers/` → `scripts/`；模板路径与本地 flow/app 配置一次性迁移。
+- 视图回收套件改为轮询等待释放（离屏首次编译 1-2s 时固定 0.75s 断言会误报）。

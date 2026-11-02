@@ -319,10 +319,10 @@ def case_config():
     actions = [s.get("action") for s in steps]
     check("步骤含 zzz_notorious_hunt", "zzz_notorious_hunt" in actions, actions)
     check("开局复用点击进入游戏", actions[0] == "click_template", actions[:3])
-    tpl = PROJECT_ROOT / "模板/绝区零-主界面-电台.png"
+    tpl = PROJECT_ROOT / "assets/templates/绝区零-主界面-电台.png"
     check("主界面模板存在", tpl.is_file(), tpl)
     for name in ("绝区零-战斗-普通攻击.png", "绝区零-战斗-特殊技1.png", "绝区零-战斗-大招1.png"):
-        check(f"战斗模板 {name} 存在", (PROJECT_ROOT / "模板" / name).is_file())
+        check(f"战斗模板 {name} 存在", (PROJECT_ROOT / "assets" / "templates" / name).is_file())
 
 
 def case_rotation():

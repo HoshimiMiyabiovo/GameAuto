@@ -24,7 +24,9 @@ TOOLS_DIR = BASE_DIR / "tools"
 TESSERACT_DIR = TOOLS_DIR / "tesseract"
 TESSERACT_EXE = TESSERACT_DIR / "tesseract.exe"
 TESSDATA_DIR = TESSERACT_DIR / "tessdata"
-TEMPLATES_DIR = BASE_DIR / "模板"
+# 资源目录：图像模板与固定点击序列（相对代码，随仓库迁移）
+ASSETS_DIR = BASE_DIR / "assets"
+TEMPLATES_DIR = ASSETS_DIR / "templates"
 ARTIFACTS_DIR = DATA_DIR / "artifacts"
 OCR_DEBUG_DIR = ARTIFACTS_DIR / "ocr_debug"
 FLOW_CONFIG_PATH = BASE_DIR / "flow_configs.json"
@@ -46,7 +48,7 @@ def ensure_flow_config_path() -> Path:
     return FLOW_CONFIG_PATH
 WORKFLOW_DB_PATH = DATA_DIR / "workflow.sqlite3"
 # 固定点击序列（录制/回放）存储目录
-CLICK_SEQUENCES_DIR = BASE_DIR / "click_sequences"
+CLICK_SEQUENCES_DIR = ASSETS_DIR / "click_sequences"
 # 已集成进一条龙的序列，禁止在 GUI 误删（白荆回廊日常/验证/周常）
 PROTECTED_CLICK_SEQUENCES = frozenset({
     "白荆回廊-日常",

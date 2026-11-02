@@ -228,7 +228,7 @@ def case_limit_template():
         ok, msg = hrc.craft_self_modeling_resin(
             LOG,
             1,
-            base_step(limit_template="模板\\崩铁-自塑尘脂-已达上限.png"),
+            base_step(limit_template="assets/templates\\崩铁-自塑尘脂-已达上限.png"),
             scales=[1.0],
             confidences=[0.8],
         )
@@ -365,7 +365,7 @@ def case_config():
 def case_template_self_match():
     print("[14] 「已达上限」模板自匹配")
     ref = PROJECT_ROOT / "data/artifacts/ref_starrail_resin_synth_20261101.png"
-    tpl = PROJECT_ROOT / "模板/崩铁-自塑尘脂-已达上限.png"
+    tpl = PROJECT_ROOT / "assets/templates/崩铁-自塑尘脂-已达上限.png"
     if not (ref.is_file() and tpl.is_file()):
         print("  SKIP 缺少参考截图")
         return

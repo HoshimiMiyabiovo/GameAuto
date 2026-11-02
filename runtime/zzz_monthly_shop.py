@@ -13,7 +13,7 @@
   （点文字中心，商品卡整卡为热区），用于暂无模板图的新商品
 
 模板路径统一经 _abs_template 锚定到项目根目录（与 _normalize_flow_paths 同规则），
-flow 配置里写相对路径「模板\\xxx.png」即可。
+flow 配置里写相对路径「assets/templates\\xxx.png」即可。
 """
 
 from __future__ import annotations

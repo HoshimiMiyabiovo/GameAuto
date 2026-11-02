@@ -95,12 +95,25 @@ def main():
     wait_ever()
     check("首次进入 daily 已加载", ever() is True, ever())
 
+    def wait_ever_value(expected: bool, timeout: float = 2.5) -> bool:
+        """轮询等待标记变成 expected。
+
+        QML 首次加载/编译耗时波动大（离屏软件渲染可到 1~2s），固定 pump
+        会误报；这里保留「延迟未到不释放」的语义，但给释放留足余量。
+        """
+        end = time.time() + timeout
+        while time.time() < end:
+            app.processEvents()
+            if ever() is expected:
+                return True
+            time.sleep(0.005)
+        return ever() is expected
+
     bridge.currentView = "gacha"
     pump(app, 0.15)
     check("切走 0.15s（<400ms）仍保留", ever() is True, ever())
 
-    pump(app, 0.6)
-    check("切走 0.75s（>400ms）已释放", ever() is False, ever())
+    check("切走超过延迟后已释放", wait_ever_value(False), ever())
 
     print("[3] 切回能重建")
     bridge.currentView = "daily"
@@ -113,8 +126,7 @@ def main():
     pump(app, 1.0)
     check("isRunning=True 时保留", ever() is True, ever())
     bridge._is_running = False
-    pump(app, 0.8)
-    check("isRunning=False 后释放", ever() is False, ever())
+    check("isRunning=False 后释放", wait_ever_value(False), ever())
 
     print("[5] delay<=0 关闭回收")
     root.setProperty("viewReleaseDelayMs", 0)

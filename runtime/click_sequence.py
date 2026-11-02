@@ -584,7 +584,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     rp.add_argument("name", help="序列名称")
     rp.add_argument("--win", default=None, help="目标窗口标题关键字（只录该窗口内点击并算相对坐标）")
     rp.add_argument("--note", default="", help="备注")
-    rp.add_argument("--dir", default=None, help="存储目录（默认 click_sequences/）")
+    rp.add_argument("--dir", default=None, help="存储目录（默认 assets/click_sequences/）")
 
     pp = sub.add_parser("play", help="回放序列")
     pp.add_argument("name", help="序列名称")

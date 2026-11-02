@@ -64,6 +64,6 @@ tools/flet/
 tools/tesseract-installer.exe
 
 # 受保护点击序列备份（运行时生成，用于误删恢复）
-click_sequences/.protected_backup/
+assets/click_sequences/.protected_backup/
 # 终末地森空岛查询结果本地缓存（含用户游戏数据，不入库）
 storage/cache/

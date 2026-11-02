@@ -47,7 +47,7 @@ def main():
         t0 = __import__("time").time()
         success, reason = ffr.confirm_disappear(
             logger=LOG, hwnd=1, step_name="延迟消失",
-            template="模板\\x.png", target_text="领取",
+            template="assets/templates\\x.png", target_text="领取",
             wait_time=3, timeout_sec=8, confirm_templates=[],
             scales=[1.0], confidences=[0.9], enable_ocr=False,
         )
@@ -60,7 +60,7 @@ def main():
         ffr._check_element_exists = FakeClock([True])
         success, reason = ffr.confirm_disappear(
             logger=LOG, hwnd=1, step_name="永不消失",
-            template="模板\\x.png", target_text="领取",
+            template="assets/templates\\x.png", target_text="领取",
             wait_time=3, timeout_sec=2, confirm_templates=[],
             scales=[1.0], confidences=[0.9], enable_ocr=False,
         )
@@ -72,8 +72,8 @@ def main():
         ffr._wait_any_template = lambda *a, **k: True
         success, reason = ffr.confirm_disappear(
             logger=LOG, hwnd=1, step_name="消失且确认模板",
-            template="模板\\x.png", target_text="领取",
-            wait_time=3, timeout_sec=8, confirm_templates=["模板\\done.png"],
+            template="assets/templates\\x.png", target_text="领取",
+            wait_time=3, timeout_sec=8, confirm_templates=["assets/templates\\done.png"],
             scales=[1.0], confidences=[0.9], enable_ocr=False,
         )
         check("消失+确认模板 → 成功", success is True)
@@ -83,8 +83,8 @@ def main():
         ffr._wait_any_template = lambda *a, **k: False
         success, reason = ffr.confirm_disappear(
             logger=LOG, hwnd=1, step_name="消失无确认模板",
-            template="模板\\x.png", target_text="领取",
-            wait_time=3, timeout_sec=8, confirm_templates=["模板\\done.png"],
+            template="assets/templates\\x.png", target_text="领取",
+            wait_time=3, timeout_sec=8, confirm_templates=["assets/templates\\done.png"],
             scales=[1.0], confidences=[0.9], enable_ocr=False,
         )
         check("消失但确认模板缺失 → 失败", success is False)
@@ -94,7 +94,7 @@ def main():
         t0 = __import__("time").time()
         success, reason = ffr.confirm_disappear(
             logger=LOG, hwnd=1, step_name="立即消失",
-            template="模板\\x.png", target_text="领取",
+            template="assets/templates\\x.png", target_text="领取",
             wait_time=3, timeout_sec=30, confirm_templates=[],
             scales=[1.0], confidences=[0.9], enable_ocr=False,
         )

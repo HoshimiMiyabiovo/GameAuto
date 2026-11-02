@@ -14,7 +14,7 @@
 日常任务（2026-10-18 起重构）：不再回放固定坐标序列，改为视觉版流程
 （见 runtime/baijing_daily.py）：主界面 → 点右侧「任务」按钮（OCR 优先+
 模板兜底）→ 日常任务列表 → 一键/逐个领取 → 关闭列表回主界面。
-验证 / 周常仍为固定点击序列回放（click_sequences/白荆回廊-*.json）。
+验证 / 周常仍为固定点击序列回放（assets/click_sequences/白荆回廊-*.json）。
 
 说明：
 - 启动器可执行文件：Seed_OB_Prod.exe（位于版本目录 1.1.1.7 下）
@@ -1207,7 +1207,7 @@ def _maybe_run_weekly(logger: logging.Logger, hwnd: Optional[int], stop_check=No
     """每周执行一次周常：俱乐部商店「全量购买」（2026-10-18 起视觉版）。
 
     视觉版跑不通（未处于主界面 / 商店页没扫到商品且状态异常）时回退旧的固定坐标
-    序列 click_sequences/白荆回廊-每周商店购买.json，保证每周至少还能买一次。
+    序列 assets/click_sequences/白荆回廊-每周商店购买.json，保证每周至少还能买一次。
     """
     try:
         from ..storage.workflow_db import WorkflowDB

@@ -1,2 +1,2 @@
 @echo off
-call "%~dp0start\00_START_FLET_ADMIN.bat"
+call "%~dp0scripts\start\00_START_FLET_ADMIN.bat"

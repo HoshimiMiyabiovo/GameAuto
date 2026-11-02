@@ -40,7 +40,7 @@ except Exception as exc:
 
 # 2. 合成底图模拟不同渲染分辨率：屏幕图标与模板同比例缩放
 #    （1080p 屏上图标 52x52 用 scale=1.0 匹配；1440p 屏上图标 78x78 用 scale=1.5 匹配）
-tpl_path = PROJECT_ROOT / "模板" / "绝区零-主界面-电台.png"
+tpl_path = PROJECT_ROOT / "assets" / "templates" / "绝区零-主界面-电台.png"
 tpl = _get_cached_template(str(tpl_path))
 check("模板可加载", tpl is not None)
 

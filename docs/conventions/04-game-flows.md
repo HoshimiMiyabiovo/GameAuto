@@ -11,7 +11,7 @@ This file mirrors important repository-level development notes inside the projec
 - **链路 A（每月一次）**：`ZzzMonthlyFlow` **已删除独立任务**（2026-11-01），现在由每日一条龙在绝区零日常跑完后自动触发 `_run_pending_monthly_flow` → `run_zzz_monthly_background` → `run_flow("ZZZ_MONTHLY")`（flow_configs.json）。exe 走 `exe_from_app: "ZenlessZoneZero"` 从 app_config 取游戏本体。
 - **链路 B（每日一条龙）**：`execute_task("ZenlessZoneZero")` 直接拉 `OneDragon ScriptChainer Runner.exe --chain 1`，**不经过 ZZZ_MONTHLY**，进主界面由 OneDragon 自己的「进入游戏序章」节点完成；本项目只监控 `D:\down\ZZZ\ZenlessZoneZero-OneDragon\.log\log.txt` 并用 `services/zzz_daily_parser.py` 出卡片。
 
-**「点击进入游戏」≠ 进入主界面**：ZZZ_MONTHLY 第一步（OCR 点"点击进入游戏"）只过客户端登录界面，之后还要 loading（OneDragon 的状态文本：加载配置数据中/版本校对中/登录游戏服务器中/登录成功，最长各有时限）。2026-10-21 已在第一步后加第二步「等待进入主界面」：`wait_template` 等大世界特征——模板 `模板\绝区零-主界面-电台.png`（52x52 右侧电台图标，**复制自 OneDragon `assets/template/normal_world/map/raw.png`，GPL-3.0 本地自用**）+ OCR 兜底「星期」（OneDragon 同画面文字特征，pc_rect 201,38-270,86）；timeout 600s、`on_fail: retry_prev`（客户端内可能还有第二层进入游戏按钮，回退上一步重点）、最多 3 轮。
+**「点击进入游戏」≠ 进入主界面**：ZZZ_MONTHLY 第一步（OCR 点"点击进入游戏"）只过客户端登录界面，之后还要 loading（OneDragon 的状态文本：加载配置数据中/版本校对中/登录游戏服务器中/登录成功，最长各有时限）。2026-10-21 已在第一步后加第二步「等待进入主界面」：`wait_template` 等大世界特征——模板 `assets/templates\绝区零-主界面-电台.png`（52x52 右侧电台图标，**复制自 OneDragon `assets/template/normal_world/map/raw.png`，GPL-3.0 本地自用**）+ OCR 兜底「星期」（OneDragon 同画面文字特征，pc_rect 201,38-270,86）；timeout 600s、`on_fail: retry_prev`（客户端内可能还有第二层进入游戏按钮，回退上一步重点）、最多 3 轮。
 
 **踩坑记录**：项目匹配器是 `cv2.matchTemplate` TM_CCOEFF_NORMED 灰度单尺度取全局最大值，**不支持 mask**——直接套 OneDragon 带背景的 raw.png 即可（图标图案对比强烈，1080p 自匹配 1.0），但阈值别高于 0.8；match_scales 已补 1.5/0.67 覆盖 2K/低分辨率渲染。验证脚本：`artifacts/test_zzz_monthly_main_screen_20261021.py`（配置静态）、`artifacts/test_zzz_main_screen_match_20261021.py`（合成图多尺度匹配 + 导入链）。主界面检测失败时 `record_failure` 会自动截图+OCR 快照落库，先看 `tools/flow_failure_report.py` 聚合再改。
 
@@ -102,14 +102,14 @@ This file mirrors important repository-level development notes inside the projec
   - 崩铁：星芒兑换的五星光锥「银河铁道之夜 / 时节不居 / 但战斗还未结束 / 无可取代的东西 / 以世界之名」**一定要消失**（用户 2026-10-25 原话），实测这五个名字在 1919x1079 截图上 conf 0.74-0.87 全部可识别；截图里还能看到「制胜的瞬间 / 如泥酣眠」，用户只点名五件，**别自行加词**（要加先问）。
   - 原神：宗室长剑/大剑/猎枪/秘法录/长弓（星辉兑换页实测 conf 0.71-0.81 全部可识别）。
   - OCR 失败只告警不拦截（页签模板/亮度已是第一道闸）；拦截只在「有商品要买」时执行，空清单不打开商店。
-- **导航定位**：绝区零商城入口走模板 `模板/绝区零-商城入口.png`（24HOUR 图标，主菜单 1.000 / 商城页 0.476）+ OCR「商城」（0.67）；「信源清单」纯 OCR（黄色选中行与其它导航行同款，模板区分度不够，选中态 OCR 0.73）；页签模板 `绝区零-信号残响页签.png`（1.000 / 主菜单 0.555）+ OCR「信号残响」（0.71-0.80）。
+- **导航定位**：绝区零商城入口走模板 `assets/templates/绝区零-商城入口.png`（24HOUR 图标，主菜单 1.000 / 商城页 0.476）+ OCR「商城」（0.67）；「信源清单」纯 OCR（黄色选中行与其它导航行同款，模板区分度不够，选中态 OCR 0.73）；页签模板 `绝区零-信号残响页签.png`（1.000 / 主菜单 0.555）+ OCR「信号残响」（0.71-0.80）。
 - **绝区零信号残响清单（2026-11-01 用户确认）**：抽卡道具 **加密母带 ×5、原装母带 ×5**
   （月剩余 5/5、单价 90，合计 900）；储值电卡/芯片/认证章一律不买。
   **信号余波页也有同名母带**（2026-10-25 旧参考图实测：加密母带/原装母带都在），
   不能用商品名判页签：`tab_content_markers=["储值电卡"]` 做内容强校验（储值电卡只在
   信号残响页，OCR 0.80；信号余波页没有），看不到就整步失败、不购买，购买前再复核；
   原页签模板/亮度保留作无内容标记时的兜底；硫磺石等 `forbidden_texts` 仍作第二道闸。
-  确认模板 `模板/绝区零-商店-确认.png` 在新弹窗上 1.000、无弹窗商店页 0.659
+  确认模板 `assets/templates/绝区零-商店-确认.png` 在新弹窗上 1.000、无弹窗商店页 0.659
   （生效阈值 0.8）。参考图 `data/artifacts/ref_zzz_signal_resonance_20261101.png` /
   `ref_zzz_signal_resonance_dialog_20261101.png`。
 - **崩铁左侧导航必须限定区域**：「兑换商店」同时出现在顶层面包屑 (153,80) 和左侧导航行 (170,382)，全窗 OCR 先命中的是面包屑（点了无效），所以配 `nav_region_frac=[0.0,0.18,0.2,0.95]`。商店入口只有 OCR「商店」（菜单格 (1322,408)，0.67），没裁模板。
@@ -119,14 +119,14 @@ This file mirrors important repository-level development notes inside the projec
   足迹**（2026-10-25 旧参考图实测），不能用商品名判页签：`tab_content_markers=["信用点"]`
   做内容强校验（「信用点×10000」只在余烬页，OCR 0.83；星芒页没有），看不到就整步失败、
   不购买，购买前再复核；原页签模板/亮度保留作无内容标记时的兜底；五星光锥
-  `forbidden_texts` 仍作第二道闸。确认模板 `模板/崩铁-兑换确认.png`（用户 2026-11-01
+  `forbidden_texts` 仍作第二道闸。确认模板 `assets/templates/崩铁-兑换确认.png`（用户 2026-11-01
   弹窗截图底部白色「确认」按钮，367x70）在弹窗上 1.000、无弹窗商店页 0.636/0.661
   （生效阈值 0.8）。参考图 `data/artifacts/ref_starrail_ember_20261101.png` /
   `ref_starrail_ember_dialog_20261101.png`。
-- **原神定位**：商城入口 OCR「商城」（ESC 菜单 (196,455)，0.67，没裁模板——左侧面板背景固定，OCR 够用）；左侧「尘辉兑换」OCR（(130,434)，0.74，只有选中态截图，不做模板）；页签模板 `模板/原神-星尘兑换页签.png`（1.000 / ESC 菜单 0.579）+ OCR「星尘兑换」（0.80）。
+- **原神定位**：商城入口 OCR「商城」（ESC 菜单 (196,455)，0.67，没裁模板——左侧面板背景固定，OCR 够用）；左侧「尘辉兑换」OCR（(130,434)，0.74，只有选中态截图，不做模板）；页签模板 `assets/templates/原神-星尘兑换页签.png`（1.000 / ESC 菜单 0.579）+ OCR「星尘兑换」（0.80）。
 - **原神星尘清单（2026-11-01 用户确认）**：只买抽卡道具 **纠缠之缘 ×5、相遇之缘 ×5**
   （本月剩余 5/5、单价 75，合计 750 星尘）；冒险家的经验/精锻用魔矿/摩拉/嬗变之尘/
-  并生嵌合胞/嵌合种一律不买。确认模板 `模板/原神-兑换确认.png`（用户弹窗截图底部
+  并生嵌合胞/嵌合种一律不买。确认模板 `assets/templates/原神-兑换确认.png`（用户弹窗截图底部
   蓝色「兑换」按钮，330x80；弹窗标题「兑换物品」、数量默认 1、「本月剩余数量:5」、
   「消耗 75」、「取消/兑换」）。参考图
   `data/artifacts/ref_genshin_{main,esc_menu,shop,stardust,stardust_dialog}_20261101.png`。
@@ -138,13 +138,13 @@ This file mirrors important repository-level development notes inside the projec
   标记时的旧流程兜底。宗室武器 `forbidden_texts` 仍保留作第二道闸。实测：星尘页命中
   摩拉/并生嵌合胞/嵌合种（conf 0.78-0.83），星辉页（2026-10-25 旧参考图）一个都不命中。
 - **原神启动路径（exe_from_game）**：`apps.GenshinImpact.launcher` 是 BetterGI（一条龙脚本），**不能给每月流程用 exe_from_app**（会启动 BetterGI 而不是游戏）。新增 flow 字段 `exe_from_game`，从 `apps.<key>._discovery.game_exe_path` 取游戏本体（`_resolve_exe_path` 里实现），GENSHIN_MONTHLY 用 `exe_from_game: GenshinImpact` → YuanShen.exe。**不要**再走 GenshinLauncher 的 `exe_path` 硬编码，也不要把它加进「路径配置」的 launcher 列表（那会改坏 BetterGI 启动路径）。
-- **购买交互未实跑**：复用后勤商店 `zzz_monthly_shop._buy_once`（新增 `label` 参数只为日志前缀），即「点商品 → 确认 → 确认按钮」。绝区零信号残响沿用 `模板/绝区零-商店-确认.png`；原神/崩铁均已补齐确认模板（2026-11-01 用户弹窗截图：`模板/原神-兑换确认.png` / `模板/崩铁-兑换确认.png`）。
+- **购买交互未实跑**：复用后勤商店 `zzz_monthly_shop._buy_once`（新增 `label` 参数只为日志前缀），即「点商品 → 确认 → 确认按钮」。绝区零信号残响沿用 `assets/templates/绝区零-商店-确认.png`；原神/崩铁均已补齐确认模板（2026-11-01 用户弹窗截图：`assets/templates/原神-兑换确认.png` / `assets/templates/崩铁-兑换确认.png`）。
 - **退出**：买完先查 `exit_marker_template`（绝区零主世界「···」/ 崩铁主界面图标 / 原神派蒙图标），看不到才按 ESC，最多 3 次；先查再按是防止多按一次又把主世界切回菜单。未确认回到主界面只在摘要里标注，不单独判失败。
 - **月度门控在流程层**（`background_template_runner._run_monthly_flow` 的 `monthly_flow:<KEY>`）：本月流程已跑过再补 items，需要手动重跑，不会自动补。
 - 回归：`tests/suite_monthly_exchange_20261025.py`（三游戏：空清单/完整链路/已在菜单/已达上限/页签缺失/商品定位失败/停止/回不到主世界/确认模板缺失/页签已选中/区域导航/页签未切换必须失败/亮度读不到必须失败/原神错页签拦截必须失败/原神清单与确认模板 + **绝区零清单（加密/原装母带各 5）与储值电卡内容校验** + **崩铁清单（星轨专票/通票各 5 + 命运的足迹 2）与信用点内容校验** + 原神内容强校验（星尘页有摩拉、星辉页没有）+ 三游戏「外观已选中但无内容标记必须失败、零购买」+ 三游戏内容标记/确认模板真图分离度 + 配置与独立任务静态）、`data/artifacts/test_monthly_exchange_templates_20261025.py`（三游戏真图模板正反向 + RapidOCR + 面包屑陷阱 + 选中态亮度夹逼 + 原神宗室武器可识别，参考图 `data/artifacts/ref_{zzz,starrail,genshin}_exchange_{menu,shop}_20261025.png`）。插入新步骤后 `test_zzz_monthly_main_screen_20261021.py` 的步骤数/序号同步改为 7 步。
 ### 鸣潮启动器更新流程 (重要, 2026-10-16)
 
-- 鸣潮官方启动器**有游戏更新时右下角按钮从「进入游戏」变为「更新」**（同位置青色渐变按钮，只文字不同）。`flow_configs.json` 的 `WuwaLauncher` 流程已加 4 步：①「游戏更新」click_template `模板\鸣潮-更新.png` + `optional_if_missing: true`（无更新跳过，timeout 8s）②「等待更新完成」wait_template `鸣潮-进入游戏.png`（timeout 3600s，下载完按钮变回进入游戏）③「进入游戏」④ wait_process
+- 鸣潮官方启动器**有游戏更新时右下角按钮从「进入游戏」变为「更新」**（同位置青色渐变按钮，只文字不同）。`flow_configs.json` 的 `WuwaLauncher` 流程已加 4 步：①「游戏更新」click_template `assets/templates\鸣潮-更新.png` + `optional_if_missing: true`（无更新跳过，timeout 8s）②「等待更新完成」wait_template `鸣潮-进入游戏.png`（timeout 3600s，下载完按钮变回进入游戏）③「进入游戏」④ wait_process
 - 两个按钮模板**灰度互不混淆**（同场景匹配 1.0，交叉 0.625 < 阈值 0.8），裁模板用 HSV 青色分割定位右下角按钮
 - `optional_if_missing` 的语义是 **timeout 到点才跳过**（循环内搜到即 break），所以"检测某状态不存在"的步骤 timeout 要短（8s），否则无更新时每次空等
 - 下载中按钮若变「更新中 xx%」导致更新模板失配 → optional 跳过 → wait_template 等「进入游戏」回来即可，流程不会卡死
@@ -172,7 +172,7 @@ This file mirrors important repository-level development notes inside the projec
 - 流程第一步 `action=nikki_enter_game`（`runtime/nikki_launcher.py`）：
   启动器「启动游戏/更新/运行中」→ 等 `X6Game-Win64-Shipping.exe` 窗口 →
   登录页 OCR「点击进入游戏/确认/登录」→ 加载小月卡/道具弹窗 →
-  左下角聊天气泡模板 `模板/暖暖-主界面.png` 连续 2 次命中；第二步 `action=nikki_calendar`
+  左下角聊天气泡模板 `assets/templates/暖暖-主界面.png` 连续 2 次命中；第二步 `action=nikki_calendar`
   （2026-11-01 新增，见下节）。
 - 模板来源：whimbox 2.5.6 `IconPageMainFeature` 二值化裁剪（GPL-3.0 本地自用）；
   36x30，左下角 (48,989)@1920x1080，合成背景匹配 0.99，阈值 0.8。
@@ -307,12 +307,12 @@ This file mirrors important repository-level development notes inside the projec
   现在只由 `task_batch_runner._MONTHLY_FLOW_BY_APP` 在原神日常跑完后自动补跑。
 ### 白荆回廊日常流程改视觉版 (重要, 2026-10-18)
 
-- 日常从「固定坐标序列回放」（`click_sequences/白荆回廊-日常.json`，100+ 步录于
+- 日常从「固定坐标序列回放」（`assets/click_sequences/白荆回廊-日常.json`，100+ 步录于
   1.0.2.1082）重构为 `runtime/baijing_daily.py` 视觉版：主界面 → 点右侧「任务」按钮
   → 日常任务列表 → 一键/逐个「领取」→ 关闭列表回主界面。旧 JSON 保留作归档，
   `BAIJING_DAILY_SEQ` 常量仍在但不再默认回放。
 - **「任务」按钮识别**：OCR 优先（RapidOCR 认成「一任务」，0.62 可用），模板
-  `模板/白荆回廊-任务按钮.png` 兜底（1920 参考分辨率，红色角标已 inpaint 抹除，
+  `assets/templates/白荆回廊-任务按钮.png` 兜底（1920 参考分辨率，红色角标已 inpaint 抹除，
   匹配时按窗口宽度换算缩放）。**不要先裁剪区域再 OCR**——实测裁剪会改变检测结果
   （右侧裁剪后「一任务」直接丢失），必须全窗识别后按 `TASK_BUTTON_REGION`（fx≥0.70）
   过滤；主界面中部「阶段任务154/200」也含「任务」，另有黑名单排除双保险。
@@ -336,7 +336,7 @@ This file mirrors important repository-level development notes inside the projec
   点行内「前往」→ 烙痕列表页（3列卡片网格）→ 点首个卡片（实测 (402,442)@1919x1079，
   → 窗口相对 (0.21,0.41)，列距≈0.15/行距≈0.38 作兜底候选）→ 详情页右下「强化**烙痕**」
   →「重置」→「+」一次 →「确认」→ 等级提升动画「点击屏幕继续」→ `_return_to_task_panel`
-  逐层返回任务面板。新模板 `模板/白荆回廊-强化烙痕按钮.png`（匹配 conf=1.000；
+  逐层返回任务面板。新模板 `assets/templates/白荆回廊-强化烙痕按钮.png`（匹配 conf=1.000；
   注意按钮是"烙痕"不是"熔垣"，低分辨率图样字易看错，用户 2026-10-18 指正）；
   「+」按钮位置由「重置」OCR 位置 + 0.1225 倍窗宽偏移推算（**已用用户
   2026-10-30 截图定标，参考图 `docs/refs/baijing_memory_enhance_20261030.png`：
@@ -468,7 +468,7 @@ This file mirrors important repository-level development notes inside the projec
   俱乐部页点「俱乐部每日任务」卡片 → 卡片变「今日任务已完成」→ 返回主界面。
   三个坑：
   ① **入口图标没文字**，纯比例点击容易点错邻居（旁边是邮件/好友/铃铛）→ 裁了模板
-     `模板/白荆回廊-俱乐部入口.png`（红点已 inpaint），整图只有 1 个峰 conf=0.924，
+     `assets/templates/白荆回廊-俱乐部入口.png`（红点已 inpaint），整图只有 1 个峰 conf=0.924，
      `_template_center` 命中优先、比例 (0.183,0.047) 兜底。
   ② **俱乐部页特征不能用底部「俱乐部成员/俱乐部商店/俱乐部支援」**——弹「新物品已存入
      仓库」提示时这三行照样能 OCR 到，会把弹窗状态误判成已进页面，后面点卡片被弹窗挡住。
@@ -521,7 +521,7 @@ This file mirrors important repository-level development notes inside the projec
 
 **事故**：2026-11-02 17:53 / 18:01 两次白荆一条龙失败（flow_failures #145/#146），
 日志表现是「游戏本体进程 GateMK-Win64-Shipping.exe 未启动（超时 300s）」。
-**模板 `模板/白荆回廊-开始游戏.png` 没问题**（181x54，模板连续 3 次「定位失败」是
+**模板 `assets/templates/白荆回廊-开始游戏.png` 没问题**（181x54，模板连续 3 次「定位失败」是
 对的——按钮当时根本不在屏幕上）。
 
 **根因链（自己干扰自己）**：
@@ -811,7 +811,7 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
   `execute_task` 启动 ok-nte 后调用：游戏未运行 → 放行（交给 ok-nte 启动）；
   找不到「进入游戏」→ 视为已在主界面/加载中，零点击放行；找到 → 点击并等
   按钮消失；一直不消失 → 提前失败并清理进程（不再白跑 45 分钟）。
-  模板 `模板/异环-进入游戏.png` 在真实标题页帧上峰值 0.9988 @(960,933)，
+  模板 `assets/templates/异环-进入游戏.png` 在真实标题页帧上峰值 0.9988 @(960,933)，
   OCR 兜底 0.792 @(960,932)。
 - **回归**：`tests/suite_nte_ensure_main_20261029.py`（未运行放行/标题页点击/
   按钮不消失失败/已在主界面零点击/停止/点击异常/默认配置/控制器接线/模板存在）。
@@ -913,7 +913,7 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
 
 **已排除的误判（别再重复踩）**：
 - **白荆启动器模板没坏**。用 2026-11-02 用户提供的启动器截图（`data/artifacts/ref_baijing_launcher_20261102.png`，
-  1304x723）实测：旧模板 `模板/白荆回廊-开始游戏.png` 在 **scale=1.0 匹配分 1.000**，位置 (1083,665)。
+  1304x723）实测：旧模板 `assets/templates/白荆回廊-开始游戏.png` 在 **scale=1.0 匹配分 1.000**，位置 (1083,665)。
   模板、界面、分辨率**都没问题** → 11-02 失败是**运行时那 60s 里启动器还没渲染出来**（或被别的东西盖住），
   不是"界面改版"。**别再去重裁模板**，要修的是等待时长 + 失败取证。
 - **自塑尘脂是崩铁的道具**，不是原神。出现在 `HSR_MONTHLY` 第 3 步（`runtime/hsr_resin_craft.py`：

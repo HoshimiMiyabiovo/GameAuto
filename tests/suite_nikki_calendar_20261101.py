@@ -589,7 +589,7 @@ def test_reference_ocr(refs):
             import numpy as np
             from PIL import Image
 
-            tpl_path = PROJECT_ROOT / "模板" / "暖暖-主界面.png"
+            tpl_path = PROJECT_ROOT / "assets" / "templates" / "暖暖-主界面.png"
             check("主界面模板文件存在", tpl_path.exists(), str(tpl_path))
             if tpl_path.exists():
                 shot = Image.open(REFS["main"]).convert("RGB")

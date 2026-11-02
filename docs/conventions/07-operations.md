@@ -72,14 +72,14 @@
   回归 `artifacts/test_qoder_claim_20261024.py`。
 - **常驻入口（2026-10-24 用户截图实锤）**：左下角头像 → 菜单「权益中心」
   （gift 图标带红点）→ 活动弹窗。`runtime/qoder_claim.open_campaign` 驱动：
-  菜单行模板 `模板/qoder-权益中心.png`（185x36）；活动页只认
+  菜单行模板 `assets/templates/qoder-权益中心.png`（185x36）；活动页只认
   `qoder-领取.png` / `qoder-已领取.png` 模板，**禁止用泛化「领取」OCR**。
 - **2026-10-24 实跑假阳性教训**：Qoder 窗口被聊天窗口遮挡时，OCR 把聊天正文里的
   「领取」当成了弹窗按钮 → 等待步命中、点击步模板没命中却跳过，最后靠日志里的
   `hasClaimableCampaign=false` 误判成功。现在：打开/等待/点击全部走模板；
   窗口遮挡 ≥30% 先聚焦重试，仍遮挡直接诚实失败，绝不 OCR 其他窗口。
 - **模板匹配阈值踩坑（2026-10-20 实测）**：`_match_template_cv2_once` 的生效阈值是 `min(match_confidences)`——列表写 `[0.88,0.84,0.8]` 实际按 0.8 匹配！QODER 的「领取」模板在 Qoder **设置页侧边栏**有 0.835 误命中（聊天页 0.595），0.8 档会放过关进而误点侧边栏。QODER 用 `[0.94,0.92,0.9]`（生效 0.9）：真实弹窗命中 1.000、误命中天花板 0.835，分离干净。**新建 Electron 应用流程务必先测误命中再定阈值**。
-- 模板：`模板/qoder-领取.png`（黑底白字按钮，48x37）、`模板/qoder-已领取.png`（灰底白字，62x38）。点击步 `enable_ocr_fallback=false`（OCR 子串匹配会把「已领取」当「领取」命中，且描述行「领取后 30 天有效」也含"领取"）。
+- 模板：`assets/templates/qoder-领取.png`（黑底白字按钮，48x37）、`assets/templates/qoder-已领取.png`（灰底白字，62x38）。点击步 `enable_ocr_fallback=false`（OCR 子串匹配会把「已领取」当「领取」命中，且描述行「领取后 30 天有效」也含"领取"）。
 - **假失败事故（2026-10-21 10:03，服务端日志实锤）**：领取其实**成功了**（点击后 7.5s 服务端 `CLAIMABLE→CLAIMED`），但消失型确认连报 4 次"元素仍存在"→ 假 ❌。根因是 `confirm_disappear` **只在 +3s 单次检查**——Qoder 领取成功后弹窗要 **~30s 才关闭**（昨天实测：点击后 30s 弹窗消失；今天按钮持续可匹配 25s+）。
   修复：`confirm_disappear` 改为**每 2s 轮询直到 timeout_sec**（2026-10-21），QODER 点击步 `confirm_timeout_sec=45`。回归 `artifacts/test_confirm_disappear_poll_20261021.py`（8 组：延迟消失等到/永不消失超时/确认模板组合/立即消失快速返回）。
   阈值防线：QODER `match_confidences=[0.97,0.96,0.95]`（生效 0.95）——黑模板对灰「已领取」按钮真实交叉匹配只有 0.754（干净复测；昨天说的 0.922 是测量 bug：循环里覆盖了模板变量导致复合缩放，作废），真匹配 1.000，分离干净。
@@ -192,7 +192,7 @@
   - N>0 → 点底部合成 → 重读 N，每减 1 记一次成功；**连续两次不减**判定卡住并失败（不无限点）。
   - 注意「材料合成」标题里也有「合成」二字，按钮 OCR 必须限定 `craft_button_region_frac`
     （默认窗口下半部中间），否则会把标题当按钮点。
-- **模板**：`模板/崩铁-自塑尘脂-已达上限.png`（873×47，红条 + 白字，从实机截图
+- **模板**：`assets/templates/崩铁-自塑尘脂-已达上限.png`（873×47，红条 + 白字，从实机截图
   `data/artifacts/ref_starrail_resin_synth_20261101.png` 裁，自匹配 **1.0000 @ (666,847)**）。
   贵重物页签 / 自塑尘脂格子 / 万能合成机条**没有裁模板**——用户给的是 1091×613 缩略图，
   到 1920 画面是 1.76 倍，现有 `match_scales=[1.0,1.25,0.8]` 匹配不上，所以改用 `point_frac`。
@@ -223,7 +223,7 @@
     （letterbox 640×640、左上补 114、/255、CHW）；
   - `zzz_od/auto_battle/auto_battle_dodge_context.py` → 闪光闪避（1=红→闪避，2=黄→格挡，都是空格）；
   - `screen_info/battle.yml` → `zzz_battle_assist.py` 顶部的 4 个区域常量（1920×1080 基准）；
-  - `template/battle/btn_*.png` → `模板/绝区零-战斗-*.png`（9 张）；
+  - `template/battle/btn_*.png` → `assets/templates/绝区零-战斗-*.png`（9 张）；
   - `models/flash_classifier/yolov8n-640-flash-20250921/model.onnx` →
     `data/models/flash_classifier/...`（5.7MB，走 `data/` 不进版本库）。
   - **GPL-3.0 本地自用**，与之前复制 OneDragon 模板同一口径。

@@ -54,12 +54,12 @@ setup_deps.bat
 | 入口 | 说明 |
 |---|---|
 | `00_START_HERE_GUI_ADMIN.bat` | 根目录推荐入口 → 图形界面 |
-| `start\00_START_GUI_ADMIN.bat` | GUI 入口原始位置 |
-| `start\00_START_CLI_ADMIN.bat` | 命令行模式 |
-| `start\00_START_FLET_ADMIN.bat`（含根目录 `00_START_HERE_FLET_ADMIN.bat`） | 旧版 Flet 界面（回退用） |
-| `start\10_OPEN_PROJECT_HOME.bat` | 直接打开项目目录 |
+| `scripts\start\00_START_GUI_ADMIN.bat` | GUI 入口原始位置 |
+| `scripts\start\00_START_CLI_ADMIN.bat` | 命令行模式 |
+| `scripts\start\00_START_FLET_ADMIN.bat`（含根目录 `00_START_HERE_FLET_ADMIN.bat`） | 旧版 Flet 界面（回退用） |
+| `scripts\start\10_OPEN_PROJECT_HOME.bat` | 直接打开项目目录 |
 
-`start\` 只是用户入口壳，实际启动逻辑在 `launchers\`（自动提权 + `python -m game_auto...` 包模式启动）。
+`scripts\start\` 只是用户入口壳，实际启动逻辑在 `scripts\launchers\`（自动提权 + `python -m game_auto...` 包模式启动）。
 
 ## 项目结构
 
@@ -77,10 +77,14 @@ game_auto/
 ├── storage/        # SQLite 数据访问层（workflow_db.py；不再存放缓存）
 ├── data/           # 运行时数据（不入库）：logs/、artifacts/、cache/、workflow.sqlite3
 ├── maintenance/    # 维护脚本与一次性工具（旧配置编辑器、模板种子等）
-├── start/          # 用户双击入口
-├── launchers/      # 内部提权与包模式启动脚本
 ├── tools/          # 内置工具（Tesseract OCR、QML 布局 smoke 测试等）
-├── 模板/            # 图像模板流程用的截图模板
+├── assets/         # 随仓库迁移的资源
+│   ├── templates/        # 图像模板流程用的截图模板
+│   ├── click_sequences/  # 固定点击序列（录制/回放）
+│   └── icon.ico
+├── scripts/        # 启动脚本
+│   ├── start/            # 用户双击入口（.bat）
+│   └── launchers/        # 内部提权与包模式启动脚本
 ├── app_config.json      # 用户覆盖配置与执行顺序（不入库）
 └── flow_configs.json    # 图像模板流程定义（XM / CJ / NTE；本地文件，不入库）
 ```
