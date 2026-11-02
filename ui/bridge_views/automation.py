@@ -80,7 +80,7 @@ class AutomationView:
             self._request_toast("没有运行中的任务", "#6d6257")
         # 同步停止 WebUI 侧控制器，保证 WebUI 发起的任务也能被 GUI 停止
         try:
-            from game_auto.webui.state import get_controller as _ws_get_ctrl
+            from game_auto.ui.webui.state import get_controller as _ws_get_ctrl
             try:
                 _ws_ctrl = _ws_get_ctrl()
                 if _ws_ctrl is not None:
@@ -90,7 +90,7 @@ class AutomationView:
         except Exception as exc:
             logger.debug("[Bridge] 停止 WebUI 侧任务失败: %s", exc)
         try:
-            from game_auto.webui.state import update_queue_state, get_run_status
+            from game_auto.ui.webui.state import update_queue_state, get_run_status
             st = get_run_status()
             cur = st.get("current") or {}
             if cur.get("app_key"):
@@ -263,7 +263,7 @@ class AutomationView:
             self.emit_event("status", title="正在运行", body="薅羊毛集合执行中", tone=TONE_RUNNING)
             self.isRunning = True
             try:
-                from game_auto.webui.state import set_running as _ws_set_running_w, logger as _ws_logger_w
+                from game_auto.ui.webui.state import set_running as _ws_set_running_w, logger as _ws_logger_w
                 _ws_set_running_w(True, queue=[{"app_key": "WoolFlow", "display_name": "薅羊毛集合", "script_choice": "", "state": "running"}], source="gui")
                 _ws_logger_w.info("[WebUI][运行] GUI 发起薅羊毛")
             except Exception as exc:
@@ -285,7 +285,7 @@ class AutomationView:
                 color="#2f7d4a" if ok else "#b04b44",
             )
             try:
-                from game_auto.webui.state import set_running as _ws_set_running_w2, set_last_result as _ws_set_last_w2
+                from game_auto.ui.webui.state import set_running as _ws_set_running_w2, set_last_result as _ws_set_last_w2
                 _ws_set_last_w2([msg], [])
                 _ws_set_running_w2(False)
             except Exception as exc:
@@ -295,7 +295,7 @@ class AutomationView:
             self.emit_event("status", title="运行失败", body=str(exc), tone=TONE_DANGER)
             self.emit_event("toast", message=f"薅羊毛集合失败: {exc}", color="#b04b44")
             try:
-                from game_auto.webui.state import set_running as _ws_set_running_w3, set_last_result as _ws_set_last_w3
+                from game_auto.ui.webui.state import set_running as _ws_set_running_w3, set_last_result as _ws_set_last_w3
                 _ws_set_last_w3([f"薅羊毛失败: {exc}"], [])
                 _ws_set_running_w3(False)
             except Exception as sync_exc:
@@ -303,9 +303,9 @@ class AutomationView:
         finally:
             self.isRunning = False
             try:
-                from game_auto.webui.state import set_running as _ws_set_running_w4
+                from game_auto.ui.webui.state import set_running as _ws_set_running_w4
                 # 确保 WebUI 也释放运行锁（若之前已在 try 中释放则重复调用无害）
-                import game_auto.webui.state as _ws_state
+                import game_auto.ui.webui.state as _ws_state
                 if _ws_state.is_running():
                     _ws_set_running_w4(False)
             except Exception as exc:
@@ -378,7 +378,7 @@ class AutomationView:
             self.emit_event("queue_list", items=queue_items)
             # 同步到 WebUI 共享状态，保证 WebUI 能看到 GUI 发起的任务
             try:
-                from game_auto.webui.state import set_running as _ws_set_running, update_queue_state as _ws_upd, set_last_result as _ws_set_last, logger as _ws_logger
+                from game_auto.ui.webui.state import set_running as _ws_set_running, update_queue_state as _ws_upd, set_last_result as _ws_set_last, logger as _ws_logger
                 # 转换为 WebUI 队列格式
                 ws_queue = []
                 for it in queue_items:
@@ -404,7 +404,7 @@ class AutomationView:
                                 body=f"正在执行: {display_name}",
                                 tone=TONE_RUNNING)
                 try:
-                    from game_auto.webui.state import update_queue_state as _ws_upd2
+                    from game_auto.ui.webui.state import update_queue_state as _ws_upd2
                     _ws_upd2(app_key, "running", display_name)
                 except Exception as exc:
                     logger.debug("[Bridge] 同步 WebUI 队列运行状态失败: %s", exc)
@@ -421,7 +421,7 @@ class AutomationView:
                 self.emit_event("queue_state", app_key=app_key, state=ui_state)
                 self.emit_event("queue_list_update", app_key=app_key, state=ui_state)
                 try:
-                    from game_auto.webui.state import update_queue_state as _ws_upd3
+                    from game_auto.ui.webui.state import update_queue_state as _ws_upd3
                     # 映射到 WebUI 状态
                     ws_state = "completed" if result.success else "failed"
                     if result_state == "skipped":
@@ -501,7 +501,7 @@ class AutomationView:
 
             # 同步最终报告到 WebUI 共享状态
             try:
-                from game_auto.webui.state import set_running as _ws_set_running2, set_last_result as _ws_set_last2
+                from game_auto.ui.webui.state import set_running as _ws_set_running2, set_last_result as _ws_set_last2
                 _ws_set_last2(report, warnings)
                 _ws_set_running2(False)
             except Exception as exc:

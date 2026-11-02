@@ -15,3 +15,4 @@
 - 修复拆分后 mixin 内相对导入层级（`.bridge_backends` → `..bridge_backends`），并清理 bridge 无用导入。
 - 根目录整理：`模板/` → `assets/templates/`、`click_sequences/` → `assets/click_sequences/`、`start/`+`launchers/` → `scripts/`；模板路径与本地 flow/app 配置一次性迁移。
 - 视图回收套件改为轮询等待释放（离屏首次编译 1-2s 时固定 0.75s 断言会误报）。
+- `%TEMP%` 参考副本移到 `data/reference/temp_project/`；`webui/` 并入 `ui/webui/`，导入与文档路径同步。

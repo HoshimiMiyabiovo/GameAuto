@@ -8,7 +8,7 @@ from fastapi import APIRouter, Request
 from game_auto.settings import APP_ORDER, APPS, get_app_display_name, get_script_display_name, refresh_runtime_config
 from game_auto.storage.workflow_db import WorkflowDB
 from game_auto.settings.paths import WORKFLOW_DB_PATH
-from game_auto.webui.state import get_controller, get_last_result, get_run_status, is_running, set_last_result, set_running, logger, update_queue_state
+from game_auto.ui.webui.state import get_controller, get_last_result, get_run_status, is_running, set_last_result, set_running, logger, update_queue_state
 
 router = APIRouter(prefix="/api/apps", tags=["automation"])
 
@@ -213,9 +213,9 @@ def stop():
                 logger.debug("[WebUI] 同步 GUI 控制器停止标志失败: %s", exc)
             # 若共享状态仍为 running，也标记为停止
             try:
-                from game_auto.webui.state import update_queue_state
+                from game_auto.ui.webui.state import update_queue_state
                 # 将当前运行项标记为 stopped
-                from game_auto.webui.state import get_run_status
+                from game_auto.ui.webui.state import get_run_status
                 st = get_run_status()
                 cur = st.get("current") or {}
                 if cur.get("app_key"):
@@ -231,17 +231,17 @@ def stop():
 def logs(limit: int = 100, q: str = "", login_only: bool = False, since: int = 0):
     limit = max(1, min(int(limit), 500))
     if login_only:
-        from game_auto.webui.state import get_login_logs
+        from game_auto.ui.webui.state import get_login_logs
         data = get_login_logs(limit)
         if q:
             q = q[:80]
             data = [l for l in data if q in l]
         return {"logs": data}
     if since and not q:
-        from game_auto.webui.state import get_logs_since
+        from game_auto.ui.webui.state import get_logs_since
         data, cursor = get_logs_since(int(since), limit)
         return {"logs": data, "cursor": cursor}
-    from game_auto.webui.state import get_recent_logs, get_log_cursor
+    from game_auto.ui.webui.state import get_recent_logs, get_log_cursor
     data = get_recent_logs(limit)
     if q:
         q = q[:80]

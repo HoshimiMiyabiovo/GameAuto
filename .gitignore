@@ -32,6 +32,8 @@ artifacts/
 # Test / lint caches（配置已重定向到 data/cache，这里兜底旧版本）
 .pytest_cache/
 .ruff_cache/
+# QML 离屏测试产生的临时截图目录
+.screenshots/
 
 # Database
 *.sqlite3
@@ -48,8 +50,7 @@ Thumbs.db
 desktop.ini
 .DS_Store
 
-# Reference / temp code not part of project
-%TEMP%/
+# Reference / temp code not part of project（参考项目副本在 data/reference/，data/ 已整体忽略）
 .trae/
 .claude/
 .workbuddy/

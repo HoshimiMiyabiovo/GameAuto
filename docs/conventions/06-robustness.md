@@ -121,7 +121,7 @@
   `getRecentFlowFailures(days) -> str` JSON，后台线程读库最多等 3s；截图缩略图点击
   `openFlowFailureImage` 开系统看图片、`openFlowFailureDir` 开证据目录）；WebUI
   `GET /api/daily/failures?days&limit&flow` + `GET /api/daily/failure-image/{name}`
-  （`webui/static/app.js` 的 `loadFailures()`）。**`getRecentFlowFailures` 必须写
+  （`ui/webui/static/app.js` 的 `loadFailures()`）。**`getRecentFlowFailures` 必须写
   `@Slot(int, result=str)`**，漏 `result` 时 QML 拿到 undefined 且不报错。
 - **脚本级失败没有截图**：`task_batch_runner` 埋点拿不到 hwnd（进程已退出），只记文字；
   `capture_failure_image` 传了 hwnd 但 rect 取不到时**直接不存图**，绝不退化成全屏截图。

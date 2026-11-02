@@ -354,8 +354,8 @@ class GachaView:
     def getWebUIStatus(self) -> str:
         """返回 {has_account, username, port, url, running} 供 QML 展示。"""
         try:
-            from ...webui.auth import has_account, get_username
-            from ...webui.app import WEBUI_DEFAULT_PORT
+            from ..webui.auth import has_account, get_username
+            from ..webui.app import WEBUI_DEFAULT_PORT
             has_acc = bool(has_account())
             user = get_username() if has_acc else ""
             # 检测是否在运行（尝试连端口）
@@ -386,11 +386,11 @@ class GachaView:
     def saveWebUIAccount(self, username: str, password: str):
         """保存 WebUI 登录账号（GUI 输入，DPAPI 加密落盘）。"""
         try:
-            from ...webui.auth import set_account
+            from ..webui.auth import set_account
             set_account(username, password)
             started = False
             try:
-                from ...webui.app import start_webui_background
+                from ..webui.app import start_webui_background
                 started = start_webui_background()
             except Exception as exc:
                 logger.warning("[Bridge] WebUI 账号已保存但服务启动失败: %s", exc)
@@ -409,7 +409,7 @@ class GachaView:
     def openWebUIInBrowser(self):
         """用系统默认浏览器打开 WebUI。"""
         try:
-            from ...webui.app import WEBUI_DEFAULT_PORT
+            from ..webui.app import WEBUI_DEFAULT_PORT
             import webbrowser
             url = f"http://127.0.0.1:{int(WEBUI_DEFAULT_PORT)}"
             webbrowser.open(url)

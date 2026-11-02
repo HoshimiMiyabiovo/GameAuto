@@ -115,7 +115,7 @@ def test_repo_files():
               (data.get("QODER") or {}).get("close_process_on_finish") is False)
     runner = (PROJECT_ROOT / "runtime" / "foreground_flow_runner.py").read_text(encoding="utf-8")
     bridge = (PROJECT_ROOT / "ui" / "bridge_views" / "automation.py").read_text(encoding="utf-8")
-    webui = (PROJECT_ROOT / "webui" / "api" / "wool.py").read_text(encoding="utf-8")
+    webui = (PROJECT_ROOT / "ui" / "webui" / "api" / "wool.py").read_text(encoding="utf-8")
     check("流程加载器使用 ensure", "ensure_flow_config_path()" in runner)
     check("GUI 写开关使用 ensure", "ensure_flow_config_path()" in bridge)
     check("WebUI 写开关使用 ensure", "ensure_flow_config_path()" in webui)

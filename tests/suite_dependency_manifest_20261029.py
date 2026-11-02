@@ -112,7 +112,7 @@ def main():
     check("锁文件含 ruamel.yaml", "ruamel.yaml" in pins)
 
     print("[6] WebUI 只监听回环")
-    webui_src = (PROJECT_ROOT / "webui" / "app.py").read_text(encoding="utf-8")
+    webui_src = (PROJECT_ROOT / "ui" / "webui" / "app.py").read_text(encoding="utf-8")
     check("宿主固定 127.0.0.1", webui_src.count('host="127.0.0.1"') >= 2, str(webui_src.count('host="127.0.0.1"')))
     check("不监听 0.0.0.0", "0.0.0.0" not in webui_src)
 

@@ -32,7 +32,7 @@
 - 公共函数 docstring：契约（参数/返回/副作用/失败模式）。
 - 行内注释只标非直观处：魔法数字来源、顺序约束、竞态窗口、踩过的坑。
 - **排除**：`flet/`（内嵌第三方框架）、`ui/flet_app.py` + `ui/flet/`（已停维护）、
-  `%TEMP%/`（参考项目）、`artifacts/`（测试已带注释）。
+  `data/reference/temp_project/`（参考项目副本，随 data/ 忽略）、`artifacts/`（测试已带注释）。
 - 阶段：①判定与数据核心（tracker/task_batch_runner/discovery/解析器）
   ②任务执行层（controller/flow_runner/ocr_tester/click_sequence/process_supervisor）
   ③客户端 API 层 ④启动器与诊断 ⑤bridge/workflow_db/webui。

@@ -104,7 +104,7 @@ def _launch_qml_ui(dep_report=None) -> None:
     # 延迟到首帧后空闲再起：uvicorn import 约 0.6s，立即起会和 QML 首绘抢 GIL
     def _start_webui_background():
         try:
-            from game_auto.webui.auth import has_account
+            from game_auto.ui.webui.auth import has_account
             if not has_account():
                 ui_logger.warning("[WebUI] 未设置账号，跳过启动；请在 GUI → WebUI 设置页创建账号")
                 bridge.emit_event(
@@ -113,7 +113,7 @@ def _launch_qml_ui(dep_report=None) -> None:
                     color="#b66f1f",
                 )
                 return
-            from game_auto.webui.app import start_webui_background
+            from game_auto.ui.webui.app import start_webui_background
             if start_webui_background():
                 ui_logger.info("[WebUI] 已随 GUI 启动 http://127.0.0.1:60171")
         except Exception as exc:

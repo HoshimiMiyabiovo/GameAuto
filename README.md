@@ -68,7 +68,8 @@ game_auto/
 ├── app/            # CLI / GUI 包入口（app/cli.py、app/gui.py）
 ├── games/          # 游戏档案（插件式）：身份/默认配置/日常日志/月流程/更新窗口/视图 key
 ├── ui/             # QML 视图（ui/qml/）、PySide6↔QML 桥接（ui/bridge.py + ui/bridge_views/）、
-│                   #   主题（ui/theme.py）及保留的 Flet 界面（ui/flet_app.py，暂停维护）
+│                   #   主题（ui/theme.py）、FastAPI 远程面板（ui/webui/）及保留的 Flet 界面
+│                   #   （ui/flet_app.py，暂停维护）
 ├── runtime/        # 运行执行链：编排器、流程执行器、日志监控、OCR 工具
 ├── services/       # 依赖检查、启动前签到调度、每日进度、邮件报告、各游戏日志解析器
 ├── clients/        # 米游社 / 库街区 / 塔吉多 / 森空岛等外部接口客户端

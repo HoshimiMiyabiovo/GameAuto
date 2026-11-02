@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 from game_auto.settings.paths import PROTECTED_CLICK_SEQUENCES
-from game_auto.webui.state import logger
+from game_auto.ui.webui.state import logger
 
 router = APIRouter(prefix="/api/click-sequences", tags=["clickseq"])
 

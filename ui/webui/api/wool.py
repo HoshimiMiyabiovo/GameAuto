@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import glob, os, threading
 from fastapi import APIRouter
-from game_auto.webui.state import get_controller, is_running, set_running, logger
+from game_auto.ui.webui.state import get_controller, is_running, set_running, logger
 
 router = APIRouter(prefix="/api/wool", tags=["wool"])
 
@@ -32,12 +32,12 @@ def run():
         try:
             from game_auto.runtime.background_template_runner import run_wool_background
             ok, msg = run_wool_background(logger)
-            from game_auto.webui.state import set_last_result
+            from game_auto.ui.webui.state import set_last_result
             set_last_result([msg], [])
             logger.info("[WebUI][薅羊毛] %s %s", "成功" if ok else "部分失败", msg)
         except Exception as exc:
             logger.exception("[WebUI][薅羊毛] 异常")
-            from game_auto.webui.state import set_last_result
+            from game_auto.ui.webui.state import set_last_result
             set_last_result([f"薅羊毛异常: {exc}"], [])
         finally:
             set_running(False)

@@ -58,7 +58,7 @@
   作为每台机器的本地文件，GUI/WebUI 只写它。
 - **首次运行**：`settings.paths.ensure_flow_config_path()` 在本地文件缺失时从
   example 复制；调用点：`foreground_flow_runner._load_flow_config`、
-  `ui/bridge._save_wool_flow_field`、`webui/api/wool.toggle`。
+  `ui/bridge._save_wool_flow_field`、`ui/webui/api/wool.toggle`。
 - **升级注意**：共享流程定义更新只进 example；已有本地 `flow_configs.json` 不会
   自动合并，需要手动把新流程/字段补进本地文件（或删本地让 example 重新复制，
   会丢个人开关）。这是拆分换来的代价，别再把个人开关提交回仓库。

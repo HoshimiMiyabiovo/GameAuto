@@ -11,8 +11,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from game_auto.webui.auth import has_account, verify_token, get_token_from_request
-from game_auto.webui.state import ensure_log_handler, get_recent_logs, logger
+from game_auto.ui.webui.auth import has_account, verify_token, get_token_from_request
+from game_auto.ui.webui.state import ensure_log_handler, get_recent_logs, logger
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -72,7 +72,7 @@ if STATIC_DIR.exists():
 @app.on_event("startup")
 def _startup():
     ensure_log_handler()
-    from game_auto.webui.auth import ensure_default_account
+    from game_auto.ui.webui.auth import ensure_default_account
     ensure_default_account()
     if not has_account():
         logger.warning("[WebUI] 尚未设置账号：所有 API 将返回 401，请在桌面 GUI 的 WebUI 设置页创建账号")
@@ -94,17 +94,17 @@ def health():
 def logs(limit: int = 100, q: str = "", login_only: bool = False, since: int = 0):
     limit = max(1, min(int(limit), 500))
     if login_only:
-        from game_auto.webui.state import get_login_logs
+        from game_auto.ui.webui.state import get_login_logs
         logs_data = get_login_logs(limit)
         if q:
             logs_data = [l for l in logs_data if q in l]
         return {"logs": logs_data}
     # 增量模式：since>0 时仅返回游标之后的新日志
     if since and not q:
-        from game_auto.webui.state import get_logs_since
+        from game_auto.ui.webui.state import get_logs_since
         data, cursor = get_logs_since(int(since), limit)
         return {"logs": data, "cursor": cursor}
-    from game_auto.webui.state import get_log_cursor
+    from game_auto.ui.webui.state import get_log_cursor
     data = get_recent_logs(limit)
     if q:
         q = q[:80]
@@ -114,7 +114,7 @@ def logs(limit: int = 100, q: str = "", login_only: bool = False, since: int = 0
 
 @app.get("/api/logs/login")
 def login_logs(limit: int = 100):
-    from game_auto.webui.state import get_login_logs
+    from game_auto.ui.webui.state import get_login_logs
     limit = max(1, min(int(limit), 500))
     return {"logs": get_login_logs(limit)}
 
@@ -158,7 +158,7 @@ _webui_lock = threading.Lock()
 
 def start_webui_background() -> bool:
     """已设置账号时后台启动 WebUI；返回是否已在运行/已启动。"""
-    from game_auto.webui.auth import has_account
+    from game_auto.ui.webui.auth import has_account
 
     if not has_account():
         return False
@@ -186,11 +186,11 @@ def start_webui_background() -> bool:
         return True
 
 
-# 便于 `python -m game_auto.webui.app`
+# 便于 `python -m game_auto.ui.webui.app`
 if __name__ == "__main__":
-    from game_auto.webui.auth import has_account
+    from game_auto.ui.webui.auth import has_account
     if not has_account():
         raise SystemExit("未设置 WebUI 账号：请先在桌面 GUI 的 WebUI 设置页创建账号")
     import uvicorn
     port = int(os.environ.get("WEBUI_PORT", str(WEBUI_DEFAULT_PORT)))
-    uvicorn.run("game_auto.webui.app:app", host="127.0.0.1", port=port, reload=False)
+    uvicorn.run("game_auto.ui.webui.app:app", host="127.0.0.1", port=port, reload=False)

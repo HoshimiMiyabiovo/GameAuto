@@ -8,7 +8,7 @@ WebUI **只在已设置账号后启动**：打开 GUI →「WebUI 远程」→ �
 
 ```bat
 :: 直接启动（未设置账号会拒绝运行）
-python -m game_auto.webui.app
+python -m game_auto.ui.webui.app
 ```
 
 端口固定为 `127.0.0.1:60171`。**不要**改成 `0.0.0.0`，也不要把端口暴露到局域网。

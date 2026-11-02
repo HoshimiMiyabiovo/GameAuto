@@ -4,7 +4,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from game_auto.webui.auth import (
+from game_auto.ui.webui.auth import (
     check_rate_limit,
     create_session,
     destroy_session,
@@ -15,7 +15,7 @@ from game_auto.webui.auth import (
     verify_token,
 )
 
-from game_auto.webui.state import logger as webui_logger
+from game_auto.ui.webui.state import logger as webui_logger
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -44,7 +44,7 @@ def login(payload: LoginIn, request: Request, response: Response):
     if not has_account():
         webui_logger.warning("[WebUI][登录] 失败 ip=%s user=%s 原因=尚未设置账号", ip, uname or "-")
         return JSONResponse(status_code=400, content={"ok": False, "error": "尚未设置账号，请先在桌面 GUI 设置"})
-    if uname != __import__("game_auto.webui.auth", fromlist=["get_username"]).get_username():
+    if uname != __import__("game_auto.ui.webui.auth", fromlist=["get_username"]).get_username():
         # 仍走 verify 以防时序攻击，但直接比对用户名
         verify_password(payload.password)
         webui_logger.warning("[WebUI][登录] 失败 ip=%s user=%s 原因=账号或密码错误", ip, uname)
