@@ -238,8 +238,10 @@ def test_source_wiring():
     check("预查询只针对 API 权威游戏", "_resolved_game_key in API_PROGRESS_GAMES" in src)
     check("预查询只跑一次",
           "_api_progress_queried = True" in src and "not _api_progress_queried" in src)
+    # 鸣潮的复核增强已收进游戏档案（games/wuwa.py 的 augment_verify）
+    wuwa_src = (Path(__file__).resolve().parent.parent / "games" / "wuwa.py").read_text(encoding="utf-8")
     check("鸣潮复核也合并 API 关键进度",
-          '_load_api_key_progress_tasks("wuwa", logger)' in src)
+          'load_api_tasks("wuwa", logger)' in wuwa_src)
 
     # 2026-11-01 实跑事故：函数体内 `from ..settings import resolve_game_key`
     # 会把该名字变成整个 _run_single_task 的局部变量，前面的 API 门控行先用它

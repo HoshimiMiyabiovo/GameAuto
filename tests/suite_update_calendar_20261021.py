@@ -22,7 +22,7 @@ from types import SimpleNamespace
 sys.path.insert(0, r"E:\GithubProject")
 
 import game_auto.services.game_update_calendar as cal  # noqa: E402
-import game_auto.ui.bridge as bridge_mod  # noqa: E402
+import game_auto.ui.bridge_views.scheduler as bridge_mod  # noqa: E402
 from game_auto.ui.bridge import UiBridge  # noqa: E402
 
 FAILURES = []
