@@ -25,7 +25,7 @@
       {
         "name": "进入脱机",
         "action": "click_template",
-        "template": "模板\\进入脱机.png",
+        "template": "assets/templates\\进入脱机.png",
         "target_text": "进入脱机",
         "enable_ocr_fallback": true,
         "confirm_type": "disappear",
@@ -33,7 +33,7 @@
         "clicks": 1,
         "post_delay_sec": 1.2,
         "confirm_templates": [
-          "模板\\XM登录.png"
+          "assets/templates\\XM登录.png"
         ],
         "confirm_timeout_sec": 12,
         "on_fail": "retry_step",
@@ -42,7 +42,7 @@
       {
         "name": "登录",
         "action": "click_template",
-        "template": "模板\\XM登录.png",
+        "template": "assets/templates\\XM登录.png",
         "target_text": "登录",
         "enable_ocr_fallback": true,
         "confirm_type": "template_match",
@@ -50,7 +50,7 @@
         "clicks": 1,
         "post_delay_sec": 2.0,
         "confirm_templates": [
-          "模板\\XM开始.png"
+          "assets/templates\\XM开始.png"
         ],
         "confirm_timeout_sec": 20,
         "on_fail": "retry_step",
@@ -59,7 +59,7 @@
       {
         "name": "开始",
         "action": "click_template",
-        "template": "模板\\XM开始.png",
+        "template": "assets/templates\\XM开始.png",
         "target_text": "开始",
         "enable_ocr_fallback": true,
         "confirm_type": "template_match",
@@ -67,7 +67,7 @@
         "clicks": 1,
         "post_delay_sec": 1.5,
         "confirm_templates": [
-          "模板\\XM运行中.png"
+          "assets/templates\\XM运行中.png"
         ],
         "confirm_timeout_sec": 25,
         "on_fail": "retry_step",
@@ -76,7 +76,7 @@
       {
         "name": "运行中确认",
         "action": "wait_template",
-        "template": "模板\\XM运行中.png",
+        "template": "assets/templates\\XM运行中.png",
         "target_text": "停止",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -86,7 +86,7 @@
       {
         "name": "执行完毕",
         "action": "wait_template",
-        "template": "模板\\XM执行完毕.png",
+        "template": "assets/templates\\XM执行完毕.png",
         "target_text": "选择任务已执行完毕",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -122,7 +122,7 @@
       {
         "name": "登录1",
         "action": "click_template",
-        "template": "模板\\CJ登录-1.png",
+        "template": "assets/templates\\CJ登录-1.png",
         "target_text": "登录",
         "enable_ocr_fallback": true,
         "confirm_type": "template_match",
@@ -130,7 +130,7 @@
         "clicks": 1,
         "post_delay_sec": 2.0,
         "confirm_templates": [
-          "模板\\CJ登录-2.png"
+          "assets/templates\\CJ登录-2.png"
         ],
         "confirm_timeout_sec": 15,
         "on_fail": "retry_step",
@@ -139,7 +139,7 @@
       {
         "name": "登录2",
         "action": "click_template",
-        "template": "模板\\CJ登录-2.png",
+        "template": "assets/templates\\CJ登录-2.png",
         "target_text": "登录",
         "enable_ocr_fallback": true,
         "confirm_type": "template_match",
@@ -147,7 +147,7 @@
         "clicks": 1,
         "post_delay_sec": 2.5,
         "confirm_templates": [
-          "模板\\CJ登陆成功.png"
+          "assets/templates\\CJ登陆成功.png"
         ],
         "confirm_timeout_sec": 20,
         "on_fail": "retry_step",
@@ -157,14 +157,14 @@
         "name": "登录成功确认",
         "action": "click_template",
         "no_click": true,
-        "template": "模板\\CJ登陆成功.png",
+        "template": "assets/templates\\CJ登陆成功.png",
         "target_text": "退出",
         "enable_ocr_fallback": true,
         "confirm_type": "template_match",
         "timeout_sec": 180,
         "post_delay_sec": 1.0,
         "confirm_templates": [
-          "模板\\CJ进入对战-1.png"
+          "assets/templates\\CJ进入对战-1.png"
         ],
         "confirm_timeout_sec": 20,
         "on_fail": "retry_prev",
@@ -173,7 +173,7 @@
       {
         "name": "进入对战1",
         "action": "click_template",
-        "template": "模板\\CJ进入对战-1.png",
+        "template": "assets/templates\\CJ进入对战-1.png",
         "target_text": "进入对战",
         "enable_ocr_fallback": true,
         "confirm_type": "template_match",
@@ -181,7 +181,7 @@
         "clicks": 1,
         "post_delay_sec": 2.0,
         "confirm_templates": [
-          "模板\\CJ进入对战-2.png"
+          "assets/templates\\CJ进入对战-2.png"
         ],
         "confirm_timeout_sec": 15,
         "on_fail": "retry_step",
@@ -190,7 +190,7 @@
       {
         "name": "进入对战2",
         "action": "click_template",
-        "template": "模板\\CJ进入对战-2.png",
+        "template": "assets/templates\\CJ进入对战-2.png",
         "target_text": "一键刷任务",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -236,7 +236,7 @@
       {
         "name": "开始更新",
         "action": "click_template",
-        "template": "模板\\异环-开始更新.png",
+        "template": "assets/templates\\异环-开始更新.png",
         "target_text": "开始更新",
         "confirm_type": "none",
         "timeout_sec": 8,
@@ -249,7 +249,7 @@
       {
         "name": "等待开始游戏",
         "action": "wait_template",
-        "template": "模板\\异环-开始游戏.png",
+        "template": "assets/templates\\异环-开始游戏.png",
         "target_text": "开始游戏",
         "timeout_sec": 1200,
         "post_delay_sec": 1.0
@@ -257,7 +257,7 @@
       {
         "name": "开始游戏",
         "action": "click_template",
-        "template": "模板\\异环-开始游戏.png",
+        "template": "assets/templates\\异环-开始游戏.png",
         "target_text": "开始游戏",
         "confirm_type": "none",
         "timeout_sec": 180,
@@ -269,7 +269,7 @@
       {
         "name": "确定",
         "action": "click_template",
-        "template": "模板\\异环-确定.png",
+        "template": "assets/templates\\异环-确定.png",
         "search_scope": "screen",
         "confirm_type": "none",
         "timeout_sec": 45,
@@ -293,7 +293,7 @@
       {
         "name": "进入游戏",
         "action": "click_template",
-        "template": "模板\\异环-进入游戏.png",
+        "template": "assets/templates\\异环-进入游戏.png",
         "confirm_type": "disappear",
         "timeout_sec": 120,
         "clicks": 1,
@@ -336,7 +336,7 @@
       {
         "name": "点击左下角昵称",
         "action": "click_template",
-        "template": "模板\\minimax-昵称.png",
+        "template": "assets/templates\\minimax-昵称.png",
         "target_text": "MiniMax",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -351,7 +351,7 @@
         "name": "悬停每日签到菜单",
         "action": "click_template",
         "hover": true,
-        "template": "模板\\minimax-每日签到菜单.png",
+        "template": "assets/templates\\minimax-每日签到菜单.png",
         "target_text": "每日签到",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -447,7 +447,7 @@
       {
         "name": "点击左下角头像",
         "action": "click_template",
-        "template": "模板\\hy4-左下角头像.png",
+        "template": "assets/templates\\hy4-左下角头像.png",
         "target_text": "头像",
         "enable_ocr_fallback": false,
         "confirm_type": "none",
@@ -476,7 +476,7 @@
       {
         "name": "等待加油站页面的立即领取",
         "action": "wait_template",
-        "template": "模板\\hy4-立即领取.png",
+        "template": "assets/templates\\hy4-立即领取.png",
         "target_text": "立即领取",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -491,7 +491,7 @@
         "name": "点击立即领取",
         "_comment": "2026-10-25：领取接口约 6s 才回，原 text_change 在 +3s 单次检查必然误判；本步改为不确认，成败交给后续非 optional 的「今日已领取」验证。",
         "action": "click_template",
-        "template": "模板\\hy4-立即领取.png",
+        "template": "assets/templates\\hy4-立即领取.png",
         "target_text": "立即领取",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -507,7 +507,7 @@
         "name": "重新点击左下角头像",
         "_comment": "2026-10-27 实锤：点完「立即领取」后加油站页面会整个关闭退回聊天页，「今日已领取」必须重新导航才能看到。本步 optional——页面还开着（头像被盖住）时超时跳过，交给下一步。",
         "action": "click_template",
-        "template": "模板\\hy4-左下角头像.png",
+        "template": "assets/templates\\hy4-左下角头像.png",
         "target_text": "头像",
         "enable_ocr_fallback": false,
         "confirm_type": "none",
@@ -573,7 +573,7 @@
       {
         "name": "等待左下角头像出现",
         "action": "wait_template",
-        "template": "模板\\trae-用户头像.png",
+        "template": "assets/templates\\trae-用户头像.png",
         "target_text": "用户",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -586,7 +586,7 @@
       {
         "name": "点击左下角头像展开用户区",
         "action": "click_template",
-        "template": "模板\\trae-用户头像.png",
+        "template": "assets/templates\\trae-用户头像.png",
         "target_text": "用户",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -600,7 +600,7 @@
       {
         "name": "等待侧边栏签到按钮出现",
         "action": "wait_template",
-        "template": "模板\\trae-签到.png",
+        "template": "assets/templates\\trae-签到.png",
         "target_text": "签到",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -613,7 +613,7 @@
       {
         "name": "点击侧边栏签到按钮",
         "action": "click_template",
-        "template": "模板\\trae-签到.png",
+        "template": "assets/templates\\trae-签到.png",
         "target_text": "签到",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -628,7 +628,7 @@
         "name": "等待签到弹窗按钮出现",
         "_comment": "2026-10-25：签到接口成功后不一定弹抽奖窗（当天日志已 claim 200 OK 但 3 分钟没弹窗）。抽奖弹窗只是附加奖励，改为 optional 短等，成败由末步日志核验决定。",
         "action": "wait_template",
-        "template": "模板\\trae-签到弹窗.png",
+        "template": "assets/templates\\trae-签到弹窗.png",
         "target_text": "签到参与抽奖",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -642,7 +642,7 @@
       {
         "name": "点击签到参与抽奖",
         "action": "click_template",
-        "template": "模板\\trae-签到弹窗.png",
+        "template": "assets/templates\\trae-签到弹窗.png",
         "target_text": "签到参与抽奖",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -696,7 +696,7 @@
       {
         "name": "等待领取按钮",
         "action": "wait_template",
-        "template": "模板\\qoder-领取.png",
+        "template": "assets/templates\\qoder-领取.png",
         "target_text": "领取",
         "enable_ocr_fallback": false,
         "confirm_type": "none",
@@ -710,7 +710,7 @@
       {
         "name": "点击领取",
         "action": "click_template",
-        "template": "模板\\qoder-领取.png",
+        "template": "assets/templates\\qoder-领取.png",
         "target_text": "领取",
         "enable_ocr_fallback": false,
         "confirm_type": "disappear",
@@ -775,7 +775,7 @@
           0.95
         ],
         "tab_text": "余烬兑换",
-        "tab_template": "模板\\崩铁-余烬兑换页签.png",
+        "tab_template": "assets/templates\\崩铁-余烬兑换页签.png",
         "tab_content_markers": [
           "信用点"
         ],
@@ -790,8 +790,8 @@
           "无可取代的东西",
           "以世界之名"
         ],
-        "confirm_template": "模板\\崩铁-兑换确认.png",
-        "exit_marker_template": "模板\\崩铁-主界面.png",
+        "confirm_template": "assets/templates\\崩铁-兑换确认.png",
+        "exit_marker_template": "assets/templates\\崩铁-主界面.png",
         "timeout_sec": 600,
         "post_delay_sec": 2.0,
         "on_fail": "fail",
@@ -810,7 +810,7 @@
             "count": 2
           }
         ],
-        "_comment": "ESC → 商店 → 左侧兑换商店 → 顶部余烬兑换。2026-11-01 用户确认清单：抽卡道具 星轨专票×5 + 星轨通票×5 + 命运的足迹×2（均买满可兑换数 5/5、5/5、2/2；单价 90/90/60）。**星芒兑换页也有星轨专票/通票/命运的足迹，不能靠商品名判断页签**：tab_content_markers=[\"信用点\"] 做页面内容强校验（星芒页没有信用点；余烬页的「信用点×10000」OCR 0.83），看不到就整步失败、不购买，购买前再复核一次；原页签模板/亮度保留作无内容标记时的兜底。用户 2026-10-25 强调星芒兑换的五星光锥（银河铁道之夜/时节不居/但战斗还未结束/无可取代的东西/以世界之名）一定要消失——forbidden_texts 在购买前做 OCR 反向拦截，看到任意一个就失败不买。confirm_template 来自 2026-11-01 用户弹窗截图（底部「确认」白色按钮），弹窗上 1.000、无弹窗商店页 0.636/0.661（生效阈值 0.8，不误点）。参考图 data/artifacts/ref_starrail_ember_20261101.png / ref_starrail_ember_dialog_20261101.png。"
+        "_comment": "ESC → 商店 → 左侧兑换商店 → 顶部余烬兑换。2026-11-01 用户确认清单：抽卡道具 星轨专票×5 + 星轨通票×5 + 命运的足迹×2（均买满可兑换数 5/5、5/5、2/2；单价 90/90/60）。**星芒兑换页也有星轨专票/通票/命运的足迹，不能靠商品名判断页签**：tab_content_markers=[\"信用点\"] 做页面内容强校验（星芒页没有信用点；余烬页的「信用点×10000」OCR 0.83），看不到就整步失败、不购买，购买前再复核一次；原页签assets/templates/亮度保留作无内容标记时的兜底。用户 2026-10-25 强调星芒兑换的五星光锥（银河铁道之夜/时节不居/但战斗还未结束/无可取代的东西/以世界之名）一定要消失——forbidden_texts 在购买前做 OCR 反向拦截，看到任意一个就失败不买。confirm_template 来自 2026-11-01 用户弹窗截图（底部「确认」白色按钮），弹窗上 1.000、无弹窗商店页 0.636/0.661（生效阈值 0.8，不误点）。参考图 data/artifacts/ref_starrail_ember_20261101.png / ref_starrail_ember_dialog_20261101.png。"
       },
       {
         "name": "自塑尘脂每月合成",
@@ -832,7 +832,7 @@
           0.825,
           0.83
         ],
-        "limit_template": "模板\\崩铁-自塑尘脂-已达上限.png",
+        "limit_template": "assets/templates\\崩铁-自塑尘脂-已达上限.png",
         "craft_button_region_frac": [
           0.25,
           0.7,
@@ -844,7 +844,7 @@
           0.806
         ],
         "max_rounds": 30,
-        "exit_marker_template": "模板\\崩铁-主界面.png",
+        "exit_marker_template": "assets/templates\\崩铁-主界面.png",
         "timeout_sec": 300,
         "post_delay_sec": 2.0,
         "on_fail": "fail",
@@ -891,7 +891,7 @@
       {
         "name": "等待进入主界面",
         "action": "wait_template",
-        "template": "模板\\绝区零-主界面-电台.png",
+        "template": "assets/templates\\绝区零-主界面-电台.png",
         "target_text": "星期",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -905,11 +905,11 @@
         "name": "信号残响每月兑换",
         "action": "monthly_exchange",
         "log_label": "信源兑换",
-        "shop_entry_template": "模板\\绝区零-商城入口.png",
+        "shop_entry_template": "assets/templates\\绝区零-商城入口.png",
         "shop_entry_text": "商城",
         "nav_text": "信源清单",
         "tab_text": "信号残响",
-        "tab_template": "模板\\绝区零-信号残响页签.png",
+        "tab_template": "assets/templates\\绝区零-信号残响页签.png",
         "tab_content_markers": [
           "储值电卡"
         ],
@@ -920,8 +920,8 @@
           "啜泣摇篮",
           "嚼泣摇篮"
         ],
-        "confirm_template": "模板\\绝区零-商店-确认.png",
-        "exit_marker_template": "模板\\绝区零-主菜单按钮.png",
+        "confirm_template": "assets/templates\\绝区零-商店-确认.png",
+        "exit_marker_template": "assets/templates\\绝区零-主菜单按钮.png",
         "timeout_sec": 600,
         "post_delay_sec": 2.0,
         "on_fail": "fail",
@@ -936,12 +936,12 @@
             "count": 5
           }
         ],
-        "_comment": "主界面 ESC → 商城(24HOUR) → 信源清单 → 信号残响。2026-11-01 用户确认清单：抽卡道具 加密母带×5 + 原装母带×5（买满月剩余 5/5，单价 90）。**信号余波页也有同名母带，不能靠商品名判断页签**：tab_content_markers=[\"储值电卡\"] 做页面内容强校验（信号余波页没有储值电卡，2026-11-01 实测；新截图 OCR conf 0.80），看不到就整步失败、不购买，购买前再复核一次；原页签模板/亮度保留作无内容标记时的兜底，forbidden_texts 硫磺石/燃狱齿轮/嵌合编译器/啜泣摇篮（含 OCR 误读写法）仍作第二道闸。确认模板 绝区零-商店-确认.png 在新弹窗上 1.000、无弹窗商店页 0.659（生效阈值 0.8，不误点）。参考图 data/artifacts/ref_zzz_signal_resonance_20261101.png / ref_zzz_signal_resonance_dialog_20261101.png。"
+        "_comment": "主界面 ESC → 商城(24HOUR) → 信源清单 → 信号残响。2026-11-01 用户确认清单：抽卡道具 加密母带×5 + 原装母带×5（买满月剩余 5/5，单价 90）。**信号余波页也有同名母带，不能靠商品名判断页签**：tab_content_markers=[\"储值电卡\"] 做页面内容强校验（信号余波页没有储值电卡，2026-11-01 实测；新截图 OCR conf 0.80），看不到就整步失败、不购买，购买前再复核一次；原页签assets/templates/亮度保留作无内容标记时的兜底，forbidden_texts 硫磺石/燃狱齿轮/嵌合编译器/啜泣摇篮（含 OCR 误读写法）仍作第二道闸。确认模板 绝区零-商店-确认.png 在新弹窗上 1.000、无弹窗商店页 0.659（生效阈值 0.8，不误点）。参考图 data/artifacts/ref_zzz_signal_resonance_20261101.png / ref_zzz_signal_resonance_dialog_20261101.png。"
       },
       {
         "name": "打开功能菜单",
         "action": "click_template",
-        "template": "模板\\绝区零-主菜单按钮.png",
+        "template": "assets/templates\\绝区零-主菜单按钮.png",
         "target_text": "",
         "enable_ocr_fallback": false,
         "confirm_type": "none",
@@ -955,7 +955,7 @@
       {
         "name": "点击后勤商店",
         "action": "click_template",
-        "template": "模板\\绝区零-后勤商店入口.png",
+        "template": "assets/templates\\绝区零-后勤商店入口.png",
         "target_text": "后勤商店",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -968,7 +968,7 @@
       {
         "name": "等待商店界面",
         "action": "wait_template",
-        "template": "模板\\绝区零-商店-哨站后勤页签.png",
+        "template": "assets/templates\\绝区零-商店-哨站后勤页签.png",
         "target_text": "哨站后勤",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -980,7 +980,7 @@
       {
         "name": "后勤商店采购",
         "action": "zzz_shop_buy",
-        "confirm_template": "模板\\绝区零-商店-确认.png",
+        "confirm_template": "assets/templates\\绝区零-商店-确认.png",
         "timeout_sec": 1800,
         "post_delay_sec": 3.0,
         "on_fail": "fail",
@@ -988,49 +988,49 @@
         "shop_groups": [
           {
             "name": "哨站后勤",
-            "tab_selected_template": "模板\\绝区零-商店-哨站后勤页签.png",
+            "tab_selected_template": "assets/templates\\绝区零-商店-哨站后勤页签.png",
             "items": [
               {
                 "name": "音擎残芯",
-                "template": "模板\\绝区零-商店-音擎残芯.png",
+                "template": "assets/templates\\绝区零-商店-音擎残芯.png",
                 "count": 6
               },
               {
                 "name": "原装母带",
-                "template": "模板\\绝区零-商店-原装母带.png",
+                "template": "assets/templates\\绝区零-商店-原装母带.png",
                 "count": 2
               },
               {
                 "name": "日常业绩",
-                "template": "模板\\绝区零-商店-日常业绩.png",
+                "template": "assets/templates\\绝区零-商店-日常业绩.png",
                 "count": 10
               }
             ]
           },
           {
             "name": "协会物资",
-            "tab_template": "模板\\绝区零-商店-协会物资页签.png",
+            "tab_template": "assets/templates\\绝区零-商店-协会物资页签.png",
             "items": [
               {
                 "name": "调律校音器",
-                "template": "模板\\绝区零-商店-调律校音器.png",
+                "template": "assets/templates\\绝区零-商店-调律校音器.png",
                 "count": 1
               },
               {
                 "name": "仓鼠笼访问器",
-                "template": "模板\\绝区零-商店-仓鼠笼访问器.png",
+                "template": "assets/templates\\绝区零-商店-仓鼠笼访问器.png",
                 "count": 1
               },
               {
                 "name": "日常业绩",
-                "template": "模板\\绝区零-商店-日常业绩.png",
+                "template": "assets/templates\\绝区零-商店-日常业绩.png",
                 "count": 10
               }
             ]
           }
         ],
         "_comment": "用户 2026-11-01 定稿：哨站后勤 **音擎残芯×6 + 原装母带×2 + 日常业绩×10**；协会物资 **调律校音器×1 + 「仓鼠笼」访问器×1 + 日常业绩×10**。两个页签的日常业绩是独立售卖（哨站用调查员记录、协会用邦布券），各买满限购 10 个。买完按 ESC 退回主世界（exit_marker_template = 主界面电台图标），别把游戏停在商店页。音擎残芯 ≠ 音擎能源模块，两个模板别弄混。",
-        "exit_marker_template": "模板\\绝区零-主界面-电台.png"
+        "exit_marker_template": "assets/templates\\绝区零-主界面-电台.png"
       }
     ],
     "close_process_on_finish": false
@@ -1070,7 +1070,7 @@
       {
         "name": "等待进入主界面",
         "action": "wait_template",
-        "template": "模板\\绝区零-主界面-电台.png",
+        "template": "assets/templates\\绝区零-主界面-电台.png",
         "target_text": "星期",
         "enable_ocr_fallback": true,
         "confirm_type": "none",
@@ -1162,8 +1162,8 @@
           "宗室秘法录",
           "宗室长弓"
         ],
-        "confirm_template": "模板\\原神-兑换确认.png",
-        "exit_marker_template": "模板\\原神-主界面.png",
+        "confirm_template": "assets/templates\\原神-兑换确认.png",
+        "exit_marker_template": "assets/templates\\原神-主界面.png",
         "timeout_sec": 600,
         "post_delay_sec": 2.0,
         "on_fail": "fail",
@@ -1219,7 +1219,7 @@
       {
         "name": "游戏更新",
         "action": "click_template",
-        "template": "模板\\鸣潮-更新.png",
+        "template": "assets/templates\\鸣潮-更新.png",
         "target_text": "更新",
         "search_scope": "window",
         "confirm_type": "none",
@@ -1233,7 +1233,7 @@
       {
         "name": "等待更新完成",
         "action": "wait_template",
-        "template": "模板\\鸣潮-进入游戏.png",
+        "template": "assets/templates\\鸣潮-进入游戏.png",
         "target_text": "进入游戏",
         "search_scope": "window",
         "timeout_sec": 3600,
@@ -1244,7 +1244,7 @@
       {
         "name": "进入游戏",
         "action": "click_template",
-        "template": "模板\\鸣潮-进入游戏.png",
+        "template": "assets/templates\\鸣潮-进入游戏.png",
         "target_text": "进入游戏",
         "search_scope": "window",
         "confirm_type": "none",
@@ -1324,7 +1324,7 @@
     ]
   },
   "StarRailLauncher": {
-    "_comment": "崩铁进入主界面前置流程，方法复刻自 March7th Assistant v2.2.0.3（2026-10-24）：直接启动 StarRail.exe（不走官方启动器）→ 「点击进入」模板/OCR 点击 → 主界面特征 main.png 连续 2 次命中；途中点掉 开始游戏/月卡/欢迎/消息 弹窗，OCR 见「前往启动器」字样快速失败（客户端未更新）。默认不接线：apps.HonkaiStarRail.prelaunch_flow 未配置，一条龙仍由 March7th 自己启动游戏；要启用时在 app_config.json 的 apps.HonkaiStarRail 加 \"prelaunch_flow\": \"StarRailLauncher\"。",
+    "_comment": "崩铁进入主界面前置流程，方法复刻自 March7th Assistant v2.2.0.3（2026-10-24）：直接启动 StarRail.exe（不走官方启动器）→ 「点击进入」assets/templates/OCR 点击 → 主界面特征 main.png 连续 2 次命中；途中点掉 开始游戏/月卡/欢迎/消息 弹窗，OCR 见「前往启动器」字样快速失败（客户端未更新）。默认不接线：apps.HonkaiStarRail.prelaunch_flow 未配置，一条龙仍由 March7th 自己启动游戏；要启用时在 app_config.json 的 apps.HonkaiStarRail 加 \"prelaunch_flow\": \"StarRailLauncher\"。",
     "enabled": true,
     "exe_path": "E://Program Files//Game//Star Rail//Game//StarRail.exe",
     "window_title_keywords": [
@@ -1437,7 +1437,7 @@
       {
         "name": "开始更新",
         "action": "click_template",
-        "template": "模板\\异环-开始更新.png",
+        "template": "assets/templates\\异环-开始更新.png",
         "target_text": "开始更新",
         "confirm_type": "none",
         "timeout_sec": 8,
@@ -1450,7 +1450,7 @@
       {
         "name": "等待开始游戏",
         "action": "wait_template",
-        "template": "模板\\异环-开始游戏.png",
+        "template": "assets/templates\\异环-开始游戏.png",
         "target_text": "开始游戏",
         "timeout_sec": 1200,
         "post_delay_sec": 1.0
@@ -1458,7 +1458,7 @@
       {
         "name": "开始游戏",
         "action": "click_template",
-        "template": "模板\\异环-开始游戏.png",
+        "template": "assets/templates\\异环-开始游戏.png",
         "target_text": "开始游戏",
         "confirm_type": "none",
         "timeout_sec": 180,
@@ -1470,7 +1470,7 @@
       {
         "name": "确定",
         "action": "click_template",
-        "template": "模板\\异环-确定.png",
+        "template": "assets/templates\\异环-确定.png",
         "search_scope": "screen",
         "confirm_type": "none",
         "timeout_sec": 45,
@@ -1494,7 +1494,7 @@
       {
         "name": "进入游戏",
         "action": "click_template",
-        "template": "模板\\异环-进入游戏.png",
+        "template": "assets/templates\\异环-进入游戏.png",
         "confirm_type": "disappear",
         "timeout_sec": 120,
         "clicks": 1,
@@ -1507,7 +1507,7 @@
         "name": "迷迭兑换每月兑换",
         "action": "monthly_exchange",
         "log_label": "迷迭兑换",
-        "shop_entry_template": "模板\\异环-商城入口.png",
+        "shop_entry_template": "assets/templates\\异环-商城入口.png",
         "shop_entry_text": "商城",
         "nav_text": "集市兑换",
         "nav_region_frac": [
@@ -1528,11 +1528,11 @@
           "并肩达人",
           "茫昧絮语"
         ],
-        "confirm_template": "模板\\异环-购买确认.png",
+        "confirm_template": "assets/templates\\异环-购买确认.png",
         "items": [
           {
             "name": "质感骰子",
-            "template": "模板\\异环-质感骰子.png",
+            "template": "assets/templates\\异环-质感骰子.png",
             "color_match": true,
             "point_frac": [
               0.256,
@@ -1542,7 +1542,7 @@
           },
           {
             "name": "三重钥匙",
-            "template": "模板\\异环-三重钥匙.png",
+            "template": "assets/templates\\异环-三重钥匙.png",
             "color_match": true,
             "point_frac": [
               0.573,
