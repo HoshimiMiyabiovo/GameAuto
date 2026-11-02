@@ -45,13 +45,6 @@ TONE_SUCCESS = "success"
 TONE_WARNING = "warning"
 TONE_DANGER = "danger"
 
-# 没有官方公告接口/公告尚未发布时，按常规维护窗口兜底（仅用于失败/跳过后排补跑）
-_FALLBACK_UPDATE_WINDOWS = {
-    "WutheringWaves": ("04:00", "11:00"),
-    "InfinityNikki": ("10:00", "11:00"),
-    "NevernessToEverness": ("06:00", "11:00"),
-}
-
 TONE_MAP: Dict[str, tuple] = {
     TONE_INFO:    ("待命中", "#dff1e4", "#2f7d4a"),
     TONE_RUNNING: ("进行中", "#e9f3fb", "#295d86"),
@@ -609,11 +602,12 @@ class UiBridge(QObject):
 
     @Slot(str)
     def switchView(self, view_key: str):
+        from ..games import view_keys
+
         valid = {
-            "automation", "stamina_config", "wool", "daily", "gacha", "nikki",
-            "wuwa", "tajiduo", "endfield_center", "setup_wizard",
-            "click_sequence", "webui"
-        }
+            "automation", "stamina_config", "wool", "daily", "gacha",
+            "setup_wizard", "click_sequence", "webui",
+        } | set(view_keys())
         if view_key not in valid:
             logger.warning("[UI] 未知视图: %s", view_key)
             return
@@ -2004,8 +1998,11 @@ class UiBridge(QObject):
         return runnable, deferred
 
     def _fallback_update_open(self, app_key: str, now: datetime) -> Optional[datetime]:
-        """无公告时按常规维护窗口给出兜底开服时间。"""
-        window = _FALLBACK_UPDATE_WINDOWS.get(str(app_key))
+        """无公告时按常规维护窗口给出兜底开服时间（窗口来自游戏档案）。"""
+        from ..games import get_profile
+
+        profile = get_profile(app_key)
+        window = profile.update_window if profile else ()
         if not window:
             return None
         start_s, end_s = window

@@ -103,20 +103,21 @@ _SOURCES: Dict[str, Dict[str, Any]] = {
     },
 }
 
-APP_KEY_TO_GAME = {
-    "GenshinImpact": "genshin",
-    "genshin": "genshin",
-    "HonkaiStarRail": "hsr",
-    "hsr": "hsr",
-    "ZenlessZoneZero": "zzz",
-    "zzz": "zzz",
-    "WutheringWaves": "wuwa",
-    "wuwa": "wuwa",
-    "NevernessToEverness": "nte",
-    "nte": "nte",
-    "InfinityNikki": "nikki",
-    "nikki": "nikki",
-}
+# app_key / game_key → 公告解析 key（崩铁用 "hsr"）。由 games 注册表的
+# update_key 生成，新增游戏不再需要手改这张表。
+def _build_app_key_to_game() -> Dict[str, str]:
+    from ..games import iter_profiles
+
+    out: Dict[str, str] = {}
+    for profile in iter_profiles():
+        if not profile.update_key:
+            continue
+        for key in (profile.app_key, profile.app_key.lower(), profile.game_key):
+            out[key] = profile.update_key
+    return out
+
+
+APP_KEY_TO_GAME = _build_app_key_to_game()
 
 # 公告写法实测：
 #   原神：〓更新时间〓 2026/09/23 06:00 开始，预计5个小时完成

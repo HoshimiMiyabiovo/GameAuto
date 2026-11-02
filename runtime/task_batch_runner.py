@@ -34,6 +34,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from ..games import iter_profiles
 from .automation_controller import GAME_UPDATING_SKIP
 from .background_template_runner import (
     is_monthly_flow_done,
@@ -122,10 +123,8 @@ BAIJING_WEEKLY_SEQUENCE = "白荆回廊-每周商店购买"
 # 成功后 background runner 写 monthly_flow:<FLOW>=YYYY-MM，当月不再重复；
 # 失败不写标记，下一次批次自动重试（与白荆每周序列、暖暖晶石兑换同一套语义）。
 _MONTHLY_FLOW_BY_APP: Dict[str, Tuple[str, str]] = {
-    "HonkaiStarRail": ("HSR_MONTHLY", "崩铁每月商店"),
-    "ZenlessZoneZero": ("ZZZ_MONTHLY", "绝区零每月商店"),
-    "GenshinImpact": ("GENSHIN_MONTHLY", "原神每月商店"),
-    "NevernessToEverness": ("NTE_MONTHLY", "异环每月商店"),
+    p.app_key: (p.monthly_flow, p.monthly_label)
+    for p in iter_profiles() if p.monthly_flow
 }
 
 # 流程 key → 后台执行入口（加新游戏时两处一起加，别在 if/elif 里漏分支）
@@ -531,66 +530,23 @@ def _verify_script_log_result(app_key: str, effective_script_choice: Optional[st
     返回失败原因字符串则改判，返回 None 保持原判。
     """
     try:
+        from ..games import get_profile
         from ..services.daily_progress_tracker import DailyTaskRecord, GameDailyRecord
 
-        tag = ""
-        data = None
-        if app_key == "ZenlessZoneZero":
-            from ..services.zzz_daily_parser import parse_latest_zzz_log
-            data = parse_latest_zzz_log()
-            tag = "OneDragon"
-        elif app_key == "HonkaiStarRail" and (effective_script_choice or "") == "March7th":
-            # 只校验 March7th 日志；StarRailOneDragon 无对应日志文件，不误判
-            from ..services.starrail_daily_parser import parse_latest_starrail_log
-            data = parse_latest_starrail_log()
-            tag = "March7th"
-        elif app_key == "WutheringWaves":
-            from ..services.ok_ww_daily_parser import parse_latest_ok_ww_log
-            data = parse_latest_ok_ww_log()
-            tag = "ok-ww"
-            if data is not None:
-                # 与终末地同口径：官方「今日活跃」是核心判定，库里已有 API
-                # 任务时（预查询已写）关键计数说了算，脚本边角失败不改判。
-                data.setdefault("tasks", []).extend(
-                    _load_api_key_progress_tasks("wuwa", logger))
-        elif app_key == "ArknightsEndfield":
-            from ..services.ok_ef_daily_parser import parse_latest_ok_ef_report
-            data = parse_latest_ok_ef_report()
-            tag = "ok-ef"
-            if data is not None:
-                # 复核口径：合并查询接口的日活跃（KEY_PROGRESS_TASKS["endfield"]），
-                # 有 API 关键任务时由真实活跃度说了算；无 API 数据则退回脚本口径
-                data.setdefault("tasks", []).extend(
-                    _load_api_key_progress_tasks(str(data.get("game_key") or "endfield"), logger))
-        elif app_key == "NevernessToEverness":
-            from ..services.ok_nte_daily_parser import parse_latest_ok_nte_log
-            data = parse_latest_ok_nte_log()
-            tag = "ok-nte"
-            if data is not None:
-                # dayvalue 复核兜底（2026-10-24）：塔吉多 roleHome 的活跃度满 100
-                # → 当日完成，ok-nte 边角任务失败不再改判
-                data.setdefault("tasks", []).extend(
-                    _load_api_key_progress_tasks("nte", logger))
-                for t in data["tasks"]:
-                    if str(t.get("task_name") or "") != "活跃度":
-                        continue
-                    extra = t.get("extra") or {}
-                    try:
-                        cur, total = int(extra.get("current")), int(extra.get("total"))
-                    except (TypeError, ValueError):
-                        continue
-                    if total > 0 and cur >= total:
-                        return None
-        elif app_key == "InfinityNikki":
-            # 重试关键判定：朝夕心愿（KEY_STATUS_TASKS["nikki"]）成功即整体完成，
-            # 美鸭梨挖掘/星海拾光等边角任务失败不改判（whimbox 解析器恒定输出 8 项）
-            from ..services.whimbox_daily_parser import parse_latest_whimbox_log
-            data = parse_latest_whimbox_log()
-            tag = "whimbox"
-        else:
+        profile = get_profile(app_key)
+        if profile is None or not profile.daily_parser:
             return None
+        # 崩铁只校验 March7th 日志；StarRailOneDragon 无对应日志文件，不误判
+        if profile.verify_scripts and (effective_script_choice or "") not in profile.verify_scripts:
+            return None
+        data = profile.latest_daily_log()
         if data is None:
             return None
+        # 复核口径：并入 API 关键计数（日活跃/今日活跃）。返回 True 表示
+        # 「活跃度已满」等显式信号说了算，直接保持原判（异环 dayvalue 兜底）。
+        if profile.augment_verify(data, _load_api_key_progress_tasks, logger):
+            return None
+        tag = profile.daily_tool
         tasks = data.get("tasks") or []
         if not tasks:
             # 解析不到任何任务：沿用 parser 自带结论（fail-closed，不 silent 成功）

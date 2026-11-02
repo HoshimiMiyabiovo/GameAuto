@@ -992,38 +992,15 @@ class AutomationController:
         # 异环：ok-nte 日志出现更新行时不等超时，直接跳过（更新日等俩小时没意义）
         # 米游三件套：官方公告显示当前在维护窗口内时同样快速跳过；桥接层会按公告
         # 开服时间（+5 分钟）安排动态补跑，不再靠固定 11:05 猜。
+        # 更新中快速跳过：异环看 ok-nte 日志更新行 + 官方维护窗口，米游系/鸣潮/
+        # 暖暖只看官方公告。策略由 games 注册表的 progress_hint 提供。
+        from ..games import get_profile
+
         progress_hint = None
-        if app_name == "NevernessToEverness":
+        profile = get_profile(app_name)
+        if profile is not None:
             try:
-                from ..services.ok_nte_daily_parser import is_update_in_progress
-                from ..services.game_update_calendar import get_maintenance_state
-
-                def _nte_update_hint():
-                    if is_update_in_progress():
-                        return True
-                    return bool(get_maintenance_state(app_name))
-
-                progress_hint = _nte_update_hint
-            except Exception:
-                progress_hint = None
-        elif app_name in ("GenshinImpact", "HonkaiStarRail", "ZenlessZoneZero", "WutheringWaves", "InfinityNikki"):
-            try:
-                from ..services.game_update_calendar import get_maintenance_state
-
-                def _mihoyo_maintenance_hint():
-                    state = get_maintenance_state(app_name)
-                    if not state:
-                        return False
-                    open_dt = state.get("open_at_dt")
-                    open_txt = open_dt.strftime("%H:%M") if open_dt else "?"
-                    self.logger.info(
-                        f"[{app_name}] 官方公告维护中"
-                        f"（{state.get('version') or '版本更新'}），预计 {open_txt} 开服，"
-                        f"本次跳过等待"
-                    )
-                    return True
-
-                progress_hint = _mihoyo_maintenance_hint
+                progress_hint = profile.build_progress_hint(self.logger)
             except Exception:
                 progress_hint = None
         game_snapshot, wait_reason = self._wait_for_game_process_snapshot(

@@ -35,13 +35,6 @@ TONE_SUCCESS = "success"
 TONE_WARNING = "warning"
 TONE_DANGER = "danger"
 
-# 没有官方公告接口/公告尚未发布时，按常规维护窗口兜底（仅用于失败/跳过后排补跑）
-_FALLBACK_UPDATE_WINDOWS = {
-    "WutheringWaves": ("04:00", "11:00"),
-    "InfinityNikki": ("10:00", "11:00"),
-    "NevernessToEverness": ("06:00", "11:00"),
-}
-
 TONE_MAP: Dict[str, tuple] = {
     TONE_INFO:    ("待命中", "#dff1e4", "#2f7d4a"),
     TONE_RUNNING: ("进行中", "#e9f3fb", "#295d86"),
@@ -591,235 +584,53 @@ def _inject_external_log_progress(bridge, games_data: List[Dict[str, Any]]):
       - whimbox：保留原有 tasks，**前置插入**白名单任务（同名不重复），用于细化任务细节
       - 其他：如果今天的日志存在，整体替换原有的对应 game 项；否则保持原数据不变
     """
-    from ...services.ok_ef_daily_parser import parse_latest_ok_ef_report
-    from ...services.ok_nte_daily_parser import parse_latest_ok_nte_log
-    from ...services.ok_ww_daily_parser import parse_latest_ok_ww_log
-    from ...services.whimbox_daily_parser import parse_latest_whimbox_log
-    from ...services.bettergi_daily_parser import parse_latest_bettergi_log
-    from ...services.zzz_daily_parser import parse_latest_zzz_log
-    from ...services.starrail_daily_parser import parse_latest_starrail_log
+    from ...games import iter_profiles
     from ...settings import resolve_game_key
 
-    parsers = (
-        ("endfield", "ok-ef", parse_latest_ok_ef_report),
-        ("nte", "ok-nte", parse_latest_ok_nte_log),
-        ("wuwa", "ok-ww", parse_latest_ok_ww_log),
-        ("nikki", "whimbox", parse_latest_whimbox_log),
-        ("genshin", "BetterGI", parse_latest_bettergi_log),
-        ("zzz", "OneDragon", parse_latest_zzz_log),
-        ("honkai_sr", "March7th", parse_latest_starrail_log),
-    )
-    for game_key, tool_name, parser_func in parsers:
+    for profile in iter_profiles():
+        if not profile.daily_parser:
+            continue
         try:
-            data = parser_func()
+            data = profile.latest_daily_log()
             if data is None:
-                if game_key == "nte":
-                    # 异环：ok-nte 今天若未执行，仍保留“游戏内每日”占位任务，
-                    # 进度由 ok-nte 执行情况判定（未执行 = 待执行），避免游戏内进度整体缺失。
-                    data = {
-                        "game_key": "nte",
-                        "game_name": "异环",
-                        "uid": "",
-                        "nickname": "ok-nte",
-                        "is_all_success": False,
-                        "has_failed": False,
-                        "progress_percent": 0,
-                        "tasks": [{
-                            "task_key": "游戏内每日",
-                            "task_name": "游戏内每日",
-                            "status": "pending",
-                            "message": "待 ok-nte 执行",
-                        }],
-                        "errors": [],
-                        "report_time": "",
-                        "log_date": "",
-                    }
-                else:
+                # 异环今天没执行 ok-nte 时仍保留「游戏内每日」占位；
+                # 没有 empty_daily 的游戏直接跳过（保持原有 API 数据）。
+                data = profile.build_empty_daily()
+                if data is None:
                     continue
-            resolved_key = resolve_game_key(game_key)
             replaced = False
-            for g_idx, game in enumerate(games_data):
-                if resolve_game_key(game.get("game_key", "")) == resolved_key:
-                    if game_key == "nikki":
-                        # 无限暖暖特殊处理：whimbox 的子任务前置插入，保留 Pearpal 基线
-                        existing_tasks = list(game.get("tasks") or [])
-                        whimbox_tasks = data.get("tasks") or []
-                        # 用 task_key 去重：whimbox 的 task_key 与 Pearpal 同名则取最新
-                        existing_keys = {t.get("task_key") or t.get("task_name"): idx
-                                         for idx, t in enumerate(existing_tasks)}
-                        merged = []
-                        for wt in whimbox_tasks:
-                            wkey = wt.get("task_key") or wt.get("task_name")
-                            if wkey in existing_keys:
-                                e_idx = existing_keys[wkey]
-                                # 用 whimbox 数据覆盖同名（更精细的进度）
-                                merged.append({**existing_tasks[e_idx], **wt})
-                            else:
-                                merged.append(wt)
-                        for j, t in enumerate(existing_tasks):
-                            tkey = t.get("task_key") or t.get("task_name")
-                            if tkey not in {(wt.get("task_key") or wt.get("task_name")) for wt in whimbox_tasks}:
-                                merged.append(t)
-                        games_data[g_idx]["tasks"] = merged
-                        # 整体成功/失败由 whimbox 决定（更精确）
-                        games_data[g_idx]["is_all_success"] = data.get("is_all_success", games_data[g_idx].get("is_all_success"))
-                        games_data[g_idx]["has_failed"] = data.get("has_failed", games_data[g_idx].get("has_failed"))
-                        if data.get("errors"):
-                            games_data[g_idx]["errors"] = data["errors"]
-                        games_data[g_idx]["nickname"] = data.get("nickname", games_data[g_idx].get("nickname", ""))
-                        logger.info("[Bridge] 已用 %s 日志合并 %s 任务细节: tasks=%d",
-                                    tool_name, game_key, len(merged))
-                    else:
-                        if game_key == "nte":
-                            # 异环特殊处理：游戏内进度由 ok-nte 执行情况判定。
-                            # 保留塔吉多社区任务（社区签到/浏览帖子/点赞帖子/分享）
-                            # 与 BBS 签到成果；仅丢弃"游戏签到"任务（其完成情况
-                            # 由 ok-nte 进入游戏后的真实执行结果代表）。
-                            # 历史 bug：过滤条件写成"endswith(签到)"，把 BBS签到
-                            # （+80金币 API 成果）和异环签到也误删，导致 DailyView
-                            # 签到行走 last_sign_* 兜底显示"今日尚未签到"。
-                            existing_tasks = list(game.get("tasks") or [])
-                            ok_nte_tasks = list(data.get("tasks") or [])
-                            kept = [
-                                t for t in existing_tasks
-                                if str(t.get("task_name", "")) != "游戏签到"
-                            ]
-                            merged = list(kept) + ok_nte_tasks
-                            # 社区任务全部完成（无社区任务时视为满足，不阻塞 ok-nte 判定）
-                            community_done = all(
-                                t.get("status") == "success" for t in kept
-                            ) if kept else True
-                            game["tasks"] = merged
-                            game["is_all_success"] = bool(data.get("is_all_success")) and community_done
-                            game["has_failed"] = bool(data.get("has_failed")) or bool(game.get("has_failed"))
-                            if data.get("errors"):
-                                game["errors"] = (game.get("errors") or []) + list(data.get("errors"))
-                            game["nickname"] = data.get("nickname", game.get("nickname", ""))
-                            game["progress_percent"] = data.get("progress_percent", game.get("progress_percent"))
-                            logger.info(
-                                "[Bridge] 异环：合并 ok-nte 游戏内进度(%d 项) + 社区任务(%d 项)，成功=%s",
-                                len(ok_nte_tasks), len(kept), game["is_all_success"])
-                        elif game_key in ("wuwa", "endfield"):
-                            # 鸣潮/终末地：脚本日志与 API 便笺数据**互补**，合并而非替换。
-                            # API 行（daily_checker）带体力/活跃度等便笺数据，
-                            # 日志行带脚本执行进度；同名任务以日志为准，日志任务前置。
-                            existing_tasks = list(game.get("tasks") or [])
-                            log_tasks = list(data.get("tasks") or [])
-                            log_keys = {(t.get("task_key") or t.get("task_name")) for t in log_tasks}
-                            sign_tasks = [
-                                t for t in existing_tasks
-                                if (t.get("task_key") or "").startswith("sign_")
-                            ]
-                            kept_api_tasks = [
-                                t for t in existing_tasks
-                                if (t.get("task_key") or t.get("task_name")) not in log_keys
-                                and not (t.get("task_key") or "").startswith("sign_")
-                            ]
-                            # 本次脚本 run 是否失败：DB 里 script_ok-ww 行的状态是最终判据。
-                            # 日志解析器可能只找到上一次 run 的 open_daily，不能拿它的
-                            # 100% 覆盖本次失败（2026-11-02 实跑事故）。
-                            script_failed = any(
-                                (t.get("task_key") or t.get("task_name")) == "script_ok-ww"
-                                and t.get("status") == "failed"
-                                for t in existing_tasks
-                            )
-                            if script_failed:
-                                for t in log_tasks:
-                                    if t.get("status") in ("success", "already"):
-                                        t["message"] = "上次运行"
-                            game["tasks"] = sign_tasks + log_tasks + kept_api_tasks
-                            game["is_all_success"] = data.get(
-                                "is_all_success", game.get("is_all_success"))
-                            game["has_failed"] = bool(data.get("has_failed")) or bool(game.get("has_failed"))
-                            if data.get("errors"):
-                                game["errors"] = (game.get("errors") or []) + list(data.get("errors"))
-                            game["nickname"] = data.get("nickname") or game.get("nickname", "")
-                            if script_failed:
-                                # 脚本本次失败时卡片结论不能停留在「未刷新」：
-                                # 这是失败，不是等服务器刷新。
-                                game["completion_state"] = "failed"
-
-                            # 完成度必须反映真实游玩进度，不能用脚本子任务比例代替：
-                            # ok-ww 的 progress_percent 是"脚本跑了几步"（全跑完就 100%），
-                            # 与活跃度 90/100 无关。这里优先取 API 便笺的关键计数。
-                            real_pct, real_src = bridge._real_completion_percent(
-                                game_key, sign_tasks + log_tasks + kept_api_tasks)
-                            if real_pct is not None:
-                                game["progress_percent"] = real_pct
-                                game["progress_source"] = real_src
-                            elif script_failed:
-                                game["progress_percent"] = 0
-                                game["progress_source"] = "script_failed"
-                                for t in game["tasks"]:
-                                    if (t.get("task_key") or t.get("task_name")) == "今日活跃":
-                                        ex = t.get("extra") or {}
-                                        if isinstance(ex, str):
-                                            try:
-                                                import json as _json
-                                                ex = _json.loads(ex)
-                                            except Exception:  # noqa: BLE001 - 坏 JSON 按空处理
-                                                ex = {}
-                                        else:
-                                            ex = dict(ex)
-                                        ex["stale"] = True
-                                        ex["stale_reason"] = "脚本未完成，活跃度未采集"
-                                        t["extra"] = ex
-                            else:
-                                game["progress_percent"] = data.get(
-                                    "progress_percent", game.get("progress_percent"))
-                                game["progress_source"] = "script"
-                            logger.info(
-                                "[Bridge] %s：合并脚本日志进度(%d 项) + API 便笺数据(%d 项)，成功=%s 完成度=%s%%(%s)",
-                                game_key, len(log_tasks), len(kept_api_tasks),
-                                game["is_all_success"],
-                                game["progress_percent"], game.get("progress_source"))
-                        else:
-                            # 保留 tracker 里已有的签到任务（sign_ 前缀），
-                            # 避免被外部日志整体替换后丢失签到状态。
-                            existing_sign_tasks = [
-                                t for t in (game.get("tasks") or [])
-                                if (t.get("task_key") or "").startswith("sign_")
-                            ]
-                            if existing_sign_tasks:
-                                data_tasks = list(data.get("tasks") or [])
-                                data["tasks"] = existing_sign_tasks + data_tasks
-                            games_data[g_idx] = data
-                            logger.info("[Bridge] 已用 %s 日志替换 %s 进度: success=%s sign_tasks=%d",
-                                        tool_name, game_key, data.get("is_all_success"), len(existing_sign_tasks))
-                    replaced = True
-                    break
+            for game in games_data:
+                if resolve_game_key(game.get("game_key", "")) != profile.game_key:
+                    continue
+                profile.daily_merger()(bridge, game, data, profile.daily_tool, profile.game_key)
+                replaced = True
+                break
             if not replaced:
                 games_data.append(data)
                 logger.info("[Bridge] 已注入 %s %s 进度: success=%s",
-                            tool_name, game_key, data.get("is_all_success"))
+                            profile.daily_tool, profile.game_key, data.get("is_all_success"))
         except Exception as exc:
-            logger.warning("[Bridge] 读取 %s 日志失败: %s", tool_name, exc)
+            logger.warning("[Bridge] 读取 %s 日志失败: %s", profile.daily_tool, exc)
 
 
 def _ensure_baijing_placeholder(bridge, games_data: List[Dict[str, Any]]):
-    """确保白荆回廊卡片始终可见：无记录时注入待执行占位，避免每日进度里看不到。"""
+    """为 always_placeholder 的游戏注入待执行占位（今日无记录时卡片仍可见）。
+
+    目前只有白荆回廊：没有外部脚本日志，执行结果由内置流程写库。
+    """
     try:
+        from ...games import iter_profiles
         from ...settings import resolve_game_key
-        has = any(resolve_game_key(g.get("game_key", "")) == "baijing" for g in games_data)
-        if has:
-            return
-        games_data.append({
-            "game_key": "baijing",
-            "game_name": "白荆回廊",
-            "uid": "",
-            "nickname": "",
-            "is_all_success": False,
-            "has_failed": False,
-            "progress_percent": 0,
-            "tasks": [
-                {"task_key": "enter_game", "task_name": "进入游戏", "status": "pending", "message": "待一条龙执行", "current": None, "total": None},
-                {"task_key": "daily", "task_name": "日常任务", "status": "pending", "message": "待执行", "current": None, "total": None},
-                {"task_key": "verify", "task_name": "验证", "status": "pending", "message": "待验证截图", "current": None, "total": None, "verify_image": None, "verify_image_url": None, "extra": {}},
-                {"task_key": "weekly", "task_name": "每周商店购买", "status": "pending", "message": "待周常（每周一次）", "current": None, "total": None},
-                {"task_key": "monthly", "task_name": "每月有猫兑换", "status": "pending", "message": "待月度（每月一次，购买清单待定）", "current": None, "total": None},
-            ],
-            "errors": [],
-        })
-        logger.info("[Bridge] 已注入白荆回廊占位进度（今日无记录）")
+
+        for profile in iter_profiles():
+            if not profile.always_placeholder:
+                continue
+            if any(resolve_game_key(g.get("game_key", "")) == profile.game_key for g in games_data):
+                continue
+            data = profile.build_empty_daily()
+            if not data:
+                continue
+            games_data.append(data)
+            logger.info("[Bridge] 已注入 %s 占位进度（今日无记录）", profile.display_name)
     except Exception as exc:
-        logger.debug("[Bridge] 注入白荆占位失败: %s", exc)
+        logger.debug("[Bridge] 注入占位失败: %s", exc)
