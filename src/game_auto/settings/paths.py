@@ -59,6 +59,8 @@ PROTECTED_CLICK_SEQUENCES = frozenset({
 # 受保护序列的备份目录（用于误删后恢复）
 PROTECTED_BACKUP_DIR = CLICK_SEQUENCES_DIR / ".protected_backup"
 CACHE_DIR = DATA_DIR / "cache"
+# 第三方脚本自动安装的默认根目录（app_config.script_tools.install_root 为空时）
+SCRIPT_TOOLS_DEFAULT_DIR = DATA_DIR / "script_tools"
 # 第三方脚本配置修改前的备份（每次写入前复制，不覆盖历史）
 CONFIG_BACKUP_DIR = CACHE_DIR / "config_backups"
 # 终末地森空岛查询结果的本地缓存（进页面即时展示，过期后后台刷新）

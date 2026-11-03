@@ -18,6 +18,7 @@ from .defaults import (
     DEFAULT_NIKKI_CRYSTAL_EXCHANGE,
     DEFAULT_NIKKI_RESONANCE_SHOP,
     DEFAULT_QBITTORRENT,
+    DEFAULT_SCRIPT_TOOLS,
 )
 from .paths import APP_CONFIG_PATH
 
@@ -160,6 +161,7 @@ def _default_config() -> Dict:
         "setup_completed": False,
         "app_order": list(DEFAULT_APP_ORDER),
         "qbittorrent": copy.deepcopy(DEFAULT_QBITTORRENT),
+        "script_tools": copy.deepcopy(DEFAULT_SCRIPT_TOOLS),
         "log": {"dir": "data/logs", "file": "auto_runner.log", "backup_count": 0},
         "global": {"min_run_time": 300, "check_interval": 10, "debug_mode": False},
         "baijing": {"cat_exchange": copy.deepcopy(DEFAULT_BAIJING_CAT_EXCHANGE)},
@@ -369,6 +371,11 @@ def get_qbittorrent() -> Dict:
     return load().get("qbittorrent", copy.deepcopy(DEFAULT_QBITTORRENT))
 
 
+def get_script_tools_config() -> Dict:
+    """第三方脚本安装配置（install_root / overrides）。"""
+    return load().get("script_tools", copy.deepcopy(DEFAULT_SCRIPT_TOOLS))
+
+
 def get_log_config() -> Dict:
     cfg = load().get("log", {})
     return {
@@ -404,6 +411,12 @@ def remove_app(app_key: str) -> None:
 def update_qbittorrent(data: Dict) -> None:
     cfg = load()
     cfg["qbittorrent"] = data
+    save(cfg)
+
+
+def update_script_tools_config(data: Dict) -> None:
+    cfg = load()
+    cfg["script_tools"] = data
     save(cfg)
 
 

@@ -1,6 +1,6 @@
 """崩坏：星穹铁道（StarRail OneDragon / March7th Assistant）。"""
 
-from .base import GameProfile
+from .base import GameProfile, ScriptToolSpec
 from .registry import register
 
 PROFILE = GameProfile(
@@ -19,6 +19,25 @@ PROFILE = GameProfile(
     update_key="hsr",
     progress_hint="game_auto.games.base:build_maintenance_hint",
     supports_stamina=True,
+    script_tools=(
+        ScriptToolSpec(
+            label="星铁一条龙",
+            repo="OneDragon-Anything/StarRailOneDragon",
+            option_name="StarRailOneDragon",
+            tool_key="sr-one-dragon",
+        ),
+        ScriptToolSpec(
+            label="March7th Assistant",
+            repo="moesnow/March7thAssistant",
+            option_name="March7th",
+            # 原地自更新后目录名（v2.2.0.3）过期，version.txt 是真值
+            version_file="assets/config/version.txt",
+            tool_key="march7th",
+            # 7z 474MB 优先于 zip 719MB（py7zr 已进依赖）
+            asset_patterns=(r"^March7thAssistant_full\.7z$", r"^March7thAssistant_full\.zip$"),
+            launcher_name="March7th Assistant.exe",
+        ),
+    ),
     hint="崩铁使用 StarRail OneDragon 或 March7th Assistant。",
     default_app={
         "display_name": "崩坏：星穹铁道",

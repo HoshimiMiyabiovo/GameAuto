@@ -1,6 +1,6 @@
 """绝区零（OneDragon Bat / ScriptChainer）。"""
 
-from .base import GameProfile
+from .base import GameProfile, ScriptToolSpec
 from .registry import register
 
 PROFILE = GameProfile(
@@ -16,6 +16,22 @@ PROFILE = GameProfile(
     update_key="zzz",
     progress_hint="game_auto.games.base:build_maintenance_hint",
     supports_stamina=True,
+    script_tools=(
+        ScriptToolSpec(
+            label="OneDragon Bat",
+            repo="OneDragon-Anything/ZenlessZoneZero-OneDragon",
+            option_name="OneDragonBat",
+            tool_key="zzz-one-dragon",
+        ),
+        # ScriptChainer 上游仓库不明：只查本地版本；按版本号命名 zip 分发、
+        # 无自更新，目录名可信
+        ScriptToolSpec(
+            label="OneDragon ScriptChainer",
+            option_name="OneDragonScriptChainer",
+            trust_dir_version=True,
+            tool_key="script-chainer",
+        ),
+    ),
     hint="绝区零使用 OneDragon Bat 或 ScriptChainer。",
     default_app={
         "display_name": "绝区零",

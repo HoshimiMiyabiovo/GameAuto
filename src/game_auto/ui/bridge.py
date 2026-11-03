@@ -33,6 +33,7 @@ from .bridge_views.daily import DailyView
 from .bridge_views.gacha import GachaView
 from .bridge_views.scheduler import SchedulerView
 from .bridge_views.setup import SetupWizardView
+from .bridge_views.tool_manager import ToolManagerView
 
 # 全局 Bridge 单例，供 WebUI 同步运行状态（WebUI 与 GUI 同进程时可见）
 _active_bridge: "UiBridge | None" = None
@@ -45,6 +46,7 @@ class UiBridge(
     QObject,
     ClickSequenceView,
     SetupWizardView,
+    ToolManagerView,
     AutomationView,
     SchedulerView,
     DailyView,
@@ -97,6 +99,9 @@ class UiBridge(
     endfieldQueryResultChanged = Signal(str)
     tajiduoDailyChanged = Signal(str)
     webUIStatusChanged = Signal(str)
+    scriptVersionsChanged = Signal(str)
+    scriptCheckRunningChanged = Signal()
+    toolInstallChanged = Signal(str)
 
     # ── 固定点击序列（录制 / 回放）──
     clickSeqRecordingChanged = Signal(bool)
@@ -156,6 +161,11 @@ class UiBridge(
         self._update_retry_lock = threading.RLock()
         threading.Thread(target=self._prefetch_update_calendar, daemon=True).start()
 
+        # ── 第三方脚本版本静默检查：启动 5s 后跑一次（TTL 内不联网）──
+        # 新发现有更新才 toast，同一版本只提醒一次（去重记录在
+        # data/cache/script_versions.json 的 notified，见 script_version_check）
+        QTimer.singleShot(5_000, self._auto_check_script_versions)
+
         # ── Queue state (app_key → "待执行" | "运行中" | "已完成" | "失败" | "已停止") ──
         self._queue_state: Dict[str, str] = {}
         self._queue_order: List[str] = []
@@ -177,6 +187,12 @@ class UiBridge(
         self._endfield_query_result_json = "{}"
         self._tajiduo_daily_json = "{}"
         self._webui_status_json = "{}"
+        self._script_versions_json = "[]"
+        self._script_checking = False
+        # ── 脚本管理页：安装任务状态（全局同时一个）──
+        self._tool_install_json = "{}"
+        self._tool_install_running = False
+        self._tool_install_cancel = None
 
         # ── 固定点击序列（录制 / 回放）──
         self._click_seq_recording = False
@@ -511,6 +527,18 @@ class UiBridge(
     def webUIStatusJson(self) -> str:
         return self._webui_status_json
 
+    @Property(str, notify=scriptVersionsChanged)
+    def scriptVersionsJson(self) -> str:
+        return self._script_versions_json
+
+    @Property(bool, notify=scriptCheckRunningChanged)
+    def scriptCheckRunning(self) -> bool:
+        return self._script_checking
+
+    @Property(str, notify=toolInstallChanged)
+    def toolInstallJson(self) -> str:
+        return self._tool_install_json
+
     # ── 固定点击序列（录制 / 回放）──
 
     @Property(bool, notify=clickSeqRecordingChanged)
@@ -552,7 +580,7 @@ class UiBridge(
 
         valid = {
             "automation", "stamina_config", "wool", "daily", "gacha",
-            "setup_wizard", "click_sequence", "webui",
+            "setup_wizard", "click_sequence", "webui", "tool_manager",
         } | set(view_keys())
         if view_key not in valid:
             logger.warning("[UI] 未知视图: %s", view_key)
@@ -753,6 +781,37 @@ class UiBridge(
             return
         if kind == "app_list":
             self._update_app_list(payload.get("apps", []))
+            return
+        if kind == "script_versions":
+            # 后台脚本版本检查的回包：rows=报告 JSON，running=检查中状态，
+            # toasts=启动静默检查新发现的更新提醒（手动检查时为空）
+            rows = payload.get("rows") or ""
+            if rows:
+                self._script_versions_json = rows
+                self.scriptVersionsChanged.emit(self._script_versions_json)
+            running = bool(payload.get("running", False))
+            if running != self._script_checking:
+                self._script_checking = running
+                self.scriptCheckRunningChanged.emit()
+            for msg in payload.get("toasts") or []:
+                self._request_toast(msg, "#b66f1f")
+            return
+        if kind == "tool_install":
+            # 脚本安装任务的进度/阶段回包（下载→解压→换血→注册）
+            data = {
+                "tool_key": payload.get("tool_key", ""),
+                "phase": payload.get("phase", ""),
+                "received": payload.get("received", 0),
+                "total": payload.get("total", 0),
+                "message": payload.get("message", ""),
+            }
+            self._tool_install_json = json.dumps(data, ensure_ascii=False)
+            self.toolInstallChanged.emit(self._tool_install_json)
+            if data["phase"] == "done":
+                self._request_toast(
+                    data["message"] or "安装完成", "#2f7d4a")
+            elif data["phase"] == "error":
+                self._request_toast(f"安装失败: {data['message']}", "#b04b44")
             return
         if kind == "daily_progress":
             self._update_daily_progress(

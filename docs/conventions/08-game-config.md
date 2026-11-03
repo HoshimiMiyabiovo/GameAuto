@@ -120,3 +120,73 @@
   游戏，避免旧草稿灌进新数据。
 - 回归：`tests/suite_stamina_view_perf_20261031.py`（QML 离屏加载、7 个游戏按钮、
   只渲染当前 1 张卡、ListView 参数、草稿写入/读取/清理）；QML 结构改动后必须跑。
+
+## 第三方脚本版本检测与更新提示（2026-11-03）
+
+- **插件契约**：`games/base.py` 的 `ScriptToolSpec(label, repo, option_name)` +
+  `GameProfile.script_tools`。**新增游戏有第三方脚本时在这里填元数据**，不要另立
+  映射表：`label` 展示名；`repo` 填 GitHub `owner/repo`，**留空 = 只查本地版本**
+  （上游仓库不明的，如绝区零 ScriptChainer）；多方案游戏（崩铁/绝区零）用
+  `option_name` 匹配 `launcher_options[*].name`，单方案留空走顶层 `launcher`。
+- **检测链路**：`services/script_version_check.py`，安装路径解析（正式字段 →
+  `_discovery` 回落）→ 本地版本（按 spec 策略，见下表）→ GitHub
+  `releases/latest` 取 tag → 数字版本元组比较；本地未知只展示不判"有更新"。
+- **本地版本真值表（2026-11-03 实盘查证，`artifacts/probe_version_sources.py`）**：
+  软件原地自更新**不会改安装目录名**，目录名只对"无自更新 + 按版本号命名
+  zip 分发"的工具可信。逐工具：
+  | 工具 | 本地版本来源 | 查证依据 |
+  |---|---|---|
+  | BetterGI | exe ProductVersion（`trust_exe_version`） | 目录无版本；更新器替换 exe，元数据跟真版本 |
+  | March7th | `assets/config/version.txt`（`version_file`） | 目录名 v2.2.0.3 已过期，version.txt 实际 v2026.10.31 |
+  | ok-ww/ok-ef/ok-nte | `data/apps/<exe名>/app.json` 的 `current_version`（`pyappify`） | pyappify 安装器自更新清单；exe 元数据是框架版本（1.2.3/0.1.0/1.2.5 全是假），目录名是初次安装版本 |
+  | ScriptChainer | 目录名正则（`trust_dir_version`） | 按版本号命名 zip 分发、无自更新 |
+  | OneDragon 一条龙系 / whimbox | 无（显示"本地版本未知"） | OneDragon 版本跟 git 走；whimbox 在 Electron asar 内，不值得解析 |
+  新增/换工具时先实盘确认真值来源再填 spec，**不要默认目录名可信**——
+  首版实现吃过亏：4 个"有更新"里 3 个是过期目录名误报。
+
+## 脚本管理页：自动下载安装（2026-11-03）
+
+- **页面**：侧边栏「脚本管理」（`tool_manager`），`views/ToolManagerView.qml` +
+  bridge mixin `ui/bridge_views/tool_manager.py`；配置向导页版本卡片对
+  可下载且未安装的工具有「一键安装」按钮（首启可选自动下载，不强制）。
+- **下载范围**（逐仓库实查 release 资产后定，别凭印象扩）：
+  ok-ww/ok-ef/ok-nte（pyappify 在线包 zip ~5MB，首启自补全运行时）、
+  March7th（7z 474MB 优先、zip 719MB 兜底）、BetterGI（7z 465MB）。
+  OneDragon 系/whimbox/ScriptChainer **不支持自动安装**（包结构复杂/只有
+  whl/无上游），页面只给「打开发布页」。资产正则必须写窄：ok-nte 另有
+  full/body 两个 300MB+ zip，宽正则会下错包。
+- **安装器**：`services/script_tool_installer.py`。流式下载（256KB 分片、
+  分片级 stop_check、.part 原子改名）→ ok 系 sha256 清单对账 → 解压
+  （zip stdlib + **zip-slip 成员校验**；7z py7zr + 成员名检查）→ 单一顶层
+  目录剥离 → 按名定位启动器（限深 3）→ 换血落位 → `register_launcher_path`
+  双写 apps + `_discovery` 并 refresh_runtime_config（同 saveSetupPaths 写法）。
+- **安全规则**：脚本/游戏进程运行中拒绝（script_process_name +
+  game.process_name + cleanup_cmd_patterns 三路查，pyappify 引擎必须查
+  命令行）；**托管目录外的已有安装拒绝改动**（自动安装只管理
+  `data/script_tools/<tool_key>` 或 overrides 指定目录）；磁盘余量 ≥ 2.5×
+  包体积；更新 = 旧目录改名 `.old` → staging 就位 → 删 `.old`（失败留
+  `.old` 手工恢复，日志写明）。
+- **配置**：`app_config.json` 的 `script_tools` 段
+  （`install_root` 空 = `paths.SCRIPT_TOOLS_DEFAULT_DIR`；`overrides` 按
+  `ScriptToolSpec.tool_key` 覆盖单工具目录），defaults/manager/runtime 三处
+  按 qbittorrent 范本接。新工具接入 checklist：实查 release 资产 →
+  spec 填 `tool_key/asset_patterns/launcher_name` → 确认解压后
+  launcher_name 能定位 → 实装一次验证路径注册与版本识别。
+- **依赖**：`py7zr>=0.21`（BetterGI/March7th 只有 7z 包），import 名同为
+  py7zr。
+- **网络现实（2026-11-04 实测）**：GitHub API（api.github.com）与下载 CDN
+  （objects.githubusercontent.com）可达性是两回事——本机 API 稳定、CDN 被
+  RST/握手超时。下载失败已包装成带"稍后重试或发布页手动下载"指引的
+  RuntimeError；Mirror酱/代理源在"明确不做"清单里，要做另起需求。
+- **回归**：`tests/suite_tool_manager_20261103.py`（资产正则/zip-slip/7z
+  往返/安装编排全流程 mock/换血/守卫/取消清理/下载与 sha/桥接与 QML 冒烟）。
+- **缓存与提醒**：`data/cache/script_versions.json`，每仓库 TTL 24h，网络失败
+  沿用旧值并标 `stale`；`notified` 记录实现"同版本只 toast 一次"（手动检查
+  也会记账但不弹 toast；页面缓存加载不联网、不消费提醒额度）。未认证 GitHub
+  API 限速 60 次/时，9 个仓库一天一查。
+- **UI**：配置向导页"脚本版本 / 更新"卡片；bridge 数据推送走
+  `script_versions` 事件分支 + `scriptVersionsJson` / `scriptCheckRunning`
+  属性；启动 5s 静默检查（`bridge.__init__` 的 `QTimer.singleShot`）。
+- **回归**：`tests/suite_script_version_check_20261103.py`（版本解析/路径提取/
+  配置解析/TTL/stale 回退/notified 去重/本地未知不误报/桥接与 QML 接线/
+  离屏 stub-bridge 冒烟）。仓库 slug 变更（脚本换家）只改 games 档案里的 repo。

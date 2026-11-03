@@ -1,6 +1,6 @@
 """原神（BetterGI）。"""
 
-from .base import GameProfile
+from .base import GameProfile, ScriptToolSpec
 from .registry import register
 
 PROFILE = GameProfile(
@@ -17,6 +17,13 @@ PROFILE = GameProfile(
     update_key="genshin",
     progress_hint="game_auto.games.base:build_maintenance_hint",
     supports_stamina=True,
+    script_tools=(ScriptToolSpec(
+        label="BetterGI", repo="babalae/better-genshin-impact",
+        trust_exe_version=True,
+        tool_key="bettergi",
+        asset_patterns=(r"^BetterGI_v[\d.]+\.7z$",),
+        launcher_name="BetterGI.exe",
+    ),),
     hint="原神使用 BetterGI，一键启动并监控。",
     default_app={
         "display_name": "原神",

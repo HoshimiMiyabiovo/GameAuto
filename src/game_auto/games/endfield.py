@@ -1,6 +1,6 @@
 """明日方舟：终末地（ok-ef）。"""
 
-from .base import GameProfile
+from .base import GameProfile, ScriptToolSpec
 from .registry import register
 
 PROFILE = GameProfile(
@@ -17,6 +17,13 @@ PROFILE = GameProfile(
     update_key="endfield",
     view_key="endfield_center",
     supports_stamina=True,
+    script_tools=(ScriptToolSpec(
+        label="ok-ef", repo="AliceJump/ok-end-field", pyappify=True,
+        tool_key="ok-ef",
+        # ok-ef 的 zip 名里带版本号（ok-ef-win32-v2.0.10.zip）
+        asset_patterns=(r"^ok-ef-win32-v[\d.]+\.zip$",),
+        launcher_name="ok-ef.exe",
+    ),),
     hint="终末地使用 ok-ef，并支持协议终端/森空岛数据查询。",
     default_app={
         "display_name": "明日方舟：终末地",

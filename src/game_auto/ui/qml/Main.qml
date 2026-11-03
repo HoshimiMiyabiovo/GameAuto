@@ -30,6 +30,7 @@ HusWindow {
     property bool setupWizardEverLoaded: false
     property bool clickSequenceEverLoaded: false
     property bool webUIEverLoaded: false
+    property bool toolManagerEverLoaded: false
     property bool staminaConfigEverLoaded: false
 
     // ── 重页面内存回收（2026-11-01）──
@@ -189,6 +190,7 @@ HusWindow {
                     initModel: [
                         { key: "automation",      label: "自动化运行",     iconSource: HusIcon.PlayCircleOutlined },
                         { key: "stamina_config",  label: "脚本刷本配置",   iconSource: HusIcon.SettingOutlined },
+                        { key: "tool_manager",    label: "脚本管理",       iconSource: HusIcon.AppstoreOutlined },
                         { key: "wool",             label: "薅羊毛集合",     iconSource: HusIcon.WalletOutlined },
                         { key: "daily",            label: "每日进度",       iconSource: HusIcon.CalendarOutlined },
                         { key: "gacha",            label: "HoYo 抽卡分析",  iconSource: HusIcon.GiftOutlined },
@@ -331,6 +333,15 @@ HusWindow {
                 visible: bridge.currentView === "setup_wizard"
                 source: "views/SetupWizardView.qml"
                 onLoaded: mainWindow.setupWizardEverLoaded = true
+            }
+            Loader {
+                id: toolManagerLoader
+                anchors.fill: parent
+                asynchronous: true
+                active: bridge.currentView === "tool_manager" || mainWindow.toolManagerEverLoaded
+                visible: bridge.currentView === "tool_manager"
+                source: "views/ToolManagerView.qml"
+                onLoaded: mainWindow.toolManagerEverLoaded = true
             }
             Loader {
                 id: webUILoader

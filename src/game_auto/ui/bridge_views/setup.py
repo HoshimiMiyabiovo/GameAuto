@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -248,3 +249,50 @@ class SetupWizardView:
         mark_setup_completed()
         logger.info("[Bridge] 用户跳过路径配置向导")
         self.switchView("automation")
+
+    # ── 第三方脚本版本检测 ─────────────────────────────────────────
+
+    @Slot(result=str)
+    def getScriptVersions(self) -> str:
+        """脚本版本报告（JSON 字符串）。只读缓存不联网，供页面进入时立即渲染。"""
+        try:
+            from ...services.script_version_check import check_all
+            rows, _toasts = check_all(allow_network=False)
+            return json.dumps(rows, ensure_ascii=False)
+        except Exception as exc:
+            logger.warning("[Bridge] 读取脚本版本缓存失败: %s", exc)
+            return "[]"
+
+    @Slot()
+    def checkScriptUpdates(self):
+        """手动在线检查（后台线程），完成后经 script_versions 事件推送结果。"""
+        if self._script_checking:
+            return
+        self._script_checking = True
+        self.emit_event("script_versions", running=True,
+                        rows=self._script_versions_json, toasts=[])
+        threading.Thread(target=self._script_check_worker, daemon=True).start()
+
+    def _auto_check_script_versions(self):
+        """GUI 启动 5s 后的静默检查（bridge.__init__ 定时触发）。
+
+        与手动检查同一worker：TTL 内直接用缓存不联网；本次真正取到数据且
+        发现有更新时，由 script_versions 事件分支弹 toast（同版本只提醒一次）。
+        """
+        self.checkScriptUpdates()
+
+    def _script_check_worker(self):
+        """后台执行 check_all(force=True)；异常只记日志 + toast，不打断 GUI。"""
+        try:
+            from ...services.script_version_check import check_all
+            rows, toasts = check_all(force=True)
+            self.emit_event("script_versions",
+                            rows=json.dumps(rows, ensure_ascii=False),
+                            running=False, toasts=toasts)
+        except Exception as exc:
+            logger.warning("[Bridge] 脚本版本检查失败: %s", exc)
+            self.emit_event("script_versions", running=False, toasts=[])
+            self.emit_event("toast", message=f"脚本版本检查失败: {exc}",
+                            color="#b04b44")
+        finally:
+            self._script_checking = False

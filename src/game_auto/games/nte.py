@@ -10,7 +10,7 @@
 
 from pathlib import Path
 
-from .base import GameProfile
+from .base import GameProfile, ScriptToolSpec
 from .registry import register
 
 # 与 settings.paths.TEMPLATES_DIR 保持一致。这里不 import settings.paths：
@@ -37,6 +37,13 @@ PROFILE = GameProfile(
     progress_hint="game_auto.games.nte:build_progress_hint",
     view_key="tajiduo",
     supports_stamina=True,
+    script_tools=(ScriptToolSpec(
+        label="ok-nte", repo="BnanZ0/ok-nte", pyappify=True,
+        tool_key="ok-nte",
+        # 精确匹配在线包：该仓库另有 full/body 两个 300MB+ zip，宽正则会下错
+        asset_patterns=(r"^ok-nte-win32\.zip$",),
+        launcher_name="ok-nte.exe",
+    ),),
     hint="异环会先处理启动器，再接入 ok-nte。",
     default_app={
         "display_name": "异环",

@@ -454,7 +454,10 @@ Item {
                                                     HusTag {
                                                         visible: modelData.protected === true
                                                         text: "🔒 一条龙"
-                                                        tagState: HusTag.State_Info
+                                                        // HusTag 没有 State_Info（枚举只有
+                                                        // Default/Success/Processing/Error/Warning），
+                                                        // 赋 undefined 会在控制台报错；蓝色信息感用 Processing
+                                                        tagState: HusTag.State_Processing
                                                     }
                                                 }
                                                 HusText {

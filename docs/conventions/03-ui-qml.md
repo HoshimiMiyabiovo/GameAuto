@@ -36,6 +36,8 @@
 4. **QML 磁盘缓存**: Qt 的 QML 编译缓存按 organizationName/appName 分区，位于 `%LOCALAPPDATA%/GameAuto/`。切换 PySide6 版本后需清掉旧缓存（`*.qmlc`），否则可能加载过期字节码。
 
 5. **禁止硬编码文件路径**: 所有数据路径必须通过 `settings/paths.py` 或 `app_config.json` 配置，**禁止**在代码中写死绝对路径（如 `D:\Program Files\...`）。抽卡数据必须写入 SQLite 数据库（`gacha_records` 表），从数据库读取，不能依赖本地文件系统中的固定文件。`ui/shared.py` 中的 `DEFAULT_ENDFIELD_PATH` 是反面教材，新代码不得效仿。
+
+6. **HusTag 枚举只有 5 个值**: `State_Default / State_Success / State_Processing / State_Error / State_Warning`（见 pyhuskarui 的 HusTag.qml）。**没有 State_Info**，写了不会编译报错，但赋给 `tagState`（int）时是 undefined，控制台报 `Unable to assign [undefined] to int` 且 Tag 落回默认样式。蓝色"信息感"用 `State_Processing`（2026-11-03 已修正 ClickSequenceView 的误用；测试套件离屏跑 QML 时这类错会暴露）。
 ### QML 签到按钮 + 桥接 (重要)
 
 - **"执行签到"按钮必须**调 `bridge.run*Sign()` 才能真正签到，只调 `bridge.saveCredential(...)` 只会把 token 存进 config，**不会触发签到**。各 view 对应关系：

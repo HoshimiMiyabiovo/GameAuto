@@ -158,6 +158,50 @@ def build_maintenance_hint(app_key: str, logger) -> Optional[Callable[[], bool]]
 
 
 @dataclass(frozen=True)
+class ScriptToolSpec:
+    """一个第三方自动化脚本的版本检测元数据（纯静态数据，禁止 import settings）。
+
+    被 services/script_version_check.py 消费：按 option_name/顶层 launcher
+    从 app_config 解析安装路径 → 检测本地版本 → 对照 repo 的 GitHub 最新 Release。
+
+    本地版本源策略（2026-11-03 实盘查证后确立）：每个工具只认"原地自更新后
+    仍然可信"的来源，全部落空 = 本地未知，**绝不拿目录名凑数**——
+    原地自更新后目录名停留在初次安装的旧版，会永久误报"有更新"
+    （March7th 目录 v2.2.0.3 实际已是 v2026.10.31 的实证）。
+    """
+
+    # 展示名（BetterGI / March7th Assistant / ok-ww / ...）
+    label: str
+    # GitHub owner/repo；空 = 只查本地版本，不做在线更新检查（上游仓库不明时）
+    repo: str = ""
+    # 多方案游戏匹配 default_app.launcher_options[*].name（崩铁/绝区零）；
+    # 空 = 用 apps[app_key].launcher（单方案游戏）
+    option_name: str = ""
+
+    # ── 本地版本源（按优先级：pyappify 清单 → version_file → exe 元数据 → 目录名）──
+    # pyappify 安装器应用（ok 系）：<root>/data/apps/<exe名>/app.json 的 current_version
+    # 是唯一真值；其 exe ProductVersion 是 pyappify 框架版本（假），目录名是
+    # 初次安装版本（自更新后过期），都不可用
+    pyappify: bool = False
+    # 相对安装根目录的版本文件（March7th 自更新会刷新 assets/config/version.txt）
+    version_file: str = ""
+    # exe ProductVersion 是否可信（BetterGI：目录无版本，更新器替换 exe，元数据跟真版本）
+    trust_exe_version: bool = False
+    # 目录名版本正则是否可信（仅"无自更新 + 按版本号命名 zip 分发"为 True，如 ScriptChainer）
+    trust_dir_version: bool = False
+
+    # ── 自动下载安装（services/script_tool_installer.py 消费）──
+    # 稳定 key：app_config.script_tools.overrides 的键、安装目录名
+    # （bettergi / march7th / ok-ww / ...；留空 = 不进脚本管理页的下载体系）
+    tool_key: str = ""
+    # release 资产文件名匹配正则，按序取首个命中（re.search）；空 = 不支持自动下载。
+    # 必须写窄：ok-nte 有 full/body 等多个 zip，宽正则会下错包
+    asset_patterns: Tuple[str, ...] = ()
+    # 解压树里按 basename rglob 定位的启动器文件名（限深 3）
+    launcher_name: str = ""
+
+
+@dataclass(frozen=True)
 class GameProfile:
     """一个游戏的静态档案。"""
 
@@ -208,6 +252,8 @@ class GameProfile:
     hint: str = ""
     # 是否有第三方脚本体力刷本配置适配器
     supports_stamina: bool = False
+    # 第三方脚本版本检测元数据（空 = 无第三方脚本，如白荆回廊）
+    script_tools: Tuple[ScriptToolSpec, ...] = ()
 
     def latest_daily_log(self) -> Optional[Dict[str, Any]]:
         parser = load_ref(self.daily_parser)

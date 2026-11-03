@@ -1,6 +1,6 @@
 """鸣潮（ok-ww）。"""
 
-from .base import GameProfile
+from .base import GameProfile, ScriptToolSpec
 from .registry import register
 
 PROFILE = GameProfile(
@@ -19,6 +19,14 @@ PROFILE = GameProfile(
     progress_hint="game_auto.games.base:build_maintenance_hint",
     view_key="wuwa",
     supports_stamina=True,
+    script_tools=(ScriptToolSpec(
+        label="ok-ww", repo="ok-oldking/ok-wuthering-waves", pyappify=True,
+        tool_key="ok-ww",
+        # win32.zip 是 pyappify 在线包（~5MB，首启自补全运行时）；
+        # setup.exe 是几百 MB 安装器，绝不匹配
+        asset_patterns=(r"^ok-ww-win32\.zip$",),
+        launcher_name="ok-ww.exe",
+    ),),
     hint="鸣潮使用 ok-ww，一键启动并监控。",
     default_app={
         "display_name": "鸣潮",

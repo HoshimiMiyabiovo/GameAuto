@@ -8,6 +8,7 @@ from .defaults import (
     DEFAULT_APPS,
     DEFAULT_APP_ORDER,
     DEFAULT_QBITTORRENT,
+    DEFAULT_SCRIPT_TOOLS,
     GAME_KEYS,
     APP_KEY_TO_GAME_KEY,
     GAME_KEY_TO_SIGN_SECTION,
@@ -34,6 +35,7 @@ BACKUP_COUNT = 0
 
 APP_ORDER = list(DEFAULT_APP_ORDER)
 QBITTORRENT: Dict[str, str] = copy.deepcopy(DEFAULT_QBITTORRENT)
+SCRIPT_TOOLS: Dict = copy.deepcopy(DEFAULT_SCRIPT_TOOLS)
 APPS: Dict[str, Dict] = copy.deepcopy(DEFAULT_APPS)
 
 
@@ -55,6 +57,7 @@ def apply_runtime_config(config: Optional[Dict] = None) -> Dict:
     if "GuiLongChao" in app_order:
         app_order = [k for k in app_order if k != "GuiLongChao"]
     qbittorrent = runtime_config.get("qbittorrent") or DEFAULT_QBITTORRENT
+    script_tools = runtime_config.get("script_tools") or DEFAULT_SCRIPT_TOOLS
 
     runtime_config["app_order"] = list(app_order)
     runtime_config["apps"] = copy.deepcopy(apps)
@@ -63,6 +66,9 @@ def apply_runtime_config(config: Optional[Dict] = None) -> Dict:
 
     QBITTORRENT.clear()
     QBITTORRENT.update(copy.deepcopy(qbittorrent))
+
+    SCRIPT_TOOLS.clear()
+    SCRIPT_TOOLS.update(copy.deepcopy(script_tools))
 
     APPS.clear()
     APPS.update(copy.deepcopy(apps))

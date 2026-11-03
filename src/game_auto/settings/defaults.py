@@ -42,6 +42,16 @@ DEFAULT_QBITTORRENT: Dict[str, str] = {
 }
 
 
+# 第三方脚本自动安装配置（services/script_tool_installer.py 消费）：
+# install_root 空 = 用 paths.SCRIPT_TOOLS_DEFAULT_DIR（<项目>/data/script_tools）；
+# overrides 按 ScriptToolSpec.tool_key 覆盖单个工具的安装目录
+# （2026-11-03 用户确认：默认跟项目走、全局根可改、每工具可单独自定义）。
+DEFAULT_SCRIPT_TOOLS: Dict = {
+    "install_root": "",
+    "overrides": {},
+}
+
+
 # 白荆回廊「有猫零售 · 有猫兑换 · 小猫礼品」每月购买（2026-11-01 用户确认清单）
 # 用户 2026-11-01 明确：只换两张抽卡券（同调线索 / 一刹闪回）+ 心迹，别的都不换。
 # 两张券每月库存各 5（单价 40），按用户选择「买满库存」逐件购买（qty=5）；

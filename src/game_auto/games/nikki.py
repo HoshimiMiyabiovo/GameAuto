@@ -1,6 +1,6 @@
 """无限暖暖（whimbox）。"""
 
-from .base import GameProfile
+from .base import GameProfile, ScriptToolSpec
 from .registry import register
 
 PROFILE = GameProfile(
@@ -17,6 +17,9 @@ PROFILE = GameProfile(
     progress_hint="game_auto.games.base:build_maintenance_hint",
     view_key="nikki",
     supports_stamina=True,
+    script_tools=(ScriptToolSpec(
+        label="whimbox", repo="nikkigallery/Whimbox", tool_key="whimbox",
+    ),),
     hint="无限暖暖常规任务；whimbox 一条龙接管每日。",
     default_app={
         "display_name": "无限暖暖",

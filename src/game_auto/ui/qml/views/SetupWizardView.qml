@@ -7,9 +7,11 @@ import HuskarUI.Basic
 // First-run path setup wizard
 Item {
     id: root
+    objectName: "setupWizardRoot"
     readonly property real fs: Application.window ? Application.window.fontScale : 1
 
     property var setupItems: []
+    property var scriptVersions: []
     property int currentEditIndex: -1
 
     readonly property int configuredCount: {
@@ -27,6 +29,45 @@ Item {
         } catch(e) {
             root.setupItems = []
         }
+        loadScriptVersions()
+    }
+
+    onVisibleChanged: if (visible) loadScriptVersions()
+
+    // 后台检查（手动按钮 / 启动静默检查）完成后的推送
+    Connections {
+        target: bridge
+        function onScriptVersionsChanged(json) {
+            try {
+                root.scriptVersions = JSON.parse(json)
+            } catch(e) {
+                root.scriptVersions = []
+            }
+        }
+    }
+
+    function loadScriptVersions() {
+        var json = bridge.getScriptVersions()
+        try {
+            root.scriptVersions = JSON.parse(json)
+        } catch(e) {
+            root.scriptVersions = []
+        }
+    }
+
+    // status → 状态 Tag 的文案与颜色（stale 时外面再追加"（缓存）"）。
+    // 注意 HusTag 只有 Default/Success/Processing/Error/Warning 五种状态，
+    // 中性信息一律 State_Default（State_Info 不存在，赋 undefined 会报错）
+    function statusMeta(row) {
+        switch (row.status) {
+            case "update":        return { text: "有更新",       state: HusTag.State_Warning }
+            case "latest":        return { text: "已是最新",     state: HusTag.State_Success }
+            case "local_unknown": return { text: "本地版本未知", state: HusTag.State_Default }
+            case "no_release":    return { text: "无发布版",     state: HusTag.State_Default }
+            case "no_repo":       return { text: "仅本地版本",   state: HusTag.State_Default }
+            case "no_path":       return { text: "未配置路径",   state: HusTag.State_Default }
+        }
+        return { text: "未知", state: HusTag.State_Default }
     }
 
     function groupLabelOf(key) {
@@ -202,6 +243,109 @@ Item {
                                     color: pathItem.fileValid ? "#3b7d3b" : "#b04b44"
                                     Layout.preferredWidth: 24
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Script version / update check
+            HusCard {
+                Layout.fillWidth: true
+                title: "脚本版本 / 更新"
+                padding: 14
+
+                contentItem: ColumnLayout {
+                    spacing: 10
+                    Layout.fillWidth: true
+
+                    RowLayout {
+                        spacing: 10
+                        Layout.fillWidth: true
+
+                        HusText {
+                            text: "对照 GitHub 最新 Release 检测第三方脚本是否落后，建议有更新时先升级再跑日常。每 24 小时联网一次，也可手动刷新。"
+                            font.pixelSize: Math.round(12 * root.fs)
+                            color: "#8a7a68"
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                        }
+                        HusButton {
+                            text: bridge.scriptCheckRunning ? "检查中..." : "检查更新"
+                            type: HusButton.Type_Outlined
+                            enabled: !bridge.scriptCheckRunning
+                            onClicked: bridge.checkScriptUpdates()
+                        }
+                    }
+
+                    HusText {
+                        visible: root.scriptVersions.length === 0
+                        text: bridge.scriptCheckRunning ? "正在检查..." : "未获取到脚本信息"
+                        font.pixelSize: Math.round(13 * root.fs)
+                        color: "#8a7a68"
+                    }
+
+                    Repeater {
+                        model: root.scriptVersions
+
+                        delegate: RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            property var meta: root.statusMeta(modelData)
+
+                            HusText {
+                                text: {
+                                    var disp = modelData.display_name || ""
+                                    var label = modelData.label || ""
+                                    if (!disp || label.indexOf(disp) >= 0) return label
+                                    return disp + " · " + label
+                                }
+                                font.pixelSize: Math.round(13 * root.fs)
+                                Layout.preferredWidth: Math.round(240 * root.fs)
+                                elide: Text.ElideRight
+                            }
+                            HusText {
+                                text: modelData.local ? ("本地 v" + modelData.local) : "本地版本未知"
+                                font.pixelSize: Math.round(13 * root.fs)
+                                color: modelData.local ? "#5a4d3f" : "#8a7a68"
+                                Layout.preferredWidth: Math.round(150 * root.fs)
+                                elide: Text.ElideRight
+                            }
+                            HusText {
+                                text: modelData.latest ? ("最新 " + modelData.latest) : "—"
+                                font.pixelSize: Math.round(13 * root.fs)
+                                color: modelData.has_update ? "#b66f1f" : "#5a4d3f"
+                                Layout.preferredWidth: Math.round(110 * root.fs)
+                                elide: Text.ElideRight
+                            }
+                            HusTag {
+                                text: modelData.stale ? (meta.text + "（缓存）") : meta.text
+                                tagState: meta.state
+                            }
+                            Item { Layout.fillWidth: true }
+                            // 首启可选自动下载：支持的未安装工具直接一键装（进度在"脚本管理"页）
+                            HusButton {
+                                visible: modelData.downloadable === true && (modelData.path || "") === ""
+                                text: "一键安装"
+                                type: HusButton.Type_Outlined
+                                onClicked: {
+                                    bridge.installTool(modelData.tool_key)
+                                    installHint.visible = true
+                                }
+                            }
+                            HusText {
+                                id: installHint
+                                visible: false
+                                text: "安装任务已开始，进度见侧边栏「脚本管理」页"
+                                font.pixelSize: Math.round(12 * root.fs)
+                                color: "#8a7a68"
+                            }
+                            HusButton {
+                                visible: (modelData.repo_url || "") !== ""
+                                text: "发布页"
+                                type: HusButton.Type_Outlined
+                                onClicked: Qt.openUrlExternally(modelData.repo_url)
                             }
                         }
                     }

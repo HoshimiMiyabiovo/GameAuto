@@ -33,3 +33,5 @@ windows-capture>=1.2
 numpy>=1.26
 # 刷本配置（第二期）：YAML round-trip 保注释，禁止用 PyYAML dump
 ruamel.yaml>=0.18
+# 脚本管理页：BetterGI/March7th 的 release 只发 7z 包，zip 用 stdlib
+py7zr>=0.21
