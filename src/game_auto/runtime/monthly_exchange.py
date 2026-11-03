@@ -43,6 +43,7 @@ from .zzz_monthly_shop import (
     CONFIRM_GONE_FAIL,
     ITEM_MISSING,
     NO_POPUP,
+    NOT_FULL,
     STOPPED,
     _buy_once,
     _frac_point,
@@ -697,7 +698,13 @@ def _buy_items(
             if result == STOPPED:
                 return False, summaries + [f"{name}: 用户停止"]
             if result == NO_POPUP:
+                # 已在 `_buy_once` 里重试过一次（浮层遮挡会重试成功），重试仍无弹窗
+                # 按「已达上线」处理（用户 2026-11-01 口径：到上限后商品不再可兑）
                 reason = "已达上限或无弹窗"
+                break
+            if result == NOT_FULL:
+                # 2026-11-03 用户口径：页面还显示剩余数量就不能算完成（原神 4/5 事故）
+                reason = "页面仍有剩余，未买满"
                 break
             if result == ITEM_MISSING:
                 missing_count += 1
@@ -845,6 +852,7 @@ def buy_monthly_exchange(
     capture_shop_evidence(
         logger, hwnd, flow_label=label, stage="采购后",
         summary=detail + ("" if buy_ok else "（有未买够项，见日志）"),
+        annotate=True,
     )
 
     exit_ok = _leave_to_main_world(logger, hwnd, step, label, scales, confidences, stop_check)

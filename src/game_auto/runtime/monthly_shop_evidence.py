@@ -78,12 +78,15 @@ def capture_shop_evidence(
     flow_label: str,
     stage: str,
     summary: str = "",
+    annotate: bool = False,
 ) -> str:
     """抓一张采购证据图，返回相对项目根目录的路径；失败返回空串。
 
     flow_label: 流程中文名（余烬兑换 / 信源兑换 / 后勤商店）
     stage: 阶段（采购前 / 采购后），直接拼进文件名
     summary: 采购摘要（写进 index.jsonl，便于不打开图片就知道买了几件）
+    annotate: 额外生成一张带 OCR 标注的副本（框+编号+图例），用来直接看
+        「本月剩余数量:4」这类文字，判断有没有买满（2026-11-03 用户要求）。
     """
     try:
         from PIL import Image
@@ -98,7 +101,9 @@ def capture_shop_evidence(
 
         img = grab_screen(region=region)
         width, height = img.size
+        scale = 1.0
         if width > EVIDENCE_MAX_WIDTH:
+            scale = EVIDENCE_MAX_WIDTH / width
             img = img.resize(
                 (EVIDENCE_MAX_WIDTH, max(1, int(height * EVIDENCE_MAX_WIDTH / width))),
                 Image.LANCZOS,
@@ -114,14 +119,52 @@ def capture_shop_evidence(
 
         rel_path = path.relative_to(BASE_DIR).as_posix()
         logger.info("[%s] 已留%s截图: %s", flow_label, stage, rel_path)
+
+        annotated_rel = ""
+        if annotate:
+            annotated_rel = _save_annotated(logger, hwnd, img, scale, stamp, flow_label, stage)
+
         _append_index({
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
             "flow": flow_label,
             "stage": stage,
             "file": rel_path,
+            "ocr_file": annotated_rel,
             "summary": summary,
         })
         return rel_path
     except Exception as exc:  # noqa: BLE001 - 证据截图失败不能影响采购
         logger.debug("[%s] %s截图失败: %s", flow_label, stage, exc)
+        return ""
+
+
+def _save_annotated(
+    logger: logging.Logger,
+    hwnd,
+    img,
+    scale: float,
+    stamp: str,
+    flow_label: str,
+    stage: str,
+) -> str:
+    """在已压缩的截图上叠加 OCR 框/编号/图例并落盘，返回相对路径；失败返回空串。"""
+    try:
+        from .flow_diagnostics import annotate_ocr_overlay
+        from .ocr_click_tester import ocr_window_content
+
+        results = ocr_window_content(logger, hwnd=hwnd) or []
+        if not results:
+            return ""
+        title = f"{flow_label} · {stage} · {len(results)} 个文本区域"
+        annotated = annotate_ocr_overlay(img, results, title, scale=scale)
+        if annotated is None:
+            return ""
+        name = f"{stamp}_{_safe_tag(flow_label)}_{_safe_tag(stage)}_ocr.jpg"
+        path = MONTHLY_SHOP_EVIDENCE_DIR / name
+        annotated.save(str(path), "JPEG", quality=EVIDENCE_JPEG_QUALITY, optimize=True)
+        rel_path = path.relative_to(BASE_DIR).as_posix()
+        logger.info("[%s] %s截图已叠加 OCR 标注: %s", flow_label, stage, rel_path)
+        return rel_path
+    except Exception as exc:  # noqa: BLE001 - 标注只是便利，失败保留原图
+        logger.debug("[%s] %s OCR 标注失败: %s", flow_label, stage, exc)
         return ""

@@ -196,6 +196,11 @@ TEA_SCENE_MARKERS = ("茶憩纪念函",)                      # 茶憩场景
 TEA_TOPIC_MARKERS = ("选择话题", "结束茶憩")             # 话题菜单（场景中弹出）
 TEA_SUMMARY_MARKERS = ("茶憩结束", "点击退出")           # 结束摘要
 TEA_DRINK_TEXTS = ("喝茶", "再来一杯", "请喝茶", "干杯")  # 喝茶交互文字（场景内动态出现）
+# 2026-11-03 实锤：点首个角色卡后画面停在「20 个文字区域」的页面 23 秒（不是茶憩
+# 场景），之后按老逻辑点底部对话框 (0.50,0.92)，反而把页面退回休息室。说明点角色卡
+# 进的是角色详情/邀约页，还需要再点一次明确入口。这里只认语义明确的词，**不碰
+# 「确认」**——同页有「将离开休息室」的确认框，误点会直接退回上一层。
+TEA_INVITE_TEXTS = ("邀请", "开始茶憩", "一同品茶", "邀约")
 # 关键点击位（窗口相对比例，实测 @1919x1079）
 TEA_CONFIRM_OK = (0.623, 0.634)          # 前往确认-确定 (1196,684)
 TEA_FIRST_CHARACTER = (0.412, 0.417)     # 角色选择页首个角色卡 (790,450)
@@ -261,6 +266,11 @@ IMAGING_DIALOG_MARKERS = ("快速战斗设置", "指定次数")        # 快速�
 IMAGING_SETTLEMENT_MARKERS = ("任务完成", "战斗结算", "结算", "挑战成功", "获得道具")
 # 关键点击位（窗口相对比例，实测 @1919x1079）
 IMAGING_QUICK_BATTLE_BTN = (0.784, 0.893)   # 关卡页「快速战斗」(1505,963)
+# 2026-11-03 实锤：物资保障点上面这个固定比例，弹出的是「进入关卡/行动力」确认框，
+# 不是「快速战斗设置」——同一天的显影/自由贸易/光刻都正常，说明不同关卡页布局不一样，
+# 比例落点会压到邻居按钮。有文字就先点 OCR 命中的 center，比例只做兜底。
+IMAGING_QUICK_BATTLE_TEXTS = ("快速战斗",)
+IMAGING_QUICK_BATTLE_REGION = (0.55, 0.72, 1.0, 1.0)   # 关卡页右下按钮区
 IMAGING_DIALOG_OK_BTN = (0.617, 0.799)      # 弹窗内「快速战斗」确认 (1185,862)
 # 2026-10-25 用户弹窗截图（1707x960）：指定次数 1 右侧第一个蓝色圆钮是「+」，
 # 再右边是「最大」。点一次 + 即 1→2；四个关卡里只给第一场加一次，凑满 5 次战斗。
@@ -758,6 +768,10 @@ def _capture_stage_battle_dialog(logger: logging.Logger, hwnd) -> Optional[str]:
     """快速战斗设置弹窗首次出现时抓图并打印 OCR 文字（定位“指定次数”控件）。
 
     只按天抓一次；文件存在就跳过，避免四个关卡战斗重复写盘/刷日志。
+
+    注意：这是「日常留档」（baijing_verify，一天一张），不是失败证据。
+    异常/失败取证走 `_record_step_failure` → `flow_diagnostics.record_failure`
+    （flow_failures 表 + flow_failures 目录 + OCR 标注图）。
     """
     try:
         out_path = BAIJING_VERIFY_DIR / f"battle_dialog_{_baijing_today_key()}.jpg"
@@ -778,6 +792,33 @@ def _capture_stage_battle_dialog(logger: logging.Logger, hwnd) -> Optional[str]:
     except Exception as e:
         logger.debug(f"[白荆回廊·日常] 快速战斗弹窗快照失败: {e}")
         return None
+
+
+def _confirm_action_power_use(logger: logging.Logger, hwnd, stop_check=None, max_clicks: int = 2) -> bool:
+    """点掉「体力/行动力不足 → 确认使用补充道具」弹窗（最多点 max_clicks 次）。
+
+    2026-11-03 用户确认：游戏推荐的是限时行动力药，可以直接用，不必等过期。
+    只匹配「确认使用」这条文案，不碰泛化的「确认」——同一套页面里还有
+    「将离开休息室」之类的退出确认，误点会把流程退回上一层。
+    注意：这里默认「确认使用」消耗的是限时/免费补充道具；若哪天游戏改成
+    默认消耗付费道具，需要在此处加文案白名单（例如必须同时出现「限时」），
+    日志里已记录命中的原文，便于事后核对。
+    返回是否至少点过一次。
+    """
+    clicked = False
+    for _ in range(max_clicks):
+        if _stopped(stop_check):
+            break
+        hit = _ocr_best_match(logger, ("确认使用",), hwnd, min_conf=0.5)
+        if not hit:
+            break
+        _pyautogui_click_guarded(*hit["center"])
+        logger.info(
+            f"[白荆回廊·日常] 行动力/体力不足，已确认使用补充道具 {hit['text']!r} @ {hit['center']}"
+        )
+        clicked = True
+        time.sleep(1.5)
+    return clicked
 
 
 def _find_task_button(logger: logging.Logger, hwnd, stop_check=None):
@@ -2018,6 +2059,33 @@ def _click_ratio(logger: logging.Logger, hwnd, ratio: Tuple[float, float], label
     return (cx, cy)
 
 
+def _nudge_into_tea_scene(logger: logging.Logger, hwnd, stop_check=None) -> bool:
+    """点完角色卡后补一脚：先快检茶憩场景，没进就找详情页的「邀请/开始茶憩」。
+
+    2026-11-03 实锤：11:34:24 点了首个角色卡，之后 23 秒画面稳定在 20 个文字
+    区域（不是茶憩场景），接着老逻辑点底部对话框 (0.50,0.92) 把页面退回了休息室。
+    也就是说这一下进的是角色详情/邀约页，还差一次「邀请」类点击。
+
+    只做 5 秒快检（正常流程场景会立刻出现，不会额外拖时间）；找不到邀请类按钮
+    就什么都不点，交给后面的 `_wait_page_markers` 按老逻辑处理，避免盲点把页面
+    退掉。返回是否已确认进入场景或已点了邀请入口。
+    """
+    if _wait_page_markers(logger, hwnd, TEA_SCENE_MARKERS, timeout=8.0, stop_check=stop_check):
+        return True
+    if _stopped(stop_check):
+        return False
+    hit = _ocr_best_match(logger, TEA_INVITE_TEXTS, hwnd, min_conf=0.55)
+    if hit:
+        _pyautogui_click_guarded(*hit["center"])
+        logger.info(f"[白荆回廊·日常] 角色详情页点击 {hit['text']!r} @ {hit['center']}")
+        time.sleep(1.5)
+        return True
+    logger.warning(
+        "[白荆回廊·日常] 点角色卡后未见茶憩场景，也没找到「邀请/开始茶憩」类按钮"
+    )
+    return False
+
+
 def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> bool:
     """午后茶憩任务：前往→确定→任选角色→喝茶→再来一杯→摘要→返回→确定→主界面。
 
@@ -2028,6 +2096,8 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
     喝茶/再来一杯是场景内动态出现的交互（截图未捕捉到按钮形态），用 OCR 轮询
     文字点击；若轮询不到只记录警告，不盲点 3D 场景。
     """
+    # 点角色卡后的补脚结果：True=已进场景/已点邀请，False=两样都没有，None=没走角色卡分支
+    nudge_ok = None
     # 1) 任务行内「前往」（任务名含「午后茶」，OCR 常把"歇"认成"憩"，取稳定前缀）
     goto_pos = _find_row_button(logger, hwnd, "午后茶", "前往", stop_check=stop_check)
     if not goto_pos:
@@ -2051,6 +2121,7 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
     )
     if role_page:
         _click_ratio(logger, hwnd, TEA_FIRST_CHARACTER, "首个角色卡")
+        nudge_ok = _nudge_into_tea_scene(logger, hwnd, stop_check=stop_check)
     elif _in_rest_room(logger, hwnd):
         # 2026-10-25 19:50 实锤：点「确定」后有时直接进休息室 3D 场景。
         # 2026-10-26 12:50 进一步实锤：休息室里要点右下「午后茶憩」立牌卡；
@@ -2070,6 +2141,7 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
         )
         if role_page:
             _click_ratio(logger, hwnd, TEA_FIRST_CHARACTER, "首个角色卡")
+            nudge_ok = _nudge_into_tea_scene(logger, hwnd, stop_check=stop_check)
         else:
             logger.warning("[白荆回廊·日常] 休息室点「午后茶憩」后未见角色选择页（可能直接进场景）")
     else:
@@ -2084,6 +2156,20 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
         _return_to_task_panel(logger, hwnd, stop_check=stop_check)
         return False
     # 4) 茶憩场景 → 喝茶循环
+    if nudge_ok is False:
+        # 点了角色卡，但既没进场景也没找到邀请入口：页面多半停在角色详情页。
+        # 2026-11-03 实锤——这时按老逻辑点底部 (0.50,0.92) 会把页面退回休息室，
+        # 然后两轮「喝茶」轮询全空。这里再给 10s 兜底，还进不去就落证据收工。
+        if not _wait_page_markers(
+            logger, hwnd, TEA_SCENE_MARKERS, timeout=10.0, stop_check=stop_check
+        ):
+            logger.warning("[白荆回廊·日常] 角色卡点击后仍未进入茶憩场景，跳过盲点推进")
+            _record_step_failure(
+                logger, hwnd, "午后茶憩",
+                "点角色卡后停在角色详情/未知页，未找到「邀请/开始茶憩」入口",
+            )
+            _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+            return False
     scene_seen = _wait_page_markers(
         logger, hwnd, TEA_SCENE_MARKERS, timeout=TEA_SCENE_TIMEOUT_SEC, stop_check=stop_check
     )
@@ -2615,6 +2701,33 @@ def claim_club_daily_reward(logger: logging.Logger, hwnd, stop_check=None) -> Di
     return result
 
 
+def _click_quick_battle_entry(logger: logging.Logger, hwnd, stop_check=None) -> bool:
+    """关卡页点「快速战斗」：优先点 OCR 命中的按钮文字，找不到才退回固定比例。
+
+    2026-11-03 实锤（定向物资保障）：固定比例 (0.784,0.893) 点下去弹的是
+    「进入关卡/行动力」确认框，不是快速战斗设置窗 —— 同一天另外三个关卡用同一
+    比例都正常，说明各关卡页布局不一致，比例会压到邻居按钮上。OCR 既然认得出
+    「快速战斗」文字，就直接点它的 center（注意只会命中关卡页上的那个按钮，
+    设置弹窗此时还没出现）。
+    返回 True 表示按 OCR 坐标点的，False 表示走了比例兜底。
+    """
+    if _stopped(stop_check):
+        return False
+    hit = _ocr_best_match(
+        logger,
+        IMAGING_QUICK_BATTLE_TEXTS,
+        hwnd,
+        frac_region=IMAGING_QUICK_BATTLE_REGION,
+        min_conf=0.55,
+    )
+    if hit:
+        _pyautogui_click_guarded(*hit["center"])
+        logger.info(f"[白荆回廊·日常] 点击关卡页「快速战斗」[ocr] @ {hit['center']}")
+        return True
+    _click_ratio(logger, hwnd, IMAGING_QUICK_BATTLE_BTN, "「快速战斗」（关卡页，比例兜底）")
+    return False
+
+
 def _handle_stage_battle_task(
     logger: logging.Logger,
     hwnd,
@@ -2643,38 +2756,69 @@ def _handle_stage_battle_task(
         logger.warning(f"[白荆回廊·日常] 未进入{task_label}关卡页")
         return _return_to_task_panel(logger, hwnd, stop_check=stop_check)
     time.sleep(1.0)
-    # 3) 第一次点「快速战斗」→ 设置弹窗
-    _click_ratio(logger, hwnd, IMAGING_QUICK_BATTLE_BTN, "「快速战斗」（关卡页）")
+    # 3) 第一次点「快速战斗」→ 设置弹窗（OCR 定位优先，比例兜底）
+    _click_quick_battle_entry(logger, hwnd, stop_check=stop_check)
     # 4) 等弹窗 → 第二次点「快速战斗」确认（精确匹配优先，不会误点弹窗标题）
-    if _wait_page_markers(logger, hwnd, IMAGING_DIALOG_MARKERS, timeout=6.0, stop_check=stop_check):
-        _capture_stage_battle_dialog(logger, hwnd)
-        if battle_count > 1:
-            # 「指定次数」默认 1，点右侧 + 递增；每轮最多 5 次，最多点 4 下
-            for _ in range(min(int(battle_count) - 1, 4)):
-                _click_ratio(logger, hwnd, IMAGING_DIALOG_PLUS_BTN, "指定次数 +1")
-                time.sleep(0.35)
-            confirmed = _ocr_best_match(
-                logger,
-                (str(int(battle_count)),),
-                hwnd,
-                frac_region=IMAGING_DIALOG_COUNT_REGION,
-                min_conf=0.5,
+    dialog_seen = _wait_page_markers(
+        logger, hwnd, IMAGING_DIALOG_MARKERS, timeout=6.0, stop_check=stop_check
+    )
+    if not dialog_seen:
+        # 2026-11-03 实锤（物资保障）：点「快速战斗」后没弹设置窗，弹的是带
+        # 「确认使用」的行动力/体力补充确认框（用户判断：体力不足时游戏自动
+        # 推荐限时行动力药，限时的可以直接用）。旧逻辑在这里按比例盲点
+        # (0.617,0.799)，再把当前页当结算页点掉 → 这一场根本没开打，
+        # 连带「定向物资保障」0/1（-5）和「完成5次战斗」停在 4/5（-20）。
+        # 新逻辑：先确认使用补充道具，再重新等设置窗；仍然等不到就回任务面板，
+        # 按失败取证（flow_failures + OCR 标注图）留档，绝不盲点、也不谎报完成。
+        if _confirm_action_power_use(logger, hwnd, stop_check=stop_check):
+            dialog_seen = _wait_page_markers(
+                logger, hwnd, IMAGING_DIALOG_MARKERS, timeout=5.0, stop_check=stop_check
             )
-            if confirmed:
-                logger.info(f"[白荆回廊·日常] 指定次数已设置为 {int(battle_count)}")
-            else:
-                logger.warning(
-                    f"[白荆回廊·日常] 未确认到指定次数={int(battle_count)}，按当前设置继续"
+            if not dialog_seen:
+                # 补完行动力一般退回关卡页，需要再点一次「快速战斗」
+                _click_quick_battle_entry(logger, hwnd, stop_check=stop_check)
+                dialog_seen = _wait_page_markers(
+                    logger, hwnd, IMAGING_DIALOG_MARKERS, timeout=6.0, stop_check=stop_check
                 )
-        hit = _ocr_best_match(logger, ("快速战斗",), hwnd, min_conf=0.6)
-        if hit:
-            _pyautogui_click_guarded(*hit["center"])
-            logger.info(f"[白荆回廊·日常] 点击弹窗内「快速战斗」确认 @ {hit['center']}")
+        if not dialog_seen:
+            logger.warning(
+                "[白荆回廊·日常] 仍未出现快速战斗设置窗，不再盲点，回任务面板复核"
+            )
+            # 走统一失败取证：截图 + 当帧 OCR 文字写进 flow_failures，
+            # 截图会附一份 OCR 标注版（框 + 文字 + 置信度），供事后定位。
+            _record_step_failure(
+                logger, hwnd, f"{task_label}·快速战斗",
+                "未见「快速战斗设置」弹窗（已尝试确认使用行动力/道具），未开打，回任务面板复核",
+            )
+            _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+            # 关键：没有开打的证据就不能报成功，否则上层会写「任务已完成」，
+            # 任务行仍停在 0/1，下一轮又被漏掉（今天物资保障就是这样丢的 5 分）。
+            return False
+    _capture_stage_battle_dialog(logger, hwnd)
+    if battle_count > 1:
+        # 「指定次数」默认 1，点右侧 + 递增；每轮最多 5 次，最多点 4 下
+        for _ in range(min(int(battle_count) - 1, 4)):
+            _click_ratio(logger, hwnd, IMAGING_DIALOG_PLUS_BTN, "指定次数 +1")
+            time.sleep(0.35)
+        confirmed = _ocr_best_match(
+            logger,
+            (str(int(battle_count)),),
+            hwnd,
+            frac_region=IMAGING_DIALOG_COUNT_REGION,
+            min_conf=0.5,
+        )
+        if confirmed:
+            logger.info(f"[白荆回廊·日常] 指定次数已设置为 {int(battle_count)}")
         else:
-            _click_ratio(logger, hwnd, IMAGING_DIALOG_OK_BTN, "「快速战斗」确认（弹窗，比例兜底）")
+            logger.warning(
+                f"[白荆回廊·日常] 未确认到指定次数={int(battle_count)}，按当前设置继续"
+            )
+    hit = _ocr_best_match(logger, ("快速战斗",), hwnd, min_conf=0.6)
+    if hit:
+        _pyautogui_click_guarded(*hit["center"])
+        logger.info(f"[白荆回廊·日常] 点击弹窗内「快速战斗」确认 @ {hit['center']}")
     else:
-        logger.warning("[白荆回廊·日常] 未见快速战斗设置弹窗，按比例兜底再点一次")
-        _click_ratio(logger, hwnd, IMAGING_DIALOG_OK_BTN, "「快速战斗」确认（兜底）")
+        _click_ratio(logger, hwnd, IMAGING_DIALOG_OK_BTN, "「快速战斗」确认（弹窗，比例兜底）")
     # 5) 等战斗结算页 → 随意点击（战斗播放 + 结算加载预留时间）
     time.sleep(6.0)
     if _wait_page_markers(logger, hwnd, IMAGING_SETTLEMENT_MARKERS, timeout=15.0, stop_check=stop_check):

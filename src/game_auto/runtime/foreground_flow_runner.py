@@ -790,6 +790,43 @@ def _focus_window(hwnd: int):
         _LOGGER.debug("[窗口] SetForegroundWindow 失败: %s", exc)
 
 
+_MODIFIER_VKS = (
+    win32con.VK_MENU,      # Alt
+    win32con.VK_CONTROL,
+    win32con.VK_SHIFT,
+    win32con.VK_LWIN,
+    win32con.VK_RWIN,
+)
+
+
+def _release_modifier_keys():
+    """点击前抬起 Alt/Ctrl/Shift/Win。
+
+    流程中途被停止、键位类步骤异常退出时，修饰键可能停在按下状态；
+    此时游戏/启动器会把鼠标点击当成组合键操作，表现为"点了没反应"。
+    对没按下的键发送 keyup 无副作用（2026-11-03 ZZZ 标题页点击无反应排查）。
+    """
+    try:
+        for vk in _MODIFIER_VKS:
+            win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
+    except Exception as exc:  # 输入/权限异常不应影响点击本身
+        _LOGGER.debug("[窗口] 释放修饰键失败: %s", exc)
+
+
+def _resolve_background_click(step: Dict, cfg: Dict, attempt: int) -> bool:
+    """决定本次点击用前台 pyautogui 还是后台 PostMessage。
+
+    - background_click：显式指定基线方式（ok-script/OneDragon 对游戏多用后台）；
+    - click_fallback：同一元素点击确认失败后，下一次自动换另一种方式。
+      前台点击会被覆盖在游戏上的其他窗口吞掉，后台 PostMessage 又可能被
+      某些游戏忽略，交替尝试比死磕一种更有效。
+    """
+    base = bool(step.get("background_click", cfg.get("background_click", False)))
+    if attempt > 0 and bool(step.get("click_fallback", cfg.get("click_fallback", False))):
+        return not base
+    return base
+
+
 def _locate_template_on_screen(
     template_path: str,
     region: Tuple[int, int, int, int],
@@ -811,6 +848,7 @@ def _locate_template_on_screen(
         screenshot = None
     if screenshot is None:
         return None
+    last_error: Optional[Exception] = None
     for scale in scales:
         tpl = tpl0
         if scale != 1.0:
@@ -837,8 +875,16 @@ def _locate_template_on_screen(
                     if box:
                         return int(box.left + box.width / 2 + region[0]), int(box.top + box.height / 2 + region[1])
                 except Exception as exc:
-                    _LOGGER.debug("[模板] 屏幕定位失败: %s", exc)
+                    last_error = exc
             time.sleep(throttle_sec)
+    # 每次调用只在整轮 scale/conf 都失败后打一条：原实现按组合逐条打，
+    # 一轮刷 9 行且异常 message 常为空，日志看不出是哪个模板（2026-11-03 实盘）。
+    _LOGGER.debug(
+        "[模板] 屏幕定位失败: %s region=%s%s",
+        os.path.basename(template_path) or template_path,
+        region,
+        f" ({type(last_error).__name__}: {last_error})" if last_error else "",
+    )
     return None
 
 
@@ -1035,15 +1081,33 @@ def _locate_with_ocr_fallback(
 def _post_click_window(hwnd: int, x_local: int, y_local: int) -> bool:
     """抄 ok-script PostMessageInteraction：后台点击，免抢焦点。
 
-    返回 True=已投递，False=回退前台点击。只做最小实现：WM_LBUTTONDOWN/UP。
+    返回 True=已投递，False=回退前台点击。发送 WM_MOUSEMOVE/LBUTTONDOWN/UP，
+    并把光标临时移到按钮上再恢复（部分游戏按当前光标位置判定点击）。
     """
     try:
         if not hwnd or not win32gui.IsWindow(hwnd):
             return False
+        # 对齐 ok-script/OneDragon 的后台点击做法：先把光标放到按钮上再投递消息，
+        # 少数游戏（含 ZZZ 标题页）只在处理点击时读当前光标位置，纯 PostMessage
+        # 坐标会落空；点完恢复光标，避免影响后续动作。
+        old_pos = None
+        rect = _window_rect(hwnd)
+        if rect:
+            try:
+                old_pos = win32api.GetCursorPos()
+                win32api.SetCursorPos((rect[0] + int(x_local), rect[1] + int(y_local)))
+                time.sleep(0.03)
+            except Exception:
+                old_pos = None
         lparam = (int(y_local) << 16) | (int(x_local) & 0xFFFF)
+        win32gui.PostMessage(hwnd, win32con.WM_MOUSEMOVE, 0, lparam)
+        time.sleep(0.02)
         win32gui.PostMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
         time.sleep(0.02)
         win32gui.PostMessage(hwnd, win32con.WM_LBUTTONUP, 0, lparam)
+        if old_pos:
+            time.sleep(0.05)
+            win32api.SetCursorPos(old_pos)
         return True
     except Exception:
         return False
@@ -1069,6 +1133,7 @@ def _click_window_local(hwnd: int, x_local: int, y_local: int, clicks: int = 1, 
                 time.sleep(interval)
         if ok_all:
             return
+    _release_modifier_keys()
     _focus_window(hwnd)
     _pyautogui_click_guarded(l + int(x_local), t + int(y_local), clicks=clicks, interval=interval)
 
@@ -2036,8 +2101,9 @@ def run_flow(
             clicks = int(step.get("clicks", 1))
             no_click = bool(step.get("no_click", False))
             hover = bool(step.get("hover", False))
-            # 后台点击需 step/cfg 显式 opt-in（XM/CJ 默认前台，PostMessage 点不上）
-            use_background = bool(step.get("background_click", cfg.get("background_click", False)))
+            # 后台点击需 step/cfg 显式 opt-in（XM/CJ 默认前台，PostMessage 点不上）；
+            # click_fallback 开启时，同一步点击确认失败后自动换另一种点击方式
+            use_background = _resolve_background_click(step, cfg, step_attempts.get(i, 0))
             max_attempts = int(step.get("max_attempts", 2))
             on_fail = step.get("on_fail", "fail")
             optional_if_missing = bool(step.get("optional_if_missing", False))

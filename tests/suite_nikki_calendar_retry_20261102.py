@@ -5,12 +5,15 @@
   失败截图 `20261101_122627_NikkiLauncher_晶石兑换-入口.jpg` 显示**还停在
   奇迹之冠 hub 页** → 说明点「奇迹之冠搭配赛」根本没进去；
 - 接着「未回到主界面，跳过共鸣商店」→ 晶石兑换和共鸣商店两个每月清单一件没买；
-- 11-02 17:31 失败记录 #141「按 L 后未出现奇想日历」，截图停在主界面 →
-  L 是开关，第一次很可能已经打开了（日历正文是艺术字没认出来），再按 L 反而关掉。
+- 11-02 17:31 失败记录 #141「按 L 后未出现奇想日历」，截图停在主界面。
+  当时误判成「L 是开关，连按会关掉」，11-03 继续失败后证实：主世界里 ESC 会打开
+  暂停菜单，菜单盖着时 L 全部无效才是根因（见修法 1）。
 
 修法：
-  1. 奇想日历页面判定把标题「奇想日历」也算特征；重试改成「ESC 收起 → 再按 L」，
-     不再连按 L（那是开关）。
+  1. 奇想日历页面判定把标题「奇想日历」也算特征。2026-11-02 的「ESC 收起 → 再按 L」
+     在 11-03 实盘证明是错的（主世界 ESC 会打开暂停菜单，菜单盖着时 L 全部无效）；
+     现改为**优先点右上角「奇想日历」图标**（鼠标点击不受输入法/键盘焦点影响），
+     图标点不到再退回按 L，失败后先收掉奖励页再复检。
   2. 点「奇迹之冠搭配赛」最多重试 3 次；实在进不去就退出 hub（左上角返回箭头）。
   3. 搭配赛页左列「晶石兑换」入口轮询 3 次再判失败。
   4. 回主界面失败时先退出 hub 再回一次，别让共鸣商店被整段跳过。
@@ -70,18 +73,35 @@ def test_calendar_page_title():
     check("主界面不会误判", nc._is_calendar_page([_item("商城", (150, 50))]) is False)
 
 
-def test_open_calendar_uses_esc_between_l():
-    print("[2] 打开奇想日历：认不出就用 ESC 收起，别连按 L")
+def test_calendar_icon_point():
+    print("[2a] 右上角「奇想日历」图标定位")
+    rect = (0, 0, 1920, 1080)
+    point = nc._calendar_icon_point([_item("奇想日历", (1540, 105))], rect)
+    check("命中标签后上移到图标中心", point == (1540, int(105 - 1080 * 0.035)), point)
+    check("左侧同名文字不命中",
+          nc._calendar_icon_point([_item("奇想日历", (400, 105))], rect) is None)
+    check("页面中下部同名文字不命中",
+          nc._calendar_icon_point([_item("奇想日历", (1500, 700))], rect) is None)
+    check("无标签时返回 None（走固定比例）",
+          nc._calendar_icon_point([_item("商城", (1203, 94))], rect) is None)
+
+
+def test_open_calendar_clicks_icon_then_l():
+    print("[2] 打开奇想日历：先点图标，点不到再按 L；不盲按 ESC")
     keys = []
     with mock.patch.object(nc, "_ocr_full", lambda logger, hwnd, region=None: []), \
          mock.patch.object(nc, "_wait_for", lambda *a, **k: None), \
-         mock.patch.object(nc, "_focus", lambda hwnd: None), \
-         mock.patch.object(nc, "_press_key", lambda key: keys.append(key)), \
+         mock.patch.object(nc, "_window_rect", lambda hwnd: RECT), \
+         mock.patch.object(nc, "_click", lambda point: keys.append("click")), \
+         mock.patch.object(nc, "_click_ratio", lambda *a, **k: keys.append("ratio")), \
+         mock.patch.object(nc, "_focus_and_press", lambda hwnd, key: keys.append(key)), \
          mock.patch.object(nc, "_press_esc", lambda: keys.append("esc")), \
          mock.patch.object(nc, "_dismiss_continue_screens", lambda *a, **k: 0):
         ok = nc._open_calendar(LOGGER, 1234)
     check("没打开返回 False", ok is False)
-    check("L 与 ESC 交替出现", keys == ["l", "esc", "l", "esc", "l", "esc"], keys)
+    check("第 1 次点图标（OCR 没标签时走固定比例）", keys[0] == "ratio", keys)
+    check("点图标后不在主界面才 ESC，后续退回按 L",
+          keys[1:] == ["esc", "l", "l"], keys)
 
 
 def test_open_calendar_already_open():
@@ -89,8 +109,8 @@ def test_open_calendar_already_open():
     keys = []
     with mock.patch.object(nc, "_ocr_full", lambda logger, hwnd, region=None: [_item("奇想日历", (100, 50))]), \
          mock.patch.object(nc, "_wait_for", lambda *a, **k: None), \
-         mock.patch.object(nc, "_focus", lambda hwnd: None), \
-         mock.patch.object(nc, "_press_key", lambda key: keys.append(key)):
+         mock.patch.object(nc, "_window_rect", lambda hwnd: RECT), \
+         mock.patch.object(nc, "_focus_and_press", lambda hwnd, key: keys.append(key)):
         ok = nc._open_calendar(LOGGER, 1234)
     check("直接判定为已打开", ok is True)
     check("没有多按 L", not keys, keys)
@@ -199,7 +219,8 @@ def test_run_flow_still_tries_resonance_shop():
 
 def main():
     test_calendar_page_title()
-    test_open_calendar_uses_esc_between_l()
+    test_calendar_icon_point()
+    test_open_calendar_clicks_icon_then_l()
     test_open_calendar_already_open()
     test_pair_click_retried()
     test_pair_click_succeeds_after_retry()

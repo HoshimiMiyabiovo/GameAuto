@@ -67,6 +67,15 @@ LIMIT_KEYWORD = "本月限购"
 CONFIRM_TEXTS = ("确认兑换", "确认", "确定", "购买")
 CANCEL_TEXTS = ("取消",)
 
+# 主界面右上角「奇想日历」图标（ref_nikki_main_20261101.png 1919x1079 实测）：
+# 图标中心约 (1540,66) → (0.802,0.061)；文字标签在图标下方，OCR 命中标签时上移 0.035 窗高。
+# 2026-11-03：11-02/11-03 按 L 连续三次都打不开，改为优先点图标（鼠标点击不受输入法/
+# 键盘焦点影响），点不到再退回按 L。
+CALENDAR_ICON_POINT = (0.802, 0.061)
+CALENDAR_LABEL_OFFSET_RATIO = 0.035
+# 主世界顶部菜单文字（OCR 兜底判主界面，日历页没有这些）
+MAIN_OCR_MARKERS = ("商城", "换装", "任务", "设计图", "无限之心")
+
 # ── 区域（窗口比例）────────────────────────────────────────────────
 CALENDAR_CROWN_REGION = (0.40, 0.45, 0.75, 0.63)
 HUB_PAIR_REGION = (0.12, 0.52, 0.48, 0.72)
@@ -189,6 +198,8 @@ def _focus_and_press(hwnd: int, key: str) -> None:
     """
     import win32gui
 
+    from .foreground_flow_runner import _release_modifier_keys
+
     _focus(hwnd)
     time.sleep(0.35)
     try:
@@ -197,6 +208,8 @@ def _focus_and_press(hwnd: int, key: str) -> None:
             time.sleep(0.25)
     except Exception:  # noqa: BLE001 - 前台查询失败不阻断按键
         pass
+    # 先抬起 Alt/Ctrl/Shift/Win：上次流程中断留下修饰键时，L/H 会被当成组合键吞掉
+    _release_modifier_keys()
     _press_key(key)
 
 
@@ -311,6 +324,34 @@ def _is_calendar_page(items: List[Dict]) -> bool:
     if _pick(items, (CALENDAR_TITLE,), min_conf=0.5):
         return True
     return len(_markers_present(items, CALENDAR_MARKERS)) >= 2
+
+
+def _is_main_world(items: List[Dict]) -> bool:
+    """OCR 兜底判断是否主世界（顶部菜单文字命中 ≥2 个）。"""
+    return len(_markers_present(items, MAIN_OCR_MARKERS)) >= 2
+
+
+def _calendar_icon_point(items: List[Dict], rect) -> Optional[Tuple[int, int]]:
+    """右上角「奇想日历」图标点击点：OCR 命中标签后上移到图标中心。
+
+    标签在图标下方（参考图实测标签 y≈105、图标中心 y≈66，1919x1079），
+    因此命中标签时按窗口高度的 0.035 上移；找不到标签返回 None，由调用方用固定比例。
+    """
+    if not rect:
+        return None
+    left, top, width, height = rect
+    for item in items or []:
+        text = _norm(item.get("text") or "")
+        if "奇想日历" not in text:
+            continue
+        center = item.get("center")
+        if not center:
+            continue
+        x, y = center
+        # 只要顶部 16% 高度内、右半边的那一个，避免命中页面里的同名文字
+        if y <= top + height * 0.16 and x >= left + width * 0.55:
+            return (int(x), int(y - height * CALENDAR_LABEL_OFFSET_RATIO))
+    return None
 
 
 def _is_stage_page(items: List[Dict]) -> bool:
@@ -637,31 +678,50 @@ def _buy_one(
 
 
 def _open_calendar(logger: logging.Logger, hwnd: int, stop_check=None) -> bool:
-    """按 L 打开奇想日历。
+    """打开奇想日历：优先点右上角图标，点不到再按 L。
 
-    2026-11-02 事故：连按 3 次 L 都没识别到日历，失败截图却停在**主界面**——
-    L 是开关，第一次很可能已经打开了（日历正文是艺术字，OCR 没认出来），
-    再按 L 就是把它关掉，越按越回不到日历。
-    现在改成：认不出就先用 ESC 收起当前页，再按 L；并且页面判定把标题
-    「奇想日历」也算进去（正文特征认不出时的兜底）。
+    背景（11-01～11-03 实盘）：
+    - 11-01 按 L 三次中的第 2 次才打开（第 1 下常被窗口激活吞掉）；
+    - 11-02 旧代码连按 3 次 L 全失败；11-03 改成「ESC 收起再按 L」仍然全失败——
+      主世界 ESC 会打开暂停菜单，菜单盖着时 L 完全无效。
+    - 11-03 定标参考图确认右上角有「奇想日历」图标（键位提示 L），鼠标点击不受
+      输入法/键盘焦点影响，所以先点图标；图标点不到才退回按 L。
     """
+    rect = _window_rect(hwnd)
     for attempt in range(1, 4):
         if _stop(stop_check):
             return False
-        if _is_calendar_page(_ocr_full(logger, hwnd)):
+        items = _ocr_full(logger, hwnd)
+        if _is_calendar_page(items):
             logger.info("[无限暖暖·奇想日历] 已在奇想日历页")
             return True
-        _focus_and_press(hwnd, "l")
-        logger.info("[无限暖暖·奇想日历] 按 L 打开奇想日历（第 %s/3 次）", attempt)
-        items = _wait_for(logger, hwnd, _is_calendar_page, timeout=6.0, stop_check=stop_check)
+        if attempt == 1 and rect:
+            _focus(hwnd)
+            point = _calendar_icon_point(items, rect)
+            if point:
+                _click(point)
+                logger.info("[无限暖暖·奇想日历] 点击右上角「奇想日历」图标 @ %s", point)
+            else:
+                _click_ratio(logger, hwnd, CALENDAR_ICON_POINT, "奇想日历图标")
+        else:
+            _focus_and_press(hwnd, "l")
+            logger.info("[无限暖暖·奇想日历] 按 L 打开奇想日历（第 %s/3 次）", attempt)
+        items = _wait_for(logger, hwnd, _is_calendar_page, timeout=8.0, stop_check=stop_check)
         if items:
             logger.info("[无限暖暖·奇想日历] 已进入奇想日历")
             return True
-        # 认不出当前页：先用 ESC 收起（别再按 L 把已经打开的日历关掉）
-        _focus(hwnd)
-        _press_esc()
-        time.sleep(0.8)
+        # 打开日历可能先弹「领取奖励/空白区域继续」页：收掉后再复检，
+        # 此时日历其实已经在下面，别再按 L 把它关掉。
         _dismiss_continue_screens(logger, hwnd, stop_check, max_rounds=2)
+        items = _ocr_full(logger, hwnd)
+        if _is_calendar_page(items):
+            logger.info("[无限暖暖·奇想日历] 收掉奖励页后已进入奇想日历")
+            return True
+        if attempt == 1 and not _is_main_world(items):
+            # 图标点到别的页面：ESC 退回主世界，下一步再按 L
+            _focus(hwnd)
+            _press_esc()
+            time.sleep(0.8)
     return False
 
 

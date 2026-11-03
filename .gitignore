@@ -68,3 +68,6 @@ tools/tesseract-installer.exe
 assets/click_sequences/.protected_backup/
 # 终末地森空岛查询结果本地缓存（含用户游戏数据，不入库）
 storage/cache/
+
+# ZCode 会话工作目录（agent 运行时产物，不入库）
+.zcode/

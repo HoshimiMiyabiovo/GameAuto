@@ -8,6 +8,8 @@
 5. exe_from_app 能解析出绝区零游戏本体路径
 6. ZzzMonthlyFlow 任务目录说明已更新
 7. task_batch_runner -> background_template_runner -> foreground_flow_runner 导入链完好
+8. 2026-11-03 快速失败口径：点击后「点击进入游戏」须消失、前台/后台点击方式切换、
+   进入阶段最坏耗时 ≤300s（不再 40 分钟）
 
 运行：E:/GithubProject/game_auto/.venv/Scripts/python.exe tests/suite_zzz_monthly_main_screen_20261021.py
 （需在 E:/GithubProject 下以包方式导入，脚本内自行处理 sys.path）
@@ -23,6 +25,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))  # E:/GithubProject，供 game_aut
 
 from game_auto.runtime.foreground_flow_runner import (  # noqa: E402
     _load_flow_config,
+    _resolve_background_click,
     _resolve_exe_path,
     _resolve_target_text_candidates,
 )
@@ -60,6 +63,20 @@ check(
 if len(steps) == 7:
     s0, s1, s2, s3, s4, s5, s6 = steps
     check("步骤1 仍为 点击进入游戏(click_template)", s0.get("action") == "click_template" and s0.get("name") == "点击进入游戏")
+    # 2026-11-03：点击无反应时不再傻等——后台 PostMessage 首发、失败后切前台，
+    # 用「点击进入游戏」文字消失做校验，单次 30s×2，进入阶段整体 4~5 分钟内失败。
+    check(
+        "步骤1 点击后校验文字消失（confirm_type=disappear/10s）",
+        s0.get("confirm_type") == "disappear" and s0.get("confirm_timeout_sec") == 10,
+    )
+    check(
+        "步骤1 后台点击 + 失败后切换前台点击",
+        s0.get("background_click") is True and s0.get("click_fallback") is True,
+    )
+    check(
+        "步骤1 单次超时 30s、最多 2 次（不再 300s×2）",
+        s0.get("timeout_sec") == 30 and s0.get("max_attempts") == 2,
+    )
     check("步骤2 为 等待进入主界面(wait_template)", s1.get("action") == "wait_template" and s1.get("name") == "等待进入主界面")
     check(
         "步骤3 为 信号残响每月兑换(monthly_exchange)",
@@ -73,7 +90,15 @@ if len(steps) == 7:
     tpl = s1.get("template", "")
     check("步骤2 模板路径已锚定为绝对路径", os.path.isabs(tpl), tpl)
     check("步骤2 模板文件存在", os.path.isfile(tpl), tpl)
-    check("步骤2 超时 600s 且回退上一步重试", s1.get("timeout_sec") == 600 and s1.get("on_fail") == "retry_prev" and s1.get("max_attempts") == 3)
+    check(
+        "步骤2 超时 100s、最多回退 1 次（4~5 分钟内失败，不再等 40 分钟）",
+        s1.get("timeout_sec") == 100 and s1.get("on_fail") == "retry_prev" and s1.get("max_attempts") == 1,
+    )
+    worst_sec = (
+        (int(s0.get("timeout_sec", 0)) + int(s0.get("confirm_timeout_sec", 0))) * int(s0.get("max_attempts", 1))
+        + int(s1.get("timeout_sec", 0)) * (int(s1.get("max_attempts", 1)) + 1)
+    )
+    check("进入阶段最坏耗时 <= 300s", worst_sec <= 300, f"{worst_sec}s")
 
     candidates = _resolve_target_text_candidates("assets/templates\\绝区零-主界面-电台.png", "星期")
     check("OCR 候选包含「星期」", "星期" in candidates, str(candidates))
@@ -136,6 +161,30 @@ check(
     not get_standalone_task_config("ZzzMonthlyFlow"),
     get_standalone_task_config("ZzzMonthlyFlow"),
 )
+
+# 恶名狩猎共用同一套「进入游戏」步骤，快速失败口径必须一致
+hunt = _load_flow_config("ZZZ_NOTORIOUS_HUNT")
+hunt_steps = (hunt or {}).get("steps", [])
+check(
+    "恶名狩猎进入阶段同样失败即止",
+    len(hunt_steps) >= 2
+    and hunt_steps[0].get("confirm_type") == "disappear"
+    and hunt_steps[1].get("timeout_sec") == 100
+    and hunt_steps[1].get("max_attempts") == 1,
+    str([(s.get("name"), s.get("timeout_sec"), s.get("max_attempts")) for s in hunt_steps[:2]]),
+)
+
+# 点击方式回退：一种点击方式被吞掉时，下一次换另一种
+print()
+check("后台首发（第 1 次）",
+      _resolve_background_click({"background_click": True, "click_fallback": True}, {}, 0) is True)
+check("确认失败后切前台（第 2 次）",
+      _resolve_background_click({"background_click": True, "click_fallback": True}, {}, 1) is False)
+check("默认前台、失败后切后台",
+      _resolve_background_click({"click_fallback": True}, {}, 0) is False
+      and _resolve_background_click({"click_fallback": True}, {}, 1) is True)
+check("未开 click_fallback 时保持原方式",
+      _resolve_background_click({"background_click": True}, {}, 1) is True)
 
 print()
 if failures:

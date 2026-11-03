@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -36,12 +37,21 @@ TAB_TIMEOUT_SEC = 20         # 页签匹配超时（切换用）
 TAB_SELECTED_TIMEOUT_SEC = 10  # 目标页签选中态确认超时
 SETTLE_SEC = 0.8             # 点击后画面稳定等待
 TAB_SWITCH_SETTLE_SEC = 2.0  # 页签切换后等待
+# 兑换成功后的「获得物品」浮层（原神/崩铁都有，中间偏下显示"纠缠之缘×1"）。
+# 2026-11-03 实锤：第 1 个买完后浮层还挂着，第 2 次的 OCR 直接命中浮层上的商品名
+# （原神日志：纠缠之缘 @ (960,607)，正是浮层位置，不是卡片），点过去没有弹窗 →
+# 被 `_buy_once` 判成"已达上限"，于是纠缠之缘/相遇之缘各只买 1 个（采购前后截图
+# 5→4），却记录 1/5 当成功。这里买完先等浮层消失再让下一次定位。
+POST_BUY_SETTLE_SEC = 2.5
+# 第一次点商品后没等到确认弹窗时的重试间隔：等「获得物品」浮层散掉再定位一次。
+RETRY_SETTLE_SEC = 2.0
 EXIT_MAX_ESC = 3             # 采购完最多按几次 ESC 回主世界
 EXIT_CHECK_SEC = 5           # 每次 ESC 后等主世界特征出现的超时
 
 # 单次购买结果
 BOUGHT = "bought"                # 买成功 1 个
 NO_POPUP = "no_popup"            # 点商品后无弹窗（大概率已达上限）
+NOT_FULL = "not_full"            # 点商品无弹窗，但页面还显示有剩余（中断，未买满）
 ITEM_MISSING = "item_missing"    # 商品图标匹配不到
 CONFIRM_GONE_FAIL = "confirm_gone_fail"  # 点了确认但弹窗不关（如余额不足换了提示）
 STOPPED = "stopped"              # 用户请求停止
@@ -213,6 +223,56 @@ def _locate_item(
     return center
 
 
+# 「本月剩余数量:4」（原神）/「可兑换: 4/5」（崩铁）——都取第一个数字当剩余可兑换数。
+# 2026-11-03 用户要求：纠缠之缘还写着 4/5 就必须算未完成，不能按"已达上限"静默成功。
+_REMAIN_PATTERNS = (
+    re.compile(r"剩余数量\s*[:：]?\s*(\d+)"),
+    re.compile(r"可兑换\s*[:：]?\s*(\d+)\s*[／/]"),
+)
+
+
+def _read_item_remaining(
+    logger: logging.Logger, hwnd: int, center: Tuple[int, int], radius: int = 320
+) -> Optional[int]:
+    """读目标商品卡片附近的剩余可兑换数量，读不到返回 None。
+
+    只在「点击无弹窗」时用来区分两种状态：
+      - 剩余 > 0：根本没买满（浮层遮挡/点击落空），必须报未完成；
+      - 剩余 = 0 或读不到：商品到月上限后不展示/变灰，维持旧的"已购"口径。
+    radius 按卡片尺寸给的：商品名和「剩余数量」行通常在同一张卡里，320px 足够，
+    又不会串到隔壁卡。
+    """
+    try:
+        from .ocr_click_tester import ocr_window_content
+
+        results = ocr_window_content(logger, hwnd=hwnd) or []
+    except Exception as exc:  # noqa: BLE001 - 读不到就交给旧口径，不能拖垮采购
+        LOGGER.debug(f"[商店采购] 读取商品剩余数量失败: {exc}")
+        return None
+    cx, cy = int(center[0]), int(center[1])
+    best_val: Optional[int] = None
+    best_dist: Optional[int] = None
+    for r in results:
+        try:
+            c = r.get("center") or (0, 0)
+            x, y = int(c[0]), int(c[1])
+            if abs(x - cx) > radius or abs(y - cy) > radius:
+                continue
+            text = str(r.get("text") or "")
+            for pat in _REMAIN_PATTERNS:
+                m = pat.search(text)
+                if not m:
+                    continue
+                val = int(m.group(1))
+                dist = abs(x - cx) + abs(y - cy)
+                if best_dist is None or dist < best_dist:
+                    best_val, best_dist = val, dist
+                break
+        except Exception:
+            continue
+    return best_val
+
+
 def _buy_once(
     logger: logging.Logger,
     hwnd: int,
@@ -258,6 +318,28 @@ def _buy_once(
     if confirm_center is None:
         if stop_check is not None and stop_check():
             return STOPPED
+        # 2026-11-03 实锤：上一次兑换的「获得物品」浮层可能还挂着（浮层上有商品名），
+        # 这一击落在浮层上、等不到确认弹窗，就被判"已达上限"——原神纠缠之缘只买到
+        # 1/5（采购前后截图 5→4）却记成功。等 2 秒重新定位再点一次，仍无弹窗才算真上限。
+        time.sleep(RETRY_SETTLE_SEC)
+        retry_center = _locate_item(logger, hwnd, item, scales, confidences, stop_check, label)
+        if retry_center:
+            logger.info(f"[{label}] {item_name} 首次点击未弹确认，重新定位再点一次 @ {retry_center}")
+            _click_window_local(hwnd, retry_center[0], retry_center[1], clicks=1)
+            time.sleep(SETTLE_SEC)
+            confirm_center = _locate(
+                hwnd, confirm_template, scales, confidences, CONFIRM_TIMEOUT_SEC, stop_check
+            )
+    if confirm_center is None:
+        if stop_check is not None and stop_check():
+            return STOPPED
+        # 2026-11-03 用户口径：页面还写着"剩余 4"就说明没买满，不能算已达上限。
+        remain = _read_item_remaining(logger, hwnd, center)
+        if remain is not None and remain > 0:
+            logger.warning(
+                f"[{label}] {item_name} 点击无弹窗，但页面仍显示剩余 {remain} 个 → 判未买满"
+            )
+            return NOT_FULL
         logger.info(f"[{label}] 点击商品后未弹出兑换确认（可能已达上限），结束该商品")
         return NO_POPUP
 
@@ -269,6 +351,9 @@ def _buy_once(
             return STOPPED
         logger.warning(f"[{label}] 已点确认但弹窗未关闭（可能余额不足或界面异常）")
         return CONFIRM_GONE_FAIL
+    # 等「获得物品」浮层散掉：不等的话下一次 OCR 会命中浮层上的商品名，
+    # 点过去不是商品卡、等不到确认弹窗，就被误判成"已达上限"（2026-11-03 实锤）
+    time.sleep(POST_BUY_SETTLE_SEC)
     return BOUGHT
 
 
@@ -413,7 +498,11 @@ def buy_shop_groups(
                     reason = "用户停止"
                     break
                 if result == NO_POPUP:
+                    # `_buy_once` 内部已重试过一次（浮层遮挡可重试成功），仍无弹窗按上限处理
                     reason = "已达上限或无弹窗"
+                    break
+                if result == NOT_FULL:
+                    reason = "页面仍有剩余，未买满"
                     break
                 if result == ITEM_MISSING:
                     missing_count += 1
@@ -449,7 +538,9 @@ def buy_shop_groups(
         detail += "（用户停止）"
     elif not all_ok:
         detail += "（有未买够项，见日志）"
-    capture_shop_evidence(logger, hwnd, flow_label=log_label, stage="采购后", summary=detail)
+    capture_shop_evidence(
+        logger, hwnd, flow_label=log_label, stage="采购后", summary=detail, annotate=True
+    )
 
     if stopped:
         return False, "用户停止 | " + "，".join(summaries)

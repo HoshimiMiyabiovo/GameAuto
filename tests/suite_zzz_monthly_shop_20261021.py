@@ -187,7 +187,7 @@ ok, msg, n_clicks = run_case(step_no_hamster, fake)
 check("上限不计失败 all_ok=True", ok is True, msg)
 check("摘要含 日常业绩 3/10", "日常业绩: 3/10" in msg, msg)
 check("摘要含 邦布券 5/5（后续商品继续）", "邦布券: 5/5" in msg, msg)
-check("点击次数 = 22（原装4+日常7+邦布10+页签1）", n_clicks == 22, f"实际 {n_clicks}")
+check("点击次数 = 23（原装4+日常7+邦布10+页签1+中点重试1）", n_clicks == 23, f"实际 {n_clicks}")
 
 print()
 print("== 用例3：确认后弹窗不关（原装母带卡住）==")

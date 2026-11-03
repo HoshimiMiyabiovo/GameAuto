@@ -11,7 +11,9 @@ This file mirrors important repository-level development notes inside the projec
 - **链路 A（每月一次）**：`ZzzMonthlyFlow` **已删除独立任务**（2026-11-01），现在由每日一条龙在绝区零日常跑完后自动触发 `_run_pending_monthly_flow` → `run_zzz_monthly_background` → `run_flow("ZZZ_MONTHLY")`（flow_configs.json）。exe 走 `exe_from_app: "ZenlessZoneZero"` 从 app_config 取游戏本体。
 - **链路 B（每日一条龙）**：`execute_task("ZenlessZoneZero")` 直接拉 `OneDragon ScriptChainer Runner.exe --chain 1`，**不经过 ZZZ_MONTHLY**，进主界面由 OneDragon 自己的「进入游戏序章」节点完成；本项目只监控 `D:\down\ZZZ\ZenlessZoneZero-OneDragon\.log\log.txt` 并用 `services/zzz_daily_parser.py` 出卡片。
 
-**「点击进入游戏」≠ 进入主界面**：ZZZ_MONTHLY 第一步（OCR 点"点击进入游戏"）只过客户端登录界面，之后还要 loading（OneDragon 的状态文本：加载配置数据中/版本校对中/登录游戏服务器中/登录成功，最长各有时限）。2026-10-21 已在第一步后加第二步「等待进入主界面」：`wait_template` 等大世界特征——模板 `assets/templates\绝区零-主界面-电台.png`（52x52 右侧电台图标，**复制自 OneDragon `assets/template/normal_world/map/raw.png`，GPL-3.0 本地自用**）+ OCR 兜底「星期」（OneDragon 同画面文字特征，pc_rect 201,38-270,86）；timeout 600s、`on_fail: retry_prev`（客户端内可能还有第二层进入游戏按钮，回退上一步重点）、最多 3 轮。
+**「点击进入游戏」≠ 进入主界面**：ZZZ_MONTHLY 第一步（OCR 点"点击进入游戏"）只过客户端登录界面，之后还要 loading（OneDragon 的状态文本：加载配置数据中/版本校对中/登录游戏服务器中/登录成功，最长各有时限）。2026-10-21 已在第一步后加第二步「等待进入主界面」：`wait_template` 等大世界特征——模板 `assets/templates\绝区零-主界面-电台.png`（52x52 右侧电台图标，**复制自 OneDragon `assets/template/normal_world/map/raw.png`，GPL-3.0 本地自用**）+ OCR 兜底「星期」（OneDragon 同画面文字特征，pc_rect 201,38-270,86）；**2026-11-03 改为快速失败**：单轮 timeout 100s、`on_fail: retry_prev`、最多回退 1 次（进入阶段整体约 4~5 分钟，不再 600s×3 傻等 40 分钟）。
+
+**点击无反应（2026-11-03 实盘）**：ZZZ 标题页「点击进入游戏」(961,887) 连续 4 次点击无效，40 分钟画面没变，失败截图见 `data/artifacts/flow_failures/20261103_094242_ZZZ_MONTHLY_等待进入主界面.jpg`。对照 ok-script/OneDragon：它们对游戏统一用**后台 PostMessage**（WM_MOUSEMOVE + LBUTTONDOWN/UP，且先把光标移到目标再恢复），本项目原来只走 pyautogui 前台点击——游戏窗口被其他窗口盖住时，点击会落到覆盖窗口上。已加两个 step 级开关：`background_click`（基线点击方式）与 `click_fallback`（同一步确认失败后自动换另一种点击方式）；「点击进入游戏」配 `confirm_type: disappear`（10s 内文字不消失即判点击失败），点击前还会抬起 Alt/Ctrl/Shift/Win 防止修饰键卡住导致游戏吞点击。
 
 **踩坑记录**：项目匹配器是 `cv2.matchTemplate` TM_CCOEFF_NORMED 灰度单尺度取全局最大值，**不支持 mask**——直接套 OneDragon 带背景的 raw.png 即可（图标图案对比强烈，1080p 自匹配 1.0），但阈值别高于 0.8；match_scales 已补 1.5/0.67 覆盖 2K/低分辨率渲染。验证脚本：`artifacts/test_zzz_monthly_main_screen_20261021.py`（配置静态）、`artifacts/test_zzz_main_screen_match_20261021.py`（合成图多尺度匹配 + 导入链）。主界面检测失败时 `record_failure` 会自动截图+OCR 快照落库，先看 `tools/flow_failure_report.py` 聚合再改。
 
@@ -957,9 +959,12 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
   奇迹之冠 hub 页** → 点「奇迹之冠搭配赛」没进去 → 左列「晶石兑换」入口（只在搭配赛页有）
   自然找不到 → 又因为回不到主界面 → **共鸣商店整段被跳过** → 两个每月清单一件没买。
 - 修法（`runtime/nikki_calendar.py`）：
-  1. 奇想日历页面判定把**标题「奇想日历」**也算特征（正文是艺术字，OCR 常认不出）；
-     `_open_calendar` 重试改成「认不出 → ESC 收起 → 再按 L」，**不再连按 L**
-     （L 是开关，第一次很可能已经打开，再按就是关掉；11-02 失败截图就停在主界面）。
+  1. 奇想日历页面判定把**标题「奇想日历」**也算特征（正文是艺术字，OCR 常认不出）。
+     **2026-11-03 修正**：11-02 的「ESC 收起 → 再按 L」在 11-03 实盘全失败——主世界里
+     ESC 会打开暂停菜单，菜单盖着时 L 完全无效。现改为**优先点右上角「奇想日历」图标**
+     （`CALENDAR_ICON_POINT=(0.802,0.061)`，ref_nikki_main_20261101.png 实测；鼠标点击
+     不受输入法/键盘焦点影响），OCR 命中标签时按标签位置上移 0.035 窗高；图标点不到
+     再退回按 L，每次失败后先 `_dismiss_continue_screens()` 收奖励页再复检。
   2. 点「奇迹之冠搭配赛」最多重试 3 次（`CROWN_PAIR_CLICK_ATTEMPTS`），每次重新 OCR 取位置；
      还进不去就 `_leave_crown_hub()` 点左上角返回箭头退出 hub（全屏 overlay，ESC 关不掉）。
      **点击目标不是文字（2026-11-02 用户实锤）**：「奇迹之冠搭配赛」文字本身点不动，
@@ -971,9 +976,11 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
      点左上方碎片才进入」。
   3. 搭配赛页左列「晶石兑换」入口轮询 3 次再判失败（菜单渲染慢）。
   4. `_back_to_main_for_shop()`：ESC 回不去时先退出 hub 再回一次，**别让共鸣商店被整段跳过**。
+  5. 2026-11-03：`_focus_and_press()` 按键前先 `_release_modifier_keys()`（Alt/Ctrl/Shift/Win），
+     防止上次流程中断留下的修饰键把 L/H 变成组合键（"键盘摁上了"的表现）。
 
 回归：`tests/suite_monthly_scroll_find_20261102.py`（翻页查找 6 组）、
-`tests/suite_nikki_calendar_retry_20261102.py`（暖暖断链修复 8 组）、
+`tests/suite_nikki_calendar_retry_20261102.py`（暖暖断链修复 9 组）、
 `tests/suite_monthly_auto_schedule_20261101.py`（新增 [7b] 收尾补漏 3 组）；
 `tests/suite_monthly_exchange_20261025.py` 要把新加的 `mx._scroll_find_item` mock 掉
 （否则测试会真的移动鼠标滚轮）。

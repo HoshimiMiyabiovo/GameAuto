@@ -21,7 +21,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..settings.paths import FLOW_FAILURE_DIR, FLOW_FAILURE_KEEP_DAYS, WORKFLOW_DB_PATH
 
@@ -43,8 +43,126 @@ def _safe_tag(text: str, limit: int = 24) -> str:
     return (tag[:limit] or "unknown").strip("_")
 
 
-def capture_failure_image(logger: logging.Logger, hwnd=None, tag: str = "") -> str:
-    """抓窗口截图压缩落盘，返回相对 artifacts 的文件名；失败返回空串。"""
+def _load_font(size: int):
+    """加载支持中文的字体（找不到就退回 PIL 默认字体，绝不抛异常）。"""
+    try:
+        from PIL import ImageFont
+    except Exception:
+        return None
+    for path in (
+        r"C:\Windows\Fonts\msyh.ttc",
+        r"C:\Windows\Fonts\msyhbd.ttc",
+        r"C:\Windows\Fonts\simhei.ttf",
+        r"C:\Windows\Fonts\simsun.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    ):
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    try:
+        from PIL import ImageFont
+
+        return ImageFont.load_default()
+    except Exception:
+        return None
+
+
+def _annotate_ocr_overlay(img, results: List[Dict[str, Any]], title: str, scale: float = 1.0):
+    """把 OCR 框画在截图上、编号+图例放在下方扩展区，返回新图（失败返回 None）。
+
+    2026-11-03 加：失败证据只有一张干净截图时，事后还得对着 ocr_texts 的
+    坐标脑补“哪个框是哪个字”。这里直接把识别框画上去。
+
+    为什么不把文字标签直接贴在框上（第一版就是那样，验收不过）：
+    游戏界面文字密集，标签必然和原生文字/相邻标签糊在一起，还会跑出画面。
+    改成“框内标号 + 图下方图例列表”，框不遮挡正文，图例可查全文和置信度。
+    坐标按 scale 缩放到已压缩的截图尺寸（OCR 结果是原始窗口分辨率）。
+    """
+    try:
+        from PIL import Image, ImageDraw
+
+        base = img.convert("RGBA")
+        draw = ImageDraw.Draw(base, "RGBA")
+        small = _load_font(max(10, int(base.width * 0.0125)))
+        badge_font = _load_font(max(9, int(base.width * 0.011)))
+
+        items: List[Tuple[int, str, float]] = []
+        for idx, r in enumerate(results or [], 1):
+            try:
+                text = str(r.get("text") or "").strip()
+                conf = float(r.get("confidence") or 0.0)
+                box = r.get("box")
+                if box and len(box) >= 4:
+                    x1, y1, x2, y2 = (int(float(v) * scale) for v in list(box)[:4])
+                else:
+                    center = r.get("center") or (0, 0)
+                    cx, cy = int(float(center[0]) * scale), int(float(center[1]) * scale)
+                    x1, y1, x2, y2 = cx - 4, cy - 4, cx + 4, cy + 4
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                draw.rectangle((x1, y1, x2, y2), outline=(0, 200, 255), width=2)
+                # 框左上角小徽标写序号：不压住框内文字，也不占用画面其它区域
+                num = str(idx)
+                bw = 8 + len(num) * max(5, int(base.width * 0.006))
+                bx = max(0, min(x1, base.width - bw))
+                by = max(0, y1 - 14)
+                draw.rectangle((bx, by, bx + bw, by + 13), fill=(0, 0, 0, 205))
+                if badge_font:
+                    draw.text((bx + 3, by + 1), num, fill=(0, 255, 180), font=badge_font)
+                items.append((idx, text, conf))
+            except Exception:
+                continue
+
+        if not items:
+            return base.convert("RGB")
+        # 图例区贴在原图下方（不遮挡游戏画面），每行两条
+        cols = 2
+        rows = (len(items) + cols - 1) // cols
+        line_h = max(13, int(base.width * 0.017))
+        title_h = max(16, int(base.width * 0.019))
+        legend_h = 4 + title_h + rows * line_h + 4
+        canvas = Image.new("RGBA", (base.width, base.height + legend_h), (18, 18, 22, 255))
+        canvas.paste(base, (0, 0))
+        ld = ImageDraw.Draw(canvas)
+        head_font = _load_font(max(11, int(base.width * 0.0135)))
+        if head_font:
+            # 标题画在图例区顶部（base.height + 4），别压到游戏画面上
+            ld.text((6, base.height + 4), title[:120], fill=(235, 240, 245), font=head_font)
+        if small:
+            col_w = base.width // cols
+            for i, (idx, text, conf) in enumerate(items):
+                c, r = divmod(i, rows)
+                x = 8 + c * col_w
+                y = base.height + 4 + title_h + r * line_h
+                label = f"{idx}. {text} ({conf:.2f})"
+                ld.text((x, y), label[:38], fill=(190, 220, 245), font=small)
+        return canvas.convert("RGB")
+    except Exception as exc:
+        _logger.debug("[诊断] OCR 标注图生成失败: %s", exc)
+        return None
+
+
+def annotate_ocr_overlay(img, results: List[Dict[str, Any]], title: str, scale: float = 1.0):
+    """公共入口：给截图叠加 OCR 框 + 编号 + 图例（月商店证据图等复用）。
+
+    实现在 `_annotate_ocr_overlay`，这里只做转发，避免外部直接依赖私有函数。
+    """
+    return _annotate_ocr_overlay(img, results, title, scale=scale)
+
+
+def capture_failure_image(
+    logger: logging.Logger,
+    hwnd=None,
+    tag: str = "",
+    ocr_results: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[str, str]:
+    """抓窗口截图压缩落盘，返回 (原图名, OCR 标注图名)；失败返回 ("", "")。
+
+    传了 ocr_results 时额外生成 `*_ocr.jpg`：把识别框 + 文字 + 置信度画在
+    截图上，事后不用再对着坐标表脑补。标注失败不影响原图。
+    """
     try:
         from PIL import Image
         from .ocr_click_tester import grab_screen
@@ -60,12 +178,14 @@ def capture_failure_image(logger: logging.Logger, hwnd=None, tag: str = "") -> s
             if not region:
                 # 目标窗口已关/最小化时**不要**退化成全屏截图：会把用户桌面存进证据目录
                 _logger.debug("[诊断] 窗口 %s 取不到区域，跳过截图", hwnd)
-                return ""
+                return "", ""
         else:
             region = None
         img = grab_screen(region=region) if region else grab_screen()
         w, h = img.size
+        scale = 1.0
         if w > EVIDENCE_MAX_WIDTH:
+            scale = EVIDENCE_MAX_WIDTH / w
             img = img.resize(
                 (EVIDENCE_MAX_WIDTH, max(1, int(h * EVIDENCE_MAX_WIDTH / w))), Image.LANCZOS
             )
@@ -76,27 +196,43 @@ def capture_failure_image(logger: logging.Logger, hwnd=None, tag: str = "") -> s
         name = f"{stamp}_{_safe_tag(tag)}.jpg"
         path = FLOW_FAILURE_DIR / name
         img.save(str(path), "JPEG", quality=EVIDENCE_JPEG_QUALITY, optimize=True)
-        return name
+
+        annotated_name = ""
+        if ocr_results:
+            title = f"{tag or 'failure'} · {len(ocr_results)} 个文本区域 · {stamp}"
+            annotated = _annotate_ocr_overlay(img, ocr_results, title, scale=scale)
+            if annotated is not None:
+                ann_name = f"{stamp}_{_safe_tag(tag)}_ocr.jpg"
+                annotated.save(
+                    str(FLOW_FAILURE_DIR / ann_name), "JPEG",
+                    quality=EVIDENCE_JPEG_QUALITY, optimize=True,
+                )
+                annotated_name = ann_name
+        return name, annotated_name
     except Exception as exc:
         _logger.debug("[诊断] 失败截图抓取异常: %s", exc)
-        return ""
+        return "", ""
 
 
-def collect_ocr_sample(
+def _collect_ocr_results(
     logger: logging.Logger, hwnd=None, limit: int = DEFAULT_OCR_SAMPLE
-) -> List[str]:
-    """取当帧 OCR 文本样本（给不出 hwnd 时返回空列表，不做全屏识别）。"""
+) -> List[Dict[str, Any]]:
+    """取当帧 OCR 原始结果（带 box/center，供标注图画框）；无 hwnd 返回空列表。"""
     if not hwnd:
         return []
     try:
         from .ocr_click_tester import ocr_window_content
 
-        results = ocr_window_content(logger, hwnd=hwnd) or []
+        return list(ocr_window_content(logger, hwnd=hwnd) or [])[:limit]
     except Exception as exc:
         _logger.debug("[诊断] 失败取证 OCR 异常: %s", exc)
         return []
+
+
+def _results_to_sample(results: List[Dict[str, Any]]) -> List[str]:
+    """把 OCR 原始结果压成 `文字(置信度)@x,y` 样本（写库用）。"""
     out: List[str] = []
-    for r in results[:limit]:
+    for r in results or []:
         try:
             text = str(r.get("text") or "").strip()
             conf = float(r.get("confidence") or 0.0)
@@ -105,6 +241,13 @@ def collect_ocr_sample(
         except Exception:
             continue
     return out
+
+
+def collect_ocr_sample(
+    logger: logging.Logger, hwnd=None, limit: int = DEFAULT_OCR_SAMPLE
+) -> List[str]:
+    """取当帧 OCR 文本样本（给不出 hwnd 时返回空列表，不做全屏识别）。"""
+    return _results_to_sample(_collect_ocr_results(logger, hwnd=hwnd, limit=limit))
 
 
 def _window_title(hwnd) -> str:
@@ -164,22 +307,16 @@ def record_failure(
     ocr_sample : 已整理好的文本样本（优先于 ocr_results）。
     """
     try:
-        sample = list(ocr_sample) if ocr_sample else None
-        if sample is None:
-            if ocr_results:
-                sample = []
-                for r in list(ocr_results)[:DEFAULT_OCR_SAMPLE]:
-                    try:
-                        text = str(r.get("text") or "").strip()
-                        conf = float(r.get("confidence") or 0.0)
-                        center = r.get("center") or (0, 0)
-                        sample.append(f"{text}({conf:.2f})@{int(center[0])},{int(center[1])}")
-                    except Exception:
-                        continue
-            else:
-                sample = collect_ocr_sample(logger, hwnd=hwnd)
+        # 一次取原始结果，同时用于文本样本和 OCR 标注图，避免重复识别
+        results = (
+            list(ocr_results)[:DEFAULT_OCR_SAMPLE]
+            if ocr_results
+            else _collect_ocr_results(logger, hwnd=hwnd)
+        )
+        sample = list(ocr_sample) if ocr_sample else _results_to_sample(results)
 
         image_name = ""
+        ocr_image_name = ""
         if save_image:
             # 没有窗口句柄时也抓（capture_failure_image 内部 hwnd=None → 全屏）：
             # 2026-11-02 白荆「启动器『开始游戏』按钮未找到」就是卡在启动器阶段、
@@ -187,10 +324,17 @@ def record_failure(
             # 事后无从判断启动器长什么样。启动器级失败只有全屏才看得见。
             # 注意：给了 hwnd 但窗口已关/最小化时，capture_failure_image 仍会返回空串
             # （不退化成全屏），避免把用户桌面存进证据目录。
-            image_name = capture_failure_image(logger, hwnd=hwnd, tag=f"{flow_key}_{step}")
+            image_name, ocr_image_name = capture_failure_image(
+                logger, hwnd=hwnd, tag=f"{flow_key}_{step}", ocr_results=results
+            )
         prune_old_failure_images(logger)
 
         now = time.time()
+        extra_payload = dict(extra or {})
+        # 标注图作为对外证据（打开就能看到识别框）；原图留在 extra 里可回退
+        image_field = ocr_image_name or image_name
+        if ocr_image_name:
+            extra_payload["raw_image"] = image_name
         record = {
             "ts": now,
             "date_key": time.strftime("%Y-%m-%d", time.localtime(now)),
@@ -201,9 +345,9 @@ def record_failure(
             "retry_count": int(retry_count or 0),
             "hwnd": int(hwnd or 0),
             "window_title": _window_title(hwnd)[:200],
-            "image_path": image_name,
+            "image_path": image_field,
             "ocr_texts": sample,
-            "extra": extra or {},
+            "extra": extra_payload,
         }
         from ..storage.workflow_db import WorkflowDB
 
@@ -211,9 +355,10 @@ def record_failure(
         # 日志上报是锦上添花：即便 logger 本身炸了也不能把已写库的 id 吞掉
         try:
             if logger is not None:
+                raw_hint = f" 原图={image_name}" if ocr_image_name else ""
                 logger.warning(
                     f"[失败记录] #{row_id} {flow_key}/{step}: {str(error)[:120]} "
-                    f"截图={image_name or '无'}（artifacts/flow_failures/）"
+                    f"截图={image_field or '无'}{raw_hint}（artifacts/flow_failures/）"
                 )
         except Exception:
             # 失败取证自身的日志写入失败不能再写日志，避免递归
