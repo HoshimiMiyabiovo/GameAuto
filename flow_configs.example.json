@@ -250,9 +250,10 @@
         "name": "等待开始游戏",
         "action": "wait_template",
         "template": "assets/templates\\异环-开始游戏.png",
-        "target_text": "开始游戏",
+        "target_text": "开始游戏 / 进入游戏",
         "timeout_sec": 1200,
-        "post_delay_sec": 1.0
+        "post_delay_sec": 1.0,
+        "_comment": "2026-11-04：目标文字加「进入游戏」——异环更新完游戏自己起来，游戏本体登录页的按钮是「进入游戏」，启动器上的才是「开始游戏」。两个按钮任一出现即视为就绪（模板命中启动器按钮，OCR 兜底命中游戏本体按钮）。"
       },
       {
         "name": "开始游戏",
@@ -260,11 +261,13 @@
         "template": "assets/templates\\异环-开始游戏.png",
         "target_text": "开始游戏",
         "confirm_type": "none",
-        "timeout_sec": 180,
+        "timeout_sec": 45,
         "clicks": 1,
         "post_delay_sec": 2.0,
         "on_fail": "retry_step",
-        "max_attempts": 4
+        "max_attempts": 4,
+        "optional_if_missing": true,
+        "_comment": "2026-11-04：改成可选——游戏本体已经自己起来时启动器上没这个按钮，原来会白等 180s×4=12 分钟再失败整个流程。"
       },
       {
         "name": "确定",
@@ -272,11 +275,13 @@
         "template": "assets/templates\\异环-确定.png",
         "search_scope": "screen",
         "confirm_type": "none",
-        "timeout_sec": 45,
+        "timeout_sec": 20,
         "clicks": 1,
         "post_delay_sec": 2.0,
         "on_fail": "retry_step",
-        "max_attempts": 4
+        "max_attempts": 4,
+        "optional_if_missing": true,
+        "_comment": "2026-11-04：改成可选——这个「确定」弹窗在当前版本已经不出现了，找不到就跳过，别卡 45s×4。"
       },
       {
         "name": "游戏启动确认",
@@ -733,8 +738,9 @@
     "close_process_on_finish": false,
     "close_process_on_fail": false
   },
-  "HSR_MONTHLY": {
-    "enabled": true,
+ "HSR_MONTHLY": {
+  "enabled": false,
+  "_comment": "2026-11-04 用户拍板：崩铁每月事项（自塑尘脂合成、余烬兑换的星轨专票/星轨通票/命运的足迹）整体交给三月七小助手；如本机未装三月七可自行改回 true，但需自行维护月商店翻页与自塑尘脂坐标。",
     "exe_from_app": "HonkaiStarRail",
     "window_title_keywords": [],
     "window_process_names": [
@@ -843,19 +849,32 @@
           0.574,
           0.806
         ],
+        "item_grid_frac": {
+          "x_start": 0.06,
+          "x_end": 0.52,
+          "y_start": 0.12,
+          "y_end": 0.74,
+          "cols": 8,
+          "rows": 5
+        },
         "max_rounds": 30,
         "exit_marker_template": "assets/templates\\崩铁-主界面.png",
         "timeout_sec": 300,
         "post_delay_sec": 2.0,
         "on_fail": "fail",
         "max_attempts": 1,
-        "_comment": "主界面 B → 背包 → 顶部倒数第二个图标「贵重物」→ 第一行第 5 格 自塑尘脂 → 右侧获得途径「万能合成机 - 使用遗器残骸合成」→ 合成界面，点到本月上限（材料是遗器残骸，2026-11-01 实机 20940/800，一次 800）。判据只看「本月还可合成：N」：N=0 或按钮「已达上限」/「材料不足」都算正常结束，一次都不点。点合成后 N 每减 1 记一次成功，连续两次不减就判定卡住并失败。limit_template 从 2026-11-01 实机截图裁（自匹配 1.0000 @666,847）。tab/item/source/button 的 point_frac 按 1920x1080 截图量比例，换分辨率跟随窗口；**可合成态（绿色按钮/弹窗形态）尚未实机观察**，首月实跑后按日志校准。"
+        "_comment": "主界面 B → 背包 → 顶部倒数第二个图标「贵重物」→ 第一行第 5 格 自塑尘脂 → 右侧获得途径「万能合成机 - 使用遗器残骸合成」→ 合成界面，点到本月上限（材料是遗器残骸，2026-11-01 实机 20940/800，一次 800）。判据只看「本月还可合成：N」：N=0 或按钮「已达上限」/「材料不足」都算正常结束，一次都不点。点合成后 N 每减 1 记一次成功，连续两次不减就判定卡住并失败。limit_template 从 2026-11-01 实机截图裁（自匹配 1.0000 @666,847）。tab/item/source/button 的 point_frac 按 1920x1080 截图量比例，换分辨率跟随窗口；**可合成态（绿色按钮/弹窗形态）尚未实机观察**，首月实跑后按日志校准。2026-11-04 首跑：craft_button_point_frac 用 1920x1080 参考图做模板自匹配核对为 (1102,870)=(0.574,0.8056)，坐标吻合不动；tab/item/source 三个坐标是按缩略图推算的，真机 (1353,61)/(769,207) 都没点中，现加 item_grid_frac 网格扫描兜底，且失败前会先存背包页截图（HSR_MONTHLY_自塑尘脂_失败前画面），拿到真图后把日志里命中的比例填回 item_point_frac 即可。"
       }
     ],
     "close_process_on_finish": false
   },
   "ZZZ_MONTHLY": {
     "enabled": true,
+    "_comment_start_from_main": "2026-11-04 用户要求所有流程统一从主世界开始：已在主世界（电台图标命中）就直接跳到第 3 步兑换，不再点「点击进入游戏」。",
+    "start_from_main": {
+      "template": "assets/templates\\绝区零-主界面-电台.png",
+      "skip_to_step": 3
+    },
     "exe_from_app": "ZenlessZoneZero",
     "window_title_keywords": [],
     "window_process_names": [
@@ -881,8 +900,10 @@
         "template": "",
         "target_text": "点击进入游戏",
         "enable_ocr_fallback": true,
-        "background_click": true,
-        "click_fallback": true,
+        "background_click": false,
+        "click_fallback": false,
+        "click_hold_sec": 0.08,
+        "_comment": "2026-11-04 提权实机：权限对齐后瞬时 pyautogui.click 仍点不动 Unity 启动器，必须前台 mouseDown 按住 80ms 再松开；后台 PostMessage 两种权限下都无效，故停用后台首发与 click_fallback。GUI 仍需用 00_START_HERE_GUI_ADMIN.bat 提权启动，否则 UIPI 会静默拦截点击。",
         "confirm_type": "disappear",
         "confirm_timeout_sec": 10,
         "timeout_sec": 30,
@@ -908,6 +929,7 @@
         "name": "信号残响每月兑换",
         "action": "monthly_exchange",
         "log_label": "信源兑换",
+        "item_scroll_search": false,
         "shop_entry_template": "assets/templates\\绝区零-商城入口.png",
         "shop_entry_text": "商城",
         "nav_text": "信源清单",
@@ -1063,8 +1085,10 @@
         "template": "",
         "target_text": "点击进入游戏",
         "enable_ocr_fallback": true,
-        "background_click": true,
-        "click_fallback": true,
+        "background_click": false,
+        "click_fallback": false,
+        "click_hold_sec": 0.08,
+        "_comment": "2026-11-04 提权实机：权限对齐后瞬时 pyautogui.click 仍点不动 Unity 启动器，必须前台 mouseDown 按住 80ms 再松开；后台 PostMessage 两种权限下都无效，故停用后台首发与 click_fallback。GUI 仍需用 00_START_HERE_GUI_ADMIN.bat 提权启动，否则 UIPI 会静默拦截点击。",
         "confirm_type": "disappear",
         "confirm_timeout_sec": 10,
         "timeout_sec": 30,
@@ -1146,6 +1170,7 @@
         "name": "星尘兑换每月兑换",
         "action": "monthly_exchange",
         "log_label": "星尘兑换",
+        "item_scroll_search": false,
         "shop_entry_text": "商城",
         "nav_text": "尘辉兑换",
         "tab_text": "星尘兑换",
@@ -1412,6 +1437,11 @@
   },
   "NTE_MONTHLY": {
     "enabled": true,
+    "_comment_start_from_main": "2026-11-04 用户要求所有流程统一从主世界开始：异环游戏本体已在运行（HTGame.exe）时不再走启动器「开始更新/开始游戏」，直接从游戏内进商城；步骤 6「进入游戏」找不到就跳过（说明已经在游戏里）。",
+    "skip_steps_if_process": {
+      "process_name": "HTGame.exe",
+      "steps": [1, 2, 3, 4]
+    },
     "_comment": "异环每月商店：官方启动器进主界面 → ESC 二级菜单 → 商城 → 集市兑换 → 迷迭兑换。2026-11-01 用户确认清单：质感骰子×5、捏造骰子×5、三重钥匙×20（50%off，买满本月库存）。**页签与商品都用固定比例坐标**：RapidOCR 把「迷迭兑换」认成「迷送兑换」，红/蓝骰子转灰度后互相匹配 0.976，模板和 OCR 都不可靠；坐标点完仍用「资深猎人攻略」等四种养成材料做页签内容校验。",
     "exe_path": "E:\\Program Files\\Game\\Neverness To Everness\\NTELauncher.exe",
     "window_title_keywords": [
@@ -1457,9 +1487,10 @@
         "name": "等待开始游戏",
         "action": "wait_template",
         "template": "assets/templates\\异环-开始游戏.png",
-        "target_text": "开始游戏",
+        "target_text": "开始游戏 / 进入游戏",
         "timeout_sec": 1200,
-        "post_delay_sec": 1.0
+        "post_delay_sec": 1.0,
+        "_comment": "2026-11-04：目标文字加「进入游戏」——异环更新完游戏自己起来，游戏本体登录页的按钮是「进入游戏」，启动器上的才是「开始游戏」。两个按钮任一出现即视为就绪（模板命中启动器按钮，OCR 兜底命中游戏本体按钮）。"
       },
       {
         "name": "开始游戏",
@@ -1467,11 +1498,13 @@
         "template": "assets/templates\\异环-开始游戏.png",
         "target_text": "开始游戏",
         "confirm_type": "none",
-        "timeout_sec": 180,
+        "timeout_sec": 45,
         "clicks": 1,
         "post_delay_sec": 2.0,
         "on_fail": "retry_step",
-        "max_attempts": 4
+        "max_attempts": 4,
+        "optional_if_missing": true,
+        "_comment": "2026-11-04：改成可选——游戏本体已经自己起来时启动器上没这个按钮，原来会白等 180s×4=12 分钟再失败整个流程。"
       },
       {
         "name": "确定",
@@ -1479,11 +1512,13 @@
         "template": "assets/templates\\异环-确定.png",
         "search_scope": "screen",
         "confirm_type": "none",
-        "timeout_sec": 45,
+        "timeout_sec": 20,
         "clicks": 1,
         "post_delay_sec": 2.0,
         "on_fail": "retry_step",
-        "max_attempts": 4
+        "max_attempts": 4,
+        "optional_if_missing": true,
+        "_comment": "2026-11-04：改成可选——这个「确定」弹窗在当前版本已经不出现了，找不到就跳过，别卡 45s×4。"
       },
       {
         "name": "游戏启动确认",
@@ -1507,12 +1542,15 @@
         "post_delay_sec": 5.0,
         "confirm_timeout_sec": 12,
         "on_fail": "retry_step",
-        "max_attempts": 1
+        "max_attempts": 1,
+        "optional_if_missing": true,
+        "_comment_optional": "2026-11-04：游戏已在主世界时没有「进入游戏」按钮，跳过即可，不能把流程判死。"
       },
       {
         "name": "迷迭兑换每月兑换",
         "action": "monthly_exchange",
         "log_label": "迷迭兑换",
+        "item_scroll_search": false,
         "shop_entry_template": "assets/templates\\异环-商城入口.png",
         "shop_entry_text": "商城",
         "nav_text": "集市兑换",

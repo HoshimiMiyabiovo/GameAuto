@@ -9,6 +9,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import pyautogui
 import win32gui
 
+
+def _guarded_click(*args, **kwargs):
+    """前台点击统一走收口（默认极短按住）。"""
+    from game_auto.runtime.foreground_flow_runner import _pyautogui_click_guarded
+    return _pyautogui_click_guarded(*args, **kwargs)
+
+
 from game_auto.storage.workflow_db import WorkflowDB
 
 
@@ -117,7 +124,7 @@ class GenericWorkflowRunner:
                 clicks = int(params.get("clicks", 1))
                 interval = float(params.get("interval", 0.1))
                 button = params.get("button", "left")
-                pyautogui.click(
+                _guarded_click(
                     x=center[0] + x_offset,
                     y=center[1] + y_offset,
                     clicks=clicks,
@@ -138,7 +145,7 @@ class GenericWorkflowRunner:
             interval = float(params.get("interval", 0.1))
             button = params.get("button", "left")
             delay_after = float(params.get("delay_after", 0.8))
-            pyautogui.click(x=x, y=y, clicks=clicks, interval=interval, button=button)
+            _guarded_click(x=x, y=y, clicks=clicks, interval=interval, button=button)
             time.sleep(delay_after)
             return True
         except Exception as e:

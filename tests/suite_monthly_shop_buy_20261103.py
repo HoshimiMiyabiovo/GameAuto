@@ -163,7 +163,7 @@ def test_5_no_popup_with_remaining_is_not_full():
     env = Env(confirm_results=[None, None])
     env.install()
     saved = zs._read_item_remaining
-    zs._read_item_remaining = lambda logger, hwnd, center, radius=320: 4
+    zs._read_item_remaining = lambda logger, hwnd, center, radius=320, item_text="": 4
     try:
         result = zs._buy_once(
             LOG, 1, {"name": "纠缠之缘", "ocr_text": "纠缠之缘"},
@@ -198,7 +198,7 @@ def test_7_remaining_zero_is_still_already():
     env = Env(confirm_results=[None, None])
     env.install()
     saved = zs._read_item_remaining
-    zs._read_item_remaining = lambda logger, hwnd, center, radius=320: 0
+    zs._read_item_remaining = lambda logger, hwnd, center, radius=320, item_text="": 0
     try:
         result = zs._buy_once(
             LOG, 1, {"name": "星轨专票", "ocr_text": "星轨专票"},

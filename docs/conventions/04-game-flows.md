@@ -2,6 +2,56 @@
 
 > 由 AGENTS.md 拆分；改动相关代码前先读本篇。
 
+## 统一入口：所有流程必须从主世界/主界面开始（2026-11-04 用户定规）
+
+用户原话：「所有流程必须在主世界开始，这样才会统一。哪有在其他页面开始的？」
+
+参照白荆的实现（`baijing_flow.run_baijing_ingame_flow`）：**目标态优先**——
+主界面模板连续命中才算进入成功；弹窗点「点击屏幕继续/关闭异常」；未知态
+连续 ESC（最多 10 次）；确认到主界面后才开始日常/月度。任何流程都不能假设
+自己从启动器、登录页或某个子页面开始。
+
+各游戏现状：
+- 白荆：任意态 ESC 恢复到主界面（模板连续 5 帧）后才继续。
+- 原神 / 崩铁：`enter_main_interface` 第一步先查主界面模板（派蒙 / 主界面图标），
+  已在主界面连续 2 帧命中即快速通过，否则才点登录页。
+- 暖暖：`nikki_calendar._run_flow_inner` 先 `_has_main`，确认不了就关游戏交给 whimbox。
+- 绝区零：ZZZ_MONTHLY 原来直接从「点击进入游戏」开始 → 已在主世界会空点失败。
+  现在流程配置 `start_from_main`（`绝区零-主界面-电台.png`）命中直接跳到第 3 步兑换。
+- 异环：NTE_MONTHLY 原来固定走启动器 1-6 步 → 游戏已在运行会死等「开始游戏」。
+  现在配置 `skip_steps_if_process`（`HTGame.exe` 在跑就跳过 1-4 步），
+  「进入游戏」步骤改 `optional_if_missing`（已在游戏里没有该按钮就跳过）。
+
+通用机制在 `foreground_flow_runner._resolve_start_guard`：
+- 流程级 `start_from_main: {template, skip_to_step}`：主界面模板命中 → 从第 N 步开始。
+- 流程级 `skip_steps_if_process: {process_name, steps}`：进程已在运行 → 跳过指定步骤。
+新增游戏/流程时优先用这两个守卫，不要再写「假设从启动器开始」的步骤序列。
+
+## 页面判定铁律（2026-11-04 用户定规，强制）
+
+用户原话：「有奇想日历就在奇想日历界面？考虑问题这么不周全？你不会用判定法测一下
+其他页面，有相同文本不就误判了吗？」
+
+1. **禁止「页面上出现某个词就判成该页」**。同名词（晶石兑换 / 本月限购 / 背包 /
+   商城 / 奇想日历）会在多个页面出现，必须至少满足一条：
+   - 专属特征 + 最少证据数（≥2 个专属标记）；
+   - 标题 + 内容双证据（如「晶石兑换」AND「本月限购」）；
+   - 标题 + 区域限定（如背包只认左上角标题区，避开 ESC 菜单里的「背包」按钮）；
+   - 模板匹配优先（连续帧），OCR 只作兜底。
+2. **每个判定函数必须在 `tests/suite_page_judgement_policy.py` 登记表写明证据**。
+   新增 `_is_*page` / `*_visible` 函数不登记 → 该测试直接失败；裸单关键词判定
+   会被 AST 扫描拦下（登记过的专属词例外）。
+3. **每个游戏的实际截图必须进页面判定矩阵**（`tests/suite_<game>_page_matrix_*.py`），
+   正/负样本逐张断言互斥。模板见 `tests/suite_nikki_page_matrix_20261104.py`
+   （17 张图 × 10 个判定，含 flow_failures 的真实失败现场）。
+4. **新增截图必须存档**到 `data/artifacts/ref_<game>_<page>_<YYYYMMDD>.png`
+   （运行失败现场在 `data/artifacts/flow_failures/`），并加入矩阵。
+5. 已抓到的真实误判案例（别再犯）：
+   - 「晶石兑换」→ 兑换页/弹窗被误判成搭配赛页；
+   - 「本月限购」→ 共鸣商店被误判成晶石兑换页；
+   - 「奇想日历」→ 主世界顶部图标栏被误判成日历页；
+   - 「背包」→ 崩铁 ESC 菜单被误判成背包已打开（已加左上角区域限定）。
+
 # Game Auto Agent Notes
 
 This file mirrors important repository-level development notes inside the project so they are visible in the repo itself.
@@ -58,6 +108,23 @@ This file mirrors important repository-level development notes inside the projec
   「迷送兑换」（conf 0.69），文字定位不可用；点完仍用 `tab_content_markers`（资深猎人攻略/无彩染剂/
   并肩达人/茫昧絮语）验证页面。**商品用彩色模板**（`color_match: true` + `template`），
   模板没命中才退 `point_frac` 固定比例坐标。
+- **异环「开始游戏」≠「进入游戏」（2026-11-04 实锤，两个按钮）**：
+  `NTE` / `NTE_MONTHLY` 的步骤2「等待开始游戏」等的是**启动器**上的「开始游戏」，
+  但异环更新完**游戏本体自己起来**，游戏本体登录页底部的按钮是「**进入游戏**」
+  （用户 11-04 给的真实截图 `data/artifacts/ref_nte_enter_game_20261104.png`），
+  两个按钮长得像、位置也不同 → 只等前者的后果：
+  10:10 / 14:26 / 20:35 三轮全卡在步骤2，10:11 那次**空转 60 分钟**才失败（失败记录 #168，
+  失败截图 `20261104_111109_NTE_MONTHLY_等待开始游戏.jpg` 就是游戏本体登录页）。
+  - 实测：`异环-进入游戏.png` 在真实截图上 **0.961 @scale1.0**（模板没问题）；
+    `异环-开始游戏.png` 只有 **0.430**、`异环-确定.png` 只有 **0.551**（这两个是启动器元素，
+    游戏本体里根本没有）；RapidOCR 能读出「进入游戏」conf **0.72** @ (960, 931)。
+  - 修法：步骤2 的 `target_text` 改成 **"开始游戏 / 进入游戏"**（模板命中启动器按钮，
+    OCR 兜底命中游戏本体按钮，任一出现即就绪）；步骤3「开始游戏」与步骤4「确定」
+    加 `optional_if_missing: true` 并把 timeout 压到 45s / 20s（当前版本没有这两个元素，
+    原来白等 180s×4 + 45s×4 再失败）；步骤6「进入游戏」（点 `异环-进入游戏.png`）保留。
+  - **通用教训**：「等某个按钮」时先确认按钮属于哪个窗口。启动器按钮 ≠ 游戏内按钮，
+    两者同名/同义时，模板必须在**对应那个窗口**里找，OCR 兜底要覆盖另一种形态。
+
 - **彩色模板匹配 `color_match`（2026-11-01 新增，默认关闭）**：`_match_template_cv2_once(..., use_color=True)`
   → `_locate_template_in_window` / `_locate_template_on_screen` / `zzz_monthly_shop._locate` 全链透传；
   step/item 配 `color_match: true` 才开。意义不是"灰度认不出目标"，而是**目标消失后会误认隔壁同类图标**：
@@ -163,6 +230,12 @@ This file mirrors important repository-level development notes inside the projec
   运行才能恢复管理员的启动器窗口）。非管理员进程恢复无效会表现为"模板一直匹配不到"。
 - WuwaLauncher 开了 `enable_ocr_fallback=true`（OCR 找「进入游戏」兜底），
   模板分辨率与实际屏幕不符时靠它救。
+- **2026-11-04 起可选模块模式**：`apps.WutheringWaves.module_mode.enabled=true`
+  时，WuwaLauncher 之后不再启动 `ok-ww.exe`，而是启动常驻 headless runner
+  （`tools/okww_module/runner.py`，ok-ww bundled python）并调度 `DailyTask`。
+  运行时固定 `data/okww/src`（v3.7.17），`configs` 用 junction 指向现有安装；
+  旧链路保留，改回 false 即回滚。输入节流和验收口径见
+  `docs/鸣潮自动战斗脚本编写流程.md` 第 13 节。
 ### 无限暖暖进入主界面 (2026-10-22)
 
 - **接线状态**：2026-10-22 初次验证时默认不接线（一条龙由 whimbox 自己启动游戏）；
@@ -989,3 +1062,67 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
 3 项（UI 兜底已从模板改 OCR、WorkBuddy 关进程策略 10-30 改过、`wool_verify_log` 分发已挪进
 `_dispatch_step_action`）、`data/artifacts/test_flow_diagnostics_20261018.py` 1 项
 （`ocr_results=ocr_failed` 变量名已变）。改断言或重写，别当成新 bug。
+
+### 2026-11-04 月商店严格语义 + 邻卡守卫 + 失败可观测
+
+- **当天事故链（先看证据再读修法）**：原神 08:29 纠缠之缘/相遇之缘各 1/5（浮层遮挡误判
+  "已达上限"）却整步成功，`monthly_flow:GENSHIN_MONTHLY=2026-11` 已写库 → 本月不会补买
+  （标记已备份清除，备份 `data/workflow.sqlite3.bak_20261104_marker`，下批自动补买）；
+  崩铁 11:49 翻页空转 12 分钟（8 屏 × 25s OCR × 3 件）零购买，票类在折叠区、当时的 MD5
+  校验被角标动画骗过 → 三项全部"按已购买处理"，步骤 2 报"完成"；自塑尘脂 12:02 首跑失败
+  （比例坐标点歪）全程零日志零取证，批次无声跳到下一个游戏。
+- **翻页校验 v2（像素平均差 + 熔断）**：`_list_thumb`（32x18 灰度像素列表）+ `_thumb_diff`
+  平均差代替 MD5——真实滚动差 >10、动画噪声 <1（阈值 `SCROLL_DIFF_THRESHOLD=2.0`），
+  连续 `SCROLL_STATIC_STREAK=2` 次不动即熔断；翻页内定位 OCR 从 25s 降到 6s
+  （`_locate_item(..., ocr_timeout=)`）。翻遍了仍没找到会走 `_record_scroll_failure` 落
+  flow_failures 证据（截图 + 当帧文字）。
+- **diag 严格语义（"看不到≠已买过"收口，本次补上）**：`_scroll_find_item(..., diag=)` 把
+  `effective_pages` / `scroll_verified_dead` 报给 `_buy_items`——翻页开着但**一屏都没滚成功**
+  时，"看不到"判失败（"商品未找到且页面无法滚动"），**不写月度标记**、下批带证据重试；
+  有效滚动 >0 且翻遍仍没有，才维持 2026-11-01 的"已买过"口径。滚轮对崩铁商城网格是否
+  真有效仍未实机验证——下次实跑若报"页面无法滚动"，先看 flow_failures 的翻页取证截图再改
+  （拖拽滚动/更大滚轮量都是候选，别盲改）。
+- **`item_scroll_search` 各游戏口径**：HSR_MONTHLY 默认开（滚动条 + 折叠区实锤，吃严格
+  语义）；GENSHIN / ZZZ / NTE 三家兑换步**显式 false**（单屏页或无折叠证据——这些页滚轮
+  本来就不动，严格语义会每月假失败）。要给谁打开，先确认那个页面真能滚。
+- **剩余读数邻卡守卫**：`_read_item_remaining(..., item_text=)` 要求商品自己的名字也出现
+  在点击坐标附近（= 还是这张卡）才允许报"剩余 > 0"。崩铁商品到月上限**整卡消失**（08:47
+  证据图：命运的足迹 2/2 后第一格空掉），点中邻卡时邻卡的「可兑换: 80/80」不得判
+  NOT_FULL。实现注意："名字判定"与"徽标读取"是两个独立判断，别用一个 continue 把不含
+  商品名的徽标行过滤掉（首版踩坑：徽标恒读不到、剩余恒 None）。
+- **失败可观测（dispatch 层统一）**：`run_flow` 的 `if not dispatch_ok` 现在打
+  `logger.error` + `_collect_failure_evidence(error=分支消息)`（截图 + OCR 标注落
+  flow_failures）；消息含"用户停止"只留 info、不落库（手动停止不是故障，别污染失败报告）。
+  `hsr_resin_craft.fail()` 失败先打日志再退主界面，`_select_precious_tab` / `_select_resin`
+  的失败带坐标与等待时长——自塑尘脂下次失败能直接看出点歪在哪。
+- **月商店结果进 runner 日志**：`_run_monthly_flow` 打 ✅/❌ 行、`_append_monthly_report`
+  把报告行同步 `controller.logger`——以前成败只在邮件日报，11-03 那种静默失败日志无痕。
+- 回归：`tests/suite_monthly_scroll_find_20261102.py`（+diag 三态 + 严格语义两组）、
+  `tests/suite_monthly_shop_observability_20261104.py`（8 组：error 参数 / run_flow 失败
+  取证 / 停止不落库 / 邻卡守卫 4 例 / _buy_once 行为 / 月度日志两处 / craft fail 日志）、
+  `tests/suite_monthly_shop_buy_20261103.py`（mock 签名加 `item_text`）。全部 ALL PASS。
+
+### 原神 7.2 更新日「用户协议和隐私政策更新提示」自动处理（2026-11-04）
+
+- **事故**：11-04 06:00-11:00 维护后游戏弹协议窗，`GenshinLauncher` /
+  `GENSHIN_MONTHLY` 的 `genshin_enter_main` 连等 600s 都判「等待主界面超时」，
+  原神月商店一整天没进去。当帧 OCR（`flow_failures` #170/#171）实锤弹窗上有
+  「拒绝(0.65)@812,659」「同意(0.67)@1107,660」两个按钮。
+- **根因不是"没识别到按钮"**：旧 `_pick` 用 `cand in text` 子串匹配 + 按置信度
+  择优。正文「力。如您拒绝，将无法进入游戏。(0.89)」命中 `ENTRY_OCR_TEXTS` 的
+  「进入游戏」，点在正文上并 `continue` 掉后面的确认分支；就算走到
+  `CONFIRM_TEXTS`，正文「…应当阅读并同意《用户…」(0.94) 也会压过按钮
+  「同意」(0.67)。**弹窗类界面里长正文含按钮词是常态，按钮 OCR 不能子串匹配**。
+- **口径**：按钮级 OCR 一律走 `_pick_short_button`（`text.strip()` 精确等于目标词
+  或至多长 2 字，长度 > 6 的长句直接丢弃）；协议弹窗在循环里优先级最高，识别靠
+  标题关键词或「同意 + 拒绝」两个短按钮同时出现；点按钮按
+  模板 `assets/templates/原神-用户协议-同意.png`（从当天失败截图裁、放大 2 倍，
+  自匹配 0.9997）→ 精确短文本 → 固定比例 `(1107/1920, 660/1080)` 三级兜底。
+  一次 OCR 由弹窗 / 入口 / 确认共用，点完重置节流重扫，别拿旧帧重复点。
+- **ROI** `AGREE_REGION=(0.45,0.52,0.30,0.18)` 只覆盖右侧「同意」，把左侧
+  「拒绝」挡在外面；宁可走固定比例兜底，也绝不能点到「拒绝」（点了就进不去游戏）。
+- **边界**：只覆盖走 `genshin_enter_main` 的启动器 / 月度流程。日常原神由
+  BetterGI exe 自己启动游戏（`apps.GenshinImpact` 未配 `prelaunch_flow`），
+  登录页由 BetterGI 自己的 GameLoading 任务负责，本项目不介入；11-04 两次
+  90 分钟超时属那条链路，别把两者混为一谈。
+- 回归：`tests/suite_login_agreement_scroll_20261104.py` [1][2]。

@@ -319,6 +319,11 @@ def _markers_present(items: List[Dict], markers, min_conf: float = 0.45) -> set:
 
 
 def _is_calendar_page(items: List[Dict]) -> bool:
+    # 主世界顶部 HUD 也有「奇想日历」图标标签，OCR 常把整排连读成
+    # 「奇想之旅·活动大厅·奇想日历·无羁之心」→ 只看标题会误判"已在日历页"，
+    # 流程不再点图标/按 L，后面全在主世界空找（2026-11-04 08:52 截图实锤）。
+    if _is_main_world(items):
+        return False
     # 标题「奇想日历」也算页面特征：正文特征（每日灵感/幻境挑战…）是艺术字，
     # OCR 认不出来时靠标题兜底（2026-11-02 失败截图停在主界面就是这么丢的）
     if _pick(items, (CALENDAR_TITLE,), min_conf=0.5):
@@ -355,15 +360,20 @@ def _calendar_icon_point(items: List[Dict], rect) -> Optional[Tuple[int, int]]:
 
 
 def _is_stage_page(items: List[Dict]) -> bool:
-    if _pick(items, CLAIM_TEXTS, 0.5):
-        return True
+    # 「晶石兑换」「领取奖励」在兑换页/奖励页也会出现，单条命中不能证明是搭配赛页。
+    # 2026-11-04 页面矩阵实测：旧写法把 exchange/dialog 页全判成搭配赛页。
+    # 现在的证据必须至少两条：巅峰赛速报、第4/5/6场、赛事嘉奖、晶石兑换…
     if _pick(items, (STAGE_CLAIM_MODAL,), 0.5):
         return True
-    return bool(_markers_present(items, STAGE_MARKERS, 0.55))
+    return len(_markers_present(items, STAGE_MARKERS, 0.55)) >= 2
 
 
 def _is_exchange_page(items: List[Dict]) -> bool:
-    return bool(_pick(items, (LIMIT_KEYWORD,), 0.5))
+    # 共鸣商店页也有「本月限购」；必须同时有「晶石兑换」标题才算兑换页。
+    return bool(
+        _pick(items, (EXCHANGE_TITLE,), 0.5)
+        and _pick(items, (LIMIT_KEYWORD,), 0.5)
+    )
 
 
 def _wait_for(

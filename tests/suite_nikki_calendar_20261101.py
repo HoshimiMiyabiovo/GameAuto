@@ -467,6 +467,27 @@ def _run_flow(h: Harness, stop_check=None, plan=None, with_resonance=False):
             setattr(nc, name, value)
 
 
+def test_main_hud_not_calendar():
+    print("[1b] 主世界顶部 HUD 含「奇想日历」不能误判成日历页")
+    # 2026-11-04 08:52 失败截图 OCR 实测：顶部整排图标被连读成
+    # 「奇想之旅·活动大厅·奇想日历·无羁之心」，旧标题兜底直接判"已在日历页"，
+    # 流程没按 L，后面全在主世界空找。
+    main_rows = [
+        _row("ESC", 920, 600, 0.61),
+        _row("商城", 652, 55, 0.66),
+        _row("共鸣", 723, 55, 0.66),
+        _row("奇想之旅·活动大厅·奇想日历·无羁之心", 1010, 55, 0.77),
+        _row("任务", 1330, 55, 0.67),
+        _row("设计图", 1400, 55, 0.67),
+        _row("换装", 1500, 55, 0.67),
+        _row("暂无追踪中的任务", 200, 310, 0.89),
+    ]
+    check("主世界被识别（≥2 个 HUD 特征）", nc._is_main_world(main_rows) is True)
+    check("含「奇想日历」也不判成日历页", nc._is_calendar_page(main_rows) is False)
+    check("非主世界的纯标题仍然兜底",
+          nc._is_calendar_page([_row("奇想日历", 100, 50)]) is True)
+
+
 def test_reference_ocr(refs):
     print("[1] 真实截图 OCR 定标")
     if not refs:
@@ -816,6 +837,7 @@ def test_wiring():
 def main():
     refs = _ocr_refs()
     test_reference_ocr(refs)
+    test_main_hud_not_calendar()
     test_helpers()
     test_full_flow()
     test_resonance_flow()

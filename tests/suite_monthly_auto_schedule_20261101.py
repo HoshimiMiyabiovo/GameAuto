@@ -27,9 +27,16 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import game_auto.clients.daily_checker as dc  # noqa: E402
 import game_auto.runtime.background_template_runner as btr  # noqa: E402
+import game_auto.runtime.foreground_flow_runner as ffr  # noqa: E402
 import game_auto.runtime.monthly_exchange as me  # noqa: E402
 import game_auto.runtime.task_batch_runner as tbr  # noqa: E402
 import game_auto.services.launch_task_catalog as catalog  # noqa: E402
+
+# 2026-11-04：本机把崩铁每月事项交给三月七后 `HSR_MONTHLY.enabled=false`。
+# 本套件测的是「月度调度逻辑本身」，不该被本机业务配置牵着走；统一让流程
+# 配置查询返回启用。禁用分支由 `suite_hsr_monthly_handoff_20261104.py` 单独覆盖，
+# 两个套件在各自子进程里跑，互不污染。
+ffr._load_flow_config = lambda *a, **k: {"enabled": True}
 
 FAILURES = []
 LOGGER = logging.getLogger("test.monthly.auto_schedule")

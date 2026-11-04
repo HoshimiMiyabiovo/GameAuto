@@ -10,6 +10,13 @@ import pyautogui
 import win32gui
 
 
+def _guarded_click(*args, **kwargs):
+    """前台点击统一走收口（默认极短按住）。"""
+    from game_auto.runtime.foreground_flow_runner import _pyautogui_click_guarded
+    return _pyautogui_click_guarded(*args, **kwargs)
+
+
+
 Point = Tuple[int, int]
 Rect = Tuple[int, int, int, int]
 
@@ -72,7 +79,7 @@ class ScreenTaskRunner:
 
         for idx, step in enumerate(profile.clicks, start=1):
             self.logger.info(f"[{profile.name}] 执行点击步骤 {idx}: ({step.x}, {step.y})")
-            pyautogui.click(
+            _guarded_click(
                 x=step.x,
                 y=step.y,
                 clicks=step.clicks,

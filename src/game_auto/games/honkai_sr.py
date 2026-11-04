@@ -68,6 +68,14 @@ PROFILE = GameProfile(
             "log_dir": "",
             # March7th Assistant 报错后停留在界面不退出，监控到日志报错即提前结束任务
             "abort_on_error": True,
+            # 2026-11-04 07:45 误杀：March7th 刚拉起游戏时激活窗口失败
+            # （Failed to set window foreground）会写一条 "ERROR ... 发生错误"，
+            # 监控直接杀进程 → 崩铁日常 35 秒判失败。这类瞬时错误脚本自己能继续，
+            # 不能当致命错误。
+            "ignore_keywords": [
+                "Failed to set window foreground",
+                "激活窗口时发生错误",
+            ],
         },
     },
 )

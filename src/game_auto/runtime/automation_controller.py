@@ -5,6 +5,7 @@ import queue
 import subprocess
 import ctypes
 import atexit
+import threading
 import psutil
 import pyautogui
 import win32gui
@@ -13,7 +14,7 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Tuple, Optional, Dict, List
 
-from .foreground_flow_runner import run_flow
+from .foreground_flow_runner import run_flow, _pyautogui_click_guarded
 from .process_supervisor import ProcessSnapshot, ProcessSupervisor
 from .ok_ww_log_monitor import run_nte_post_launch_ocr_click
 from .script_error_log_monitor import build_script_error_watchers
@@ -73,6 +74,10 @@ class AutomationController:
     def __init__(self):
         self.logger = self._init_logger()
         self.stop_current_task = False
+        # ok-ww 模块化 runner（阶段 1：DailyTask）。保持 None 时走旧的可执行文件链路。
+        self._module_session = None
+        self._module_task_thread = None
+        self._module_task_result = None
         # 任务线程心跳看门狗：任务线程卡死（IO 挂起/死锁）时留现场并止损。
         # 与 hang_watchdog（只盯主线程）互补，见 services/task_heartbeat_watchdog。
         from ..services.task_heartbeat_watchdog import TaskHeartbeatWatchdog
@@ -839,7 +844,7 @@ class AutomationController:
 
             activated = self._activate_window(hwnd)
             time.sleep(0.35)
-            pyautogui.click(click_x, click_y, button="left")
+            _pyautogui_click_guarded(click_x, click_y)
 
             if original_pos is not None:
                 pyautogui.moveTo(original_pos.x, original_pos.y, duration=0)
@@ -858,6 +863,8 @@ class AutomationController:
         launch_started_at: Optional[float] = None,
         game_display: str = "",
     ) -> Tuple[bool, Optional[int]]:
+        if self._module_mode_active(config):
+            return self._start_module_session(config, game_display, launch_started_at)
         script_pid = None
         try:
             start_time = float(launch_started_at or time.time())
@@ -929,6 +936,330 @@ class AutomationController:
         except Exception as e:
             self.logger.error(f"启动失败: {str(e)}", exc_info=DEBUG_MODE)
             return False, None
+
+    @staticmethod
+    def _module_mode_config(config: dict) -> dict:
+        raw = config.get("module_mode")
+        if isinstance(raw, dict):
+            return raw
+        if raw is True:
+            return {"enabled": True}
+        return {}
+
+    @classmethod
+    def _module_mode_active(cls, config: dict) -> bool:
+        """模块模式只对 ok-ww 生效；其它脚本即使误配也不改走旧链路。"""
+        return bool(cls._module_mode_config(config).get("enabled")) and str(
+            config.get("script_name") or ""
+        ) == "ok-ww"
+
+    def _cleanup_stale_module_runners(self) -> None:
+        """清掉上一次异常退出残留的 ok-ww module runner（python.exe）。"""
+        current_pid = None
+        if self._module_session is not None:
+            try:
+                current_pid = self._module_session.pid
+            except Exception:
+                current_pid = None
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                pid = int(proc.info.get("pid") or 0)
+            except Exception:
+                continue
+            if pid == os.getpid() or pid == current_pid:
+                continue
+            cmdline = " ".join(str(part) for part in (proc.info.get("cmdline") or []))
+            if "okww_module" not in cmdline or "runner.py" not in cmdline:
+                continue
+            self.logger.warning("[鸣潮] 清理残留 ok-ww module runner: PID=%s", pid)
+            try:
+                ProcessSupervisor.safe_kill_process(pid)
+            except Exception as exc:  # noqa: BLE001
+                self.logger.warning("[鸣潮] 清理残留 runner 失败: %s", exc)
+
+    def _on_module_event(self, event: dict) -> None:
+        if not isinstance(event, dict):
+            return
+        name = str(event.get("event") or "")
+        if name == "task_started":
+            self.logger.info("[鸣潮] ok-ww 模块任务开始: %s", event.get("task"))
+        elif name == "task_finished":
+            self.logger.info(
+                "[鸣潮] ok-ww 模块任务结束: %s success=%s stopped=%s duration=%ss error=%s",
+                event.get("task"),
+                event.get("success"),
+                event.get("stopped"),
+                event.get("duration"),
+                str(event.get("error") or "")[:200],
+            )
+
+    def _start_module_session(
+        self,
+        config: dict,
+        game_display: str,
+        launch_started_at: Optional[float] = None,
+    ) -> Tuple[bool, Optional[int]]:
+        """启动常驻 headless ok-ww runner，并异步执行第一阶段 DailyTask。
+
+        与旧链路（ShellExecute ok-ww.exe）并列：只有 app_config 的
+        module_mode.enabled=true 时才会走到这里。runner 独立进程运行，
+        game_auto 继续负责看门狗、停止键和进程收尾。
+        """
+        from .okww_module_session import OkwwModuleSession
+
+        self._cleanup_stale_module_runners()
+        module_cfg = self._module_mode_config(config)
+        task_name = str(module_cfg.get("task") or "DailyTask")
+        timeout = float(
+            module_cfg.get("timeout")
+            or config.get("timeouts", {}).get("monitor", 1800)
+            or 1800
+        )
+        close_game = bool(module_cfg.get("close_game", True))
+
+        session = None
+        try:
+            session = OkwwModuleSession.from_app_config(
+                config, event_callback=self._on_module_event
+            )
+            session.start(stop_check=lambda: self.stop_current_task)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.error(
+                "[%s] ok-ww 模块 runner 启动失败: %s", game_display, exc
+            )
+            if session is not None:
+                try:
+                    self.logger.error("[%s] runner 日志尾部:\n%s", game_display, session.log_tail(30))
+                except Exception:
+                    pass
+                try:
+                    session.stop()
+                except Exception:
+                    pass
+            return False, None
+
+        self._module_session = session
+        self._module_task_result = None
+        self.logger.info(
+            "[%s] ok-ww 模块 runner 已启动 (PID=%s, task=%s, timeout=%ss, close_game=%s)",
+            game_display,
+            session.pid,
+            task_name,
+            timeout,
+            close_game,
+        )
+
+        # 和旧链路一样，先切回游戏窗口，再给 runner 一点初始化时间。
+        self._click_game_window_after_launch(
+            config,
+            game_display,
+            click_reason="ok-ww 模块 runner 启动后切回游戏窗口",
+        )
+        initial_wait = max(0.0, float(config.get("initial_wait", 5) or 0))
+        if initial_wait:
+            deadline = time.time() + initial_wait
+            while time.time() < deadline:
+                if self.stop_current_task:
+                    self.logger.info("[%s] 模块 runner 初始化等待中收到停止请求", game_display)
+                    try:
+                        session.stop()
+                    except Exception:
+                        pass
+                    self._module_session = None
+                    return False, None
+                time.sleep(min(0.5, max(0.0, deadline - time.time())))
+
+        thread = threading.Thread(
+            target=self._run_module_task,
+            args=(session, game_display, task_name, timeout, close_game),
+            name="okww-module-task",
+            daemon=True,
+        )
+        self._module_task_thread = thread
+        thread.start()
+        return True, session.pid
+
+    def _run_module_task(
+        self,
+        session,
+        game_display: str,
+        task_name: str,
+        timeout: float,
+        close_game: bool,
+    ) -> None:
+        started = time.time()
+        try:
+            result = session.run_task(task_name, timeout=timeout, close_game=close_game)
+        except Exception as exc:  # noqa: BLE001
+            from .okww_module_session import ModuleTaskResult
+
+            result = ModuleTaskResult(
+                task=task_name,
+                success=False,
+                error=f"{type(exc).__name__}: {exc}",
+                duration=time.time() - started,
+            )
+            self.logger.error("[%s] ok-ww 模块任务异常: %s", game_display, exc)
+        self._module_task_result = result
+        if result.success:
+            metrics = result.humanize if isinstance(result.humanize, dict) else {}
+            self.logger.info(
+                "[%s] ok-ww 模块任务成功: %s (%.1fs, clicks=%s, target_cps=%s)",
+                game_display,
+                result.task,
+                result.duration,
+                metrics.get("clicks", 0),
+                metrics.get("target_cps", 0),
+            )
+        else:
+            self.logger.warning(
+                "[%s] ok-ww 模块任务失败: %s (%.1fs) %s",
+                game_display,
+                result.task,
+                result.duration,
+                result.error[:300],
+            )
+
+    def _wait_module_thread(self, timeout: float = 30.0) -> None:
+        thread = self._module_task_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=max(0.0, float(timeout)))
+
+    def _stop_module_session(self) -> None:
+        session = self._module_session
+        self._module_session = None
+        if session is None:
+            return
+        try:
+            session.stop()
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("[鸣潮] 停止 ok-ww 模块 runner 失败: %s", exc)
+
+    def _monitor_module_task(
+        self,
+        app_name: str,
+        config: dict,
+        script_pid: Optional[int],
+        *,
+        launch_started_at: Optional[float] = None,
+        runtime_processes: Optional[Dict[str, ProcessSnapshot]] = None,
+    ) -> Tuple[bool, int, str]:
+        """等待 ok-ww 模块任务结束；失败/超时/用户停止都做完整收尾。"""
+        runtime_processes = runtime_processes if runtime_processes is not None else {}
+        game_display = get_app_display_name(app_name)
+        module_cfg = self._module_mode_config(config)
+        timeout = float(
+            module_cfg.get("timeout")
+            or config.get("timeouts", {}).get("monitor", 1800)
+            or 1800
+        )
+        close_game = bool(module_cfg.get("close_game", True))
+        start = time.time()
+
+        game_name = self._configured_game_process_name(config)
+        if game_name:
+            snapshot = ProcessSupervisor.find_process_snapshot(game_name, exact_name=True)
+            if snapshot is not None:
+                runtime_processes["game"] = snapshot
+                self._log_detected_process("游戏进程", snapshot, source="ok-ww 模块任务")
+            else:
+                self.logger.error(
+                    "[%s] ok-ww 模块任务开始前未找到游戏进程: %s",
+                    game_display,
+                    game_name,
+                )
+
+        while True:
+            duration = int(time.time() - start)
+            if self.stop_current_task:
+                self.logger.info("[%s] 收到停止请求，结束 ok-ww 模块任务", game_display)
+                session = self._module_session
+                if session is not None:
+                    try:
+                        session.stop_task()
+                    except Exception as exc:
+                        self.logger.warning("[%s] 停止 ok-ww 模块任务失败: %s", game_display, exc)
+                self._wait_module_thread(30)
+                self._stop_module_session()
+                self._kill_related_processes(
+                    config,
+                    script_pid,
+                    include_game=close_game,
+                    runtime_processes=runtime_processes,
+                )
+                return False, duration, "user_stop"
+
+            thread = self._module_task_thread
+            if thread is None or not thread.is_alive():
+                result = self._module_task_result
+                if result is None:
+                    self.logger.error("[%s] ok-ww 模块任务线程结束但没有结果", game_display)
+                    self._stop_module_session()
+                    self._kill_related_processes(
+                        config,
+                        script_pid,
+                        include_game=close_game,
+                        runtime_processes=runtime_processes,
+                    )
+                    return False, duration, "module_error"
+
+                success = bool(result.success) and not result.stopped
+                end_reason = "module_done" if success else (
+                    "user_stop" if result.stopped else "module_error"
+                )
+                self.logger.info(
+                    "[%s] ok-ww 模块任务收尾: success=%s reason=%s duration=%.1fs",
+                    game_display,
+                    success,
+                    end_reason,
+                    result.duration or duration,
+                )
+                self._stop_module_session()
+                self._kill_related_processes(
+                    config,
+                    script_pid,
+                    include_game=close_game,
+                    runtime_processes=runtime_processes,
+                )
+                return success, int(result.duration or duration), end_reason
+
+            session = self._module_session
+            if session is not None and not session.is_alive():
+                self.logger.error(
+                    "[%s] ok-ww 模块 runner 意外退出，提前结束任务\n%s",
+                    game_display,
+                    session.log_tail(30),
+                )
+                self._stop_module_session()
+                self._kill_related_processes(
+                    config,
+                    script_pid,
+                    include_game=close_game,
+                    runtime_processes=runtime_processes,
+                )
+                return False, duration, "module_crashed"
+
+            if duration >= timeout:
+                self.logger.warning(
+                    "[%s] ok-ww 模块任务超时 (%ss)，强制停止", game_display, int(timeout)
+                )
+                if session is not None:
+                    try:
+                        session.stop_task()
+                    except Exception:
+                        pass
+                self._wait_module_thread(30)
+                self._stop_module_session()
+                self._kill_related_processes(
+                    config,
+                    script_pid,
+                    include_game=close_game,
+                    runtime_processes=runtime_processes,
+                )
+                return False, duration, "timeout"
+
+            self._heartbeat.beat()
+            time.sleep(1)
 
     def _launch_special(self, config: dict) -> Tuple[bool, Optional[int]]:
         try:
@@ -1412,8 +1743,14 @@ class AutomationController:
         )
         try:
             self.logger.info(f"\n{'='*40}\n开始执行 [{game_display}] 任务 (脚本: {script_display})\n{'='*40}")
-            self.stop_current_task = False
+            # 注意：不要在这里重置 stop_current_task（2026-11-04 19:44 事故）。
+            # 批次重试会在用户点停止后再次调用 execute_task，重置标志会让
+            # 关闭窗口时又启动一次 BetterGI，表现为"关不掉、还在开脚本"。
+            # 新批次由 run_task_batch 入口统一清除停止标志。
             self._cleanup_key_listener()
+            if self.stop_current_task:
+                self.logger.info(f"[{game_display}] 启动前收到停止请求，直接退出")
+                return False, "用户终止", 0
 
             # 终止已有游戏进程
             configured_game_process = self._configured_game_process_name(config)
@@ -1455,6 +1792,11 @@ class AutomationController:
                         f"游戏窗口未就绪（等 {wait_sec}s），"
                         f"已提前止损（不拉脚本空跑，游戏进程保留）"
                     ), 0
+
+            if self.stop_current_task:
+                # 关闭窗口/点停止时，prelaunch 可能已经跑完；绝不在这里再启动脚本
+                self.logger.info(f"[{game_display}] 拉脚本前收到停止请求，不再启动脚本")
+                return False, "用户终止", 0
 
             # 定义 script_type（必须在这里定义！）
             script_type = config.get("type", "normal")
@@ -1560,17 +1902,44 @@ class AutomationController:
                 success = duration >= MIN_RUN_TIME and not self.stop_current_task
                 return success, status, duration
 
-            # 监控游戏进程
-            monitor_result, duration, end_reason = self._monitor_game(
-                app_name,
-                config,
-                script_pid,
-                launch_started_at=launch_started_at,
-                launch_config=launch_config,
-                runtime_processes=runtime_processes,
-                script_choice=script_choice,
-            )
-            
+            # 监控游戏进程 / ok-ww 模块任务
+            if self._module_mode_active(config):
+                monitor_result, duration, end_reason = self._monitor_module_task(
+                    app_name,
+                    config,
+                    script_pid,
+                    launch_started_at=launch_started_at,
+                    runtime_processes=runtime_processes,
+                )
+            else:
+                monitor_result, duration, end_reason = self._monitor_game(
+                    app_name,
+                    config,
+                    script_pid,
+                    launch_started_at=launch_started_at,
+                    launch_config=launch_config,
+                    runtime_processes=runtime_processes,
+                    script_choice=script_choice,
+                )
+
+            # 模块模式下结果来自 runner 的 task 返回值，不再依赖日志标记和
+            # MIN_RUN_TIME；DailyTask 2-4 分钟完成是正常现象。
+            if self._module_mode_active(config):
+                result = self._module_task_result
+                if self.stop_current_task:
+                    status = "用户终止"
+                elif monitor_result:
+                    status = "成功"
+                elif result is not None and result.error:
+                    status = result.error
+                else:
+                    status = "ok-ww 模块任务失败"
+                self.logger.info(
+                    f"\n{'='*40}\n[{game_display}] 任务结束: {status} "
+                    f"(模块: {getattr(result, 'task', 'ok-ww')}, 运行时间: {duration//60}分{duration%60}秒)\n{'='*40}"
+                )
+                return monitor_result and not self.stop_current_task, status, duration
+
             # ok-ww（鸣潮）特例：日常 2-4 分钟就能跑完，MIN_RUN_TIME(300s) 的
             # "运行时间过短"全是误报。游戏是自己退的（end_reason=game_exited，
             # 即脚本日志 "Exiting Game and App" 签名）且时长不足时，查一次当天
@@ -1621,6 +1990,14 @@ class AutomationController:
         finally:
             self._heartbeat.stop()
             self._cleanup_key_listener()
+            if self._module_session is not None:
+                try:
+                    self._module_session.stop()
+                except Exception as exc:  # noqa: BLE001
+                    self.logger.warning("[%s] 停止 ok-ww 模块 runner 失败: %s", game_display, exc)
+                self._module_session = None
+                self._module_task_thread = None
+                self._module_task_result = None
             _started = locals().get("launch_started_at")
             _elapsed = int(time.time() - _started) if _started else 0
             self.logger.info(

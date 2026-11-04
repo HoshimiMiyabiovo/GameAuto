@@ -70,6 +70,56 @@
 - **解法**：本程序必须同样以管理员运行（`start_gui_admin.bat` / `00_START_HERE_GUI_ADMIN.bat` 自带 `Start-Process -Verb RunAs` 自提权）。GUI 设计上就是提权跑的；手动跑脚本验证时也要提权（UAC 弹窗需用户点"是"）。
 - **护栏**：`foreground_flow_runner._uipi_block_reason(pid)`（`_process_is_elevated` 读 TokenElevation）在 `run_flow` 窗口就绪后预检——仅"本程序普通 + 目标管理员"才拦，报可行动的错并直接失败，不再让步骤匹配超时把问题带偏。回归：`artifacts/test_uipi_guard_20261020.py`（8 组权限组合）。
 - **排查手法**：`psutil` + `OpenProcessToken`/`GetTokenInformation(TokenElevation=20)` 比对两进程权限；提权后同坐标点击立即生效即可实锤。
+### 绝区零 Unity 启动器：提权 + 按住，两个条件缺一不可（2026-11-04 实机）
+
+- 用户当场开着游戏，做了两次实验：普通权限 `data/artifacts/probe_zzz_click_20261104.py`、
+  管理员权限 `data/artifacts/probe_zzz_click_admin_20261104.py`（由
+  `Start-Process -Verb RunAs` 启动，结果写 `zzz_click_probe_admin_result.json`，
+  前后截图同目录）。窗口 `ZenlessZoneZero.exe` PID 37532 (0,0,1920,1080)，
+  OCR 命中「点击进入游戏」@ (961,887)。
+- **普通权限**：`_uipi_block_reason(pid)` 实锤「游戏管理员 / 脚本普通权限，
+  UIPI 静默拦截所有合成点击」；前台 guarded、前台按住 80ms、后台 PostMessage
+  三种全无效，3s 后按钮仍在。截图只有登录页电视宣传画面轮播（再次说明
+  背景动画会骗过像素差判据），按钮没动。
+- **提权后**：`elevated_self=true` / `uipi_reason=""`，但**瞬时 `pyautogui.click`
+  仍然点不动**（guarded 步骤 `button_still_there=true`）；只有 `mouseDown`
+  按住 80ms 再 `mouseUp` 才在 3s 内出现「登录成功」+ `UID:21054491`。
+- **结论**：11-04 `ZZZ_MONTHLY` 08:10 / 10:10 / 14:25 三次
+  「点击进入游戏：元素 10s 未消失」不是模板/坐标/确认策略问题，是
+  **权限 + 点击注入**：GUI 必须提权（护栏在 `run_flow:2144`），且 Unity
+  启动器按钮必须按住。后台 PostMessage 首发 + 前台瞬时兜底（11-03 的改法）
+  两个条件都不满足，所以三次全废。
+- **修法**：新增 `foreground_flow_runner._pyautogui_click_held`、
+  `_click_window_local(hold_sec=)`、`run_flow` 读步骤级 `click_hold_sec`；
+  两份 `flow_configs` 的 `ZZZ_MONTHLY` / `ZZZ_NOTORIOUS_HUNT` 第 1 步改成
+  `background_click=false` / `click_fallback=false` / `click_hold_sec=0.08`。
+  默认 0 保持其它流程旧行为；后台 PostMessage 成功时自动忽略 hold。
+- 回归 `tests/suite_zzz_click_hold_20261104.py`（含本机实机结果断言）。
+### 所有前台点击默认「极短按住」（2026-11-04 用户要求）
+
+- **动机**：瞬时 down+up 既是典型脚本输入特征，又点不动 Unity 启动器。
+  用户要求把 21:35 实机验证的按住式点击推广到所有点击。
+- **唯一收口**：`foreground_flow_runner._pyautogui_click_guarded` 现在默认走
+  `_pyautogui_click_held`，`DEFAULT_CLICK_HOLD_SEC=0.06`（可用环境变量
+  `GAMEAUTO_CLICK_HOLD_SEC` 全局调/关）。参数语义：
+  `hold_sec=None` → 全局默认按住；`0` → **显式瞬时**（逃生口）；`>0` → 指定时长。
+  `_click_window_local` / `run_flow` 只负责透传，不再自己分叉；
+  `run_flow` 未配置 `click_hold_sec` 时传 `None`，日志会打 `[按住: 0.06s]`。
+- **覆盖面**：`run_flow` 所有前台点击、白荆 / 猫兑换等几十处直接调用
+  `_pyautogui_click_guarded` 的模块，以及原先 11 处裸 `pyautogui.click`：
+  `automation_controller`（扩 import）、`ocr_click_tester`(4)、`click_sequence`(1)、
+  `zzz_battle_assist._click`(1)、`maintenance/{generic_workflow_runner,screen_task_runner}`(3)。
+  后 5 个模块用 `_guarded_click` 小 wrapper 做**函数内局部 import**，避免和
+  `foreground_flow_runner` 循环依赖；`click_sequence` 自己的 FAILSAFE /
+  回放节奏管理不变，只是把 click 调用换成统一收口。
+- **两处特殊**：战斗高频连点 `zzz_battle_assist._click` 用 `hold_sec=0.02`
+  （仍带按住语义但几乎不拖慢 APM）；后台 `PostMessage` 的
+  `WM_LBUTTONDOWN` / `WM_LBUTTONUP` 之间本来就有 20ms 间隔，天然是按住式，
+  不需要改。
+- **回退**：`GAMEAUTO_CLICK_HOLD_SEC=0` 全局瞬时，或单个步骤
+  `click_hold_sec: 0`。默认 0 之外的值才影响行为，别把它当成"越大越像人"。
+- 回归：`suite_zzz_click_hold_20261104.py` [3][4][6][8][9]（默认按住、
+  显式 0 瞬时、透传、`src` 里不再有裸 `pyautogui.click`）。
 - **UIPI 只护 `run_flow` 路径，白荆 `execute_task` 路径没有预检（2026-10-25 实锤）**：用非提权驱动跑白荆（artifacts 单游戏驱动脚本），启动器「开始游戏」能点中（启动器是自己拉的非提权进程），但游戏本体（腾讯反作弊 TQMCenter 全家桶，提权）之后**所有点击/ESC 全被静默拦截**——"已点击关闭公告"打了日志但弹窗纹丝不动，常态匹配 ESC 按 10 次全无效。日志特征签名：`SetWindowPos 置顶失败: (5, 拒绝访问)` + `_terminate_process` 一片"终止进程异常"（OpenProcess 被拒）。**白荆/游戏内流程的任何驱动（CLI、测试、临时脚本）必须和 GUI 一样提权跑**；诊断时看到"点击日志正常但画面不变"先查权限再查模板。
 ## SQLite / GUI 卡死避坑 (重要)
 
@@ -151,3 +201,17 @@
 - 验证方式：mock `task_batch_runner.run_task_batch` 抛异常，
   断言 `_schedule_shutdown` / `_send_daily_email_report` 各被调用一次、
   finished 事件发出、running 复位为 False。
+
+### dispatch 类步骤失败必须打日志 + 落 flow_failures (2026-11-04)
+
+- `run_flow` 里 `action in _BUILTIN_ACTIONS` 的分支（monthly_exchange /
+  hsr_resin_craft / zzz_shop_buy / notorious_hunt / enter_main 等）失败返回
+  `(False, msg)` 时，**必须在返回前打 `logger.error` 并调
+  `_collect_failure_evidence(error=msg)`**（截图 + 当帧 OCR 落库）。这类失败以前
+  三层静默（模块内不打日志、dispatch 直接 return、run_flow 直接 return），11-03
+  自塑尘脂点歪坐标只能靠邮件日报一行 ❌ 发现，日志和 flow_failures 全空。
+- **"用户停止"不算失败**：dispatch_msg 含"用户停止"时只打一行 info，不写
+  flow_failures——手动停止落假失败记录会污染失败报告。
+- 新增 dispatch 分支时不要绕过这段自己 return；失败原因字符串要写清楚（带坐标 /
+  等待时长更好），取证图才有用。
+- 回归：`tests/suite_monthly_shop_observability_20261104.py` [2][3]。

@@ -662,7 +662,17 @@ def run_ok_script_once(
     不再触发重试或强制判失败）。
     """
     script_name = str(config.get("script_name", app_key) or app_key)
-    monitor = start_ok_script_log_monitor(config, controller.logger, monitor_config_key=monitor_config_key)
+    module_mode = config.get("module_mode")
+    module_mode = (
+        isinstance(module_mode, dict)
+        and bool(module_mode.get("enabled"))
+        and str(config.get("script_name") or "") == "ok-ww"
+    )
+    # 模块模式下 runner 自己返回结果；app.* 日志监控的 300s 无更新止损会
+    # 在 DailyTask 正常运行时误杀游戏，必须跳过。
+    monitor = None if module_mode else start_ok_script_log_monitor(
+        config, controller.logger, monitor_config_key=monitor_config_key
+    )
     try:
         success, message, duration = controller.execute_task(app_key, script_choice)
     finally:

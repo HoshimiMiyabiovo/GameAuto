@@ -131,7 +131,11 @@ def _run_monthly_flow(logger: logging.Logger, flow_key: str, label: str) -> Tupl
     ok, msg = run_flow(logger, flow_key)
     if ok:
         db.set_task_meta(meta_key, month_key)
+        # 2026-11-04：月商店成败以前只进邮件日报，runner 日志里查不到；
+        # 至少这里要落一行，`_run_pending_monthly_flow` 的报告行才会跟着进日志。
+        logger.info("[%s] ✅ %s（本月已记录，下月再执行）", label, msg)
         return True, f"✅ {msg}（本月已记录，下月再执行）"
+    logger.warning("[%s] ❌ %s（下次运行重试）", label, msg)
     return False, f"❌ {msg}（下次运行重试）"
 
 

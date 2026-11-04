@@ -183,6 +183,7 @@ def _locate_item(
     confidences,
     stop_check: Optional[Callable[[], bool]],
     label: str,
+    ocr_timeout: Optional[int] = None,
 ) -> Optional[Tuple[int, int]]:
     """按 point_frac → 模板 → OCR 的优先级定位商品，返回窗口局部中心坐标。
 
@@ -190,6 +191,10 @@ def _locate_item(
     拆成独立函数是为了让「当前视图找不到 → 翻页再找」能复用同一套定位逻辑
     （2026-11-02：崩铁余烬兑换的商品网格同屏只有 2~3 行，票类商品在折叠区以下，
     一次整窗 OCR 根本看不到，会被"看不到=已买过"吞成静默漏买）。
+
+    ocr_timeout：翻页场景专用。默认 `OCR_TIMEOUT_SEC=25s` 是给"首屏找商品"的，
+    翻页时每屏都等满 25s 会变成 8 屏×25s 的空转（2026-11-03 实测 3 件商品烧了
+    12 分钟），翻页只需单次整窗 OCR 就能判断当前屏有没有，给 6s 足够。
     """
     item_name = str(item.get("name", "商品") or "商品")
     item_template = _abs_template(str(item.get("template", "") or ""))
@@ -219,7 +224,9 @@ def _locate_item(
             return None
         way = "OCR文字定位（无模板）" if not has_template else "OCR兜底（模板未命中）"
         logger.info(f"[{label}] {item_name} 改用{way}: {ocr_text}")
-        center = _locate_ocr(logger, hwnd, ocr_text, OCR_TIMEOUT_SEC, stop_check)
+        center = _locate_ocr(
+            logger, hwnd, ocr_text, int(ocr_timeout or OCR_TIMEOUT_SEC), stop_check
+        )
     return center
 
 
@@ -232,7 +239,11 @@ _REMAIN_PATTERNS = (
 
 
 def _read_item_remaining(
-    logger: logging.Logger, hwnd: int, center: Tuple[int, int], radius: int = 320
+    logger: logging.Logger,
+    hwnd: int,
+    center: Tuple[int, int],
+    radius: int = 320,
+    item_text: str = "",
 ) -> Optional[int]:
     """读目标商品卡片附近的剩余可兑换数量，读不到返回 None。
 
@@ -241,6 +252,13 @@ def _read_item_remaining(
       - 剩余 = 0 或读不到：商品到月上限后不展示/变灰，维持旧的"已购"口径。
     radius 按卡片尺寸给的：商品名和「剩余数量」行通常在同一张卡里，320px 足够，
     又不会串到隔壁卡。
+
+    item_text（2026-11-04 守卫）：商品自己的名字/ocr_text。崩铁的商品到月上限
+    后**整卡从货架消失**（08:47 证据图：命运的足迹 2/2 后第一格直接空掉），
+    这时点中的是隔壁卡——如果只看「附近有没有 可兑换: N/M」，邻卡的
+    「可兑换: 80/80」会把真买完误判成"未买满"，从此每月都报失败。
+    所以给了 item_text 时，必须商品名也出现在坐标附近（= 卡还是这张卡）
+    才允许报剩余 > 0；名字不在 → 返回 None 走旧口径。
     """
     try:
         from .ocr_click_tester import ocr_window_content
@@ -250,6 +268,8 @@ def _read_item_remaining(
         LOGGER.debug(f"[商店采购] 读取商品剩余数量失败: {exc}")
         return None
     cx, cy = int(center[0]), int(center[1])
+    own = str(item_text or "").replace(" ", "").strip()
+    own_found = False
     best_val: Optional[int] = None
     best_dist: Optional[int] = None
     for r in results:
@@ -259,6 +279,12 @@ def _read_item_remaining(
             if abs(x - cx) > radius or abs(y - cy) > radius:
                 continue
             text = str(r.get("text") or "")
+            compact = text.replace(" ", "")
+            # 商品名只用来判定"这张卡还是不是目标卡"；「可兑换: N/M」徽标行
+            # 本来就不含商品名，两件事不能混在同一个 continue 里（否则徽标
+            # 永远读不到，剩余数量恒为 None，2026-11-04 首版踩坑）。
+            if own and (own in compact or compact in own):
+                own_found = True
             for pat in _REMAIN_PATTERNS:
                 m = pat.search(text)
                 if not m:
@@ -270,6 +296,13 @@ def _read_item_remaining(
                 break
         except Exception:
             continue
+    if own and not own_found:
+        # 坐标附近没有商品自己的名字：点中的多半是别的东西（卡片已消失），
+        # 邻卡的剩余数量不可信，按"读不到"处理。
+        LOGGER.debug(
+            f"[商店采购] 坐标 {center} 附近未找到商品名「{own}」，剩余数量不可信"
+        )
+        return None
     return best_val
 
 
@@ -334,7 +367,10 @@ def _buy_once(
         if stop_check is not None and stop_check():
             return STOPPED
         # 2026-11-03 用户口径：页面还写着"剩余 4"就说明没买满，不能算已达上限。
-        remain = _read_item_remaining(logger, hwnd, center)
+        # item_text 守卫（2026-11-04）：卡片到上限会整卡消失，点中的可能是邻卡，
+        # 邻卡的「可兑换: 80/80」不能拿来判未买满。
+        own_text = str(item.get("ocr_text") or item_name or "").strip()
+        remain = _read_item_remaining(logger, hwnd, center, item_text=own_text)
         if remain is not None and remain > 0:
             logger.warning(
                 f"[{label}] {item_name} 点击无弹窗，但页面仍显示剩余 {remain} 个 → 判未买满"

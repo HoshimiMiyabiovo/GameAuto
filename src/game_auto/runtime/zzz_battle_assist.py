@@ -401,7 +401,10 @@ class ZzzBattleAssist:
 
     @staticmethod
     def _click() -> None:
-        pyautogui.click(button="left")
+        # 战斗高频连点也带按住语义，但用更短的 20ms，避免明显拖慢 APM。
+        from .foreground_flow_runner import _pyautogui_click_guarded
+        x, y = pyautogui.position()
+        _pyautogui_click_guarded(x, y, hold_sec=0.02)
 
     def _focus(self, force: bool = False) -> None:
         now = time.time()

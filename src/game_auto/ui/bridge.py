@@ -159,6 +159,10 @@ class UiBridge(
         self._pending_scheduled: List[Dict] = []
         # 更新补跑队列：任务因官方维护跳过后，按公告开服时间重排
         self._update_retry_lock = threading.RLock()
+        # 用户主动停止后置 True：定时任务/更新补跑不再自动触发，直到用户
+        # 下次手动点"开始"。2026-11-04 19:37 用户停止后 19:38 更新补跑又自己
+        # 启动原神，19:43 批次重试再启动一次，用户以为"关不掉"。
+        self._auto_run_paused = False
         threading.Thread(target=self._prefetch_update_calendar, daemon=True).start()
 
         # ── 第三方脚本版本静默检查：启动 5s 后跑一次（TTL 内不联网）──

@@ -26,6 +26,13 @@ from typing import Dict, List, Optional, Tuple
 import pyautogui
 import win32gui
 
+
+def _guarded_click(*args, **kwargs):
+    """前台点击统一走收口（默认极短按住）；局部 import 避免循环依赖。"""
+    from .foreground_flow_runner import _pyautogui_click_guarded
+    return _pyautogui_click_guarded(*args, **kwargs)
+
+
 try:
     from pynput import mouse as _pynput_mouse
     from pynput import keyboard as _pynput_keyboard
@@ -562,7 +569,7 @@ class ClickSequencePlayer:
                     if dry_run:
                         self.logger.info(f"[回放][dry] 步骤{idx}: 点击 ({sx},{sy}) btn={ev.button}")
                     else:
-                        pyautogui.click(sx, sy, button=ev.button)
+                        _guarded_click(sx, sy, button=ev.button)
                         self.logger.info(f"[回放] 步骤{idx}/{total}: 点击 ({sx},{sy}) btn={ev.button}")
                 if gap and gap > 0 and idx < total:
                     time.sleep(gap)

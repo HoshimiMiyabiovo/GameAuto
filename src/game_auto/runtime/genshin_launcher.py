@@ -35,16 +35,24 @@ MAIN_TEMPLATE = str(TEMPLATES_DIR / "原神-主界面.png")
 ENTRY_TEMPLATE = str(TEMPLATES_DIR / "原神-点击进入.png")
 CHOOSE_TEMPLATE = str(TEMPLATES_DIR / "原神-进入游戏.png")
 WELKIN_TEMPLATE = str(TEMPLATES_DIR / "原神-空月祝福.png")
+# 2026-11-04 7.2 更新日实跑：游戏弹「用户协议和隐私政策更新提示」堵在登录页，
+# 旧逻辑一直点正文里的「进入游戏」而永远走不到「同意」分支，等主界面超时。
+# 模板从当天失败截图裁出（960x540 → 放大 2 倍到 260x68，自匹配 0.9997）。
+AGREEMENT_TEMPLATE = str(TEMPLATES_DIR / "原神-用户协议-同意.png")
 
 # BetterGI Recognition.json 的 ROI（比例系数，相对窗口）
 MAIN_REGION = (0.0, 0.0, 0.30, 0.30)        # 派蒙图标只在左上角
 ENTRY_REGION = (1 / 3, 1 / 2, 1 / 3, 1 / 2)  # rect(cw/3, ch/2, cw/3, ch/2)
 CHOOSE_REGION = (0.30, 0.48, 0.40, 0.22)     # rect(685,595,549,64)@1920x1080 外扩一圈
 WELKIN_REGION = (0.0, 0.5, 1.0, 0.5)         # rect(0, ch/2, cw, ch/2)
+# 协议弹窗两个按钮所在区域（只含右侧「同意」，把左侧「拒绝」挡在外面）
+AGREE_REGION = (0.45, 0.52, 0.30, 0.18)
+AGREE_FALLBACK_FRAC = (1107 / 1920, 660 / 1080)  # 当天 OCR 实锤的「同意」按钮中心
 
 ENTRY_OCR_TEXTS = ("点击进入", "进入游戏")
 CONFIRM_TEXTS = ("确认", "同意")
 WELKIN_CLAIM_TEXTS = ("领取",)
+AGREEMENT_TITLE_TEXTS = ("用户协议和隐私政策更新提示", "隐私政策更新提示", "用户协议和隐私政策")
 
 
 def _stop(stop_check: Optional[Callable[[], bool]]) -> bool:
@@ -167,6 +175,85 @@ def _record_failure(logger, step_name: str, message: str, hwnd: int) -> None:
         logger.debug("[原神启动器] 记录失败诊断异常 %s: %s", step_name, exc)
 
 
+def _pick_short_button(items, texts, min_conf: float = 0.5, region=None, max_len: int = 6):
+    """只认「按钮级」短文本，不被弹窗正文里的同名词骗。
+
+    2026-11-04 实锤：协议弹窗正文有「力。如您拒绝，将无法进入游戏。」(0.89)
+    与「…应当阅读并同意《用户…》(0.94)，旧 `_pick` 用子串匹配 + 按置信度择优，
+    结果把正文当成「进入游戏」入口按钮点掉，并 `continue` 掉「同意」分支，
+    弹窗一直不关；就算走到「同意」也会选 0.94 的正文而不是 0.67 的按钮。
+    真按钮在 OCR 里就是「同意」「拒绝」「点击进入」这类 2~4 字短条目。
+    """
+    best = None
+    for item in items or []:
+        text = str(item.get("text") or "").strip()
+        if not text or len(text) > max_len:
+            continue
+        try:
+            conf = float(item.get("confidence") or 0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        if conf < min_conf:
+            continue
+        if region:
+            x, y = item.get("center", (0, 0))
+            left, top, width, height = region
+            if not (left <= x <= left + width and top <= y <= top + height):
+                continue
+        for cand in texts:
+            if text == cand or (text.startswith(cand) and len(text) <= len(cand) + 2):
+                if best is None or conf > best[0]:
+                    best = (conf, cand, item)
+                break
+    return best
+
+
+def _agreement_visible(items) -> bool:
+    """是否停在新版用户协议弹窗：标题命中，或「同意」+「拒绝」两个短按钮同时出现。"""
+    texts = [str(i.get("text") or "").strip() for i in (items or [])]
+    if any(any(kw in t for kw in AGREEMENT_TITLE_TEXTS) for t in texts):
+        return True
+    short = {t for t in texts if 0 < len(t) <= 6}
+    return "同意" in short and "拒绝" in short
+
+
+def _handle_agreement(logger, hwnd: int, scales, confidences, items) -> bool:
+    """点掉协议弹窗的「同意」。模板 → 精确短文本 → 固定比例三级兜底。
+
+    返回是否执行了点击；点完由调用方重新 OCR 等主界面，不在这里判成败
+    （弹窗关掉后可能还要走「点击进入」）。
+    """
+    rect = _window_rect(hwnd)
+    if not rect:
+        return False
+    left, top, width, height = rect
+
+    if os.path.isfile(AGREEMENT_TEMPLATE):
+        center = _match_center(hwnd, AGREEMENT_TEMPLATE, scales, confidences, region=AGREE_REGION)
+        if center:
+            _click(center)
+            logger.info("[原神] 用户协议弹窗：模板命中「同意」并点击 @ %s", center)
+            time.sleep(1.5)
+            return True
+
+    hit = _pick_short_button(
+        items, CONFIRM_TEXTS, min_conf=0.5,
+        region=_subregion(rect, *AGREE_REGION),
+    )
+    if hit:
+        _click(hit[2]["center"])
+        logger.info("[原神] 用户协议弹窗：OCR 命中「%s」并点击 @ %s",
+                    hit[2].get("text"), hit[2]["center"])
+        time.sleep(1.5)
+        return True
+
+    center = (left + width * AGREE_FALLBACK_FRAC[0], top + height * AGREE_FALLBACK_FRAC[1])
+    _click(center)
+    logger.info("[原神] 用户协议弹窗：OCR/模板都没认出按钮，按比例点「同意」@ %s", center)
+    time.sleep(1.5)
+    return True
+
+
 def _claim_welkin(logger, hwnd: int, scales, confidences) -> None:
     """空月祝福弹窗：优先 OCR 点「领取」，兜底点弹窗下方中央。"""
     items = _ocr(logger, hwnd)
@@ -208,12 +295,25 @@ def enter_main_interface(
     end = time.time() + max(1, timeout)
     main_hits = 0
     last_ocr = 0.0
+    ocr_items = []  # 一次 OCR 供弹窗 / 入口 / 确认共用，避免同帧反复识别
     while time.time() < end:
         if _stop(stop_check):
             return False, "用户请求停止", hwnd, pid
         if not _window_alive(hwnd):
             return False, "游戏窗口已关闭", hwnd, pid
         _focus(hwnd)
+
+        if time.time() - last_ocr >= 3:
+            last_ocr = time.time()
+            ocr_items = _ocr(logger, hwnd)
+
+        # 0) 用户协议弹窗优先级最高：更新日会堵在登录页，正文里的「进入游戏」
+        #    和「同意」都不是按钮，必须先按弹窗处理，否则后面全被误点带偏。
+        if _agreement_visible(ocr_items):
+            if _handle_agreement(logger, hwnd, scales, confidences, ocr_items):
+                main_hits = 0
+                last_ocr = 0.0  # 弹窗关掉后立刻重扫，别拿旧帧再点一次
+                continue
 
         # 1) 主界面特征连续 2 次命中（派蒙图标只在主界面左上角显示）
         if _match_center(hwnd, MAIN_TEMPLATE, scales, confidences, region=MAIN_REGION):
@@ -240,26 +340,25 @@ def enter_main_interface(
                 time.sleep(2.0)
                 continue
 
-            # 4) OCR 兜底（3s 节流）：入口文字 / 确认
-            if time.time() - last_ocr >= 3:
-                last_ocr = time.time()
-                items = _ocr(logger, hwnd)
-                rect = _window_rect(hwnd)
-                hit = None
-                if rect:
-                    hit = _pick(items, ENTRY_OCR_TEXTS, min_conf=0.5,
-                                region=_subregion(rect, 1 / 3, 1 / 2, 2 / 3, 1 / 2))
-                if hit:
-                    _click(hit[2]["center"])
-                    logger.info("[原神] OCR 点击「%s」@ %s", hit[2].get("text"), hit[2]["center"])
-                    time.sleep(2.0)
-                    continue
-                hit = _pick(items, CONFIRM_TEXTS, min_conf=0.6)
-                if hit:
-                    _click(hit[2]["center"])
-                    logger.info("[原神] 弹窗「%s」已点击 @ %s", hit[2].get("text"), hit[2]["center"])
-                    time.sleep(1.0)
-                    continue
+            # 4) OCR 兜底：只认按钮级短文本，长句里出现同名词一律不算
+            rect = _window_rect(hwnd)
+            hit = None
+            if rect:
+                hit = _pick_short_button(
+                    ocr_items, ENTRY_OCR_TEXTS, min_conf=0.5,
+                    region=_subregion(rect, 1 / 3, 1 / 2, 2 / 3, 1 / 2),
+                )
+            if hit:
+                _click(hit[2]["center"])
+                logger.info("[原神] OCR 点击「%s」@ %s", hit[2].get("text"), hit[2]["center"])
+                time.sleep(2.0)
+                continue
+            hit = _pick_short_button(ocr_items, CONFIRM_TEXTS, min_conf=0.5)
+            if hit:
+                _click(hit[2]["center"])
+                logger.info("[原神] 弹窗「%s」已点击 @ %s", hit[2].get("text"), hit[2]["center"])
+                time.sleep(1.0)
+                continue
         time.sleep(1.0)
 
     message = "等待主界面超时"

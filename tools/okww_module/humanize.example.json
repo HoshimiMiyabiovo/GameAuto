@@ -1,0 +1,17 @@
+{
+  "_comment": "按队伍覆盖战斗输入节流。键 = 三个角色类名按字母序用 __ 连接（Windows 不区分大小写）。",
+  "enabled": true,
+  "target_cps": 5.0,
+  "jitter": 0.25,
+  "micro_pause_chance": 0.03,
+  "micro_pause_sec": [0.08, 0.18],
+  "key_jitter_ms": 0,
+  "teams": {
+    "Aemeath__Chisa__Denia": {
+      "target_cps": 5.0
+    },
+    "Hsin__ShoreKeeper__Suoming": {
+      "target_cps": 5.0
+    }
+  }
+}

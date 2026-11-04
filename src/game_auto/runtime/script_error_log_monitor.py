@@ -26,6 +26,7 @@ class ScriptErrorLogWatcher:
         *,
         file_pattern: str = "*.log",
         error_keywords: Optional[List[str]] = None,
+        ignore_keywords: Optional[List[str]] = None,
         date_format: str = "%Y-%m-%d",
         encoding: str = "utf-8",
         require_date_token: bool = True,
@@ -36,6 +37,8 @@ class ScriptErrorLogWatcher:
         self.log_dir = Path(log_dir)
         self.file_pattern = file_pattern or "*.log"
         self.error_keywords = tuple(k for k in (error_keywords or DEFAULT_ERROR_KEYWORDS) if k)
+        # 命中这些词的 ERROR 行忽略（脚本可自愈的瞬时错误，别把整个任务杀掉）
+        self.ignore_keywords = tuple(k for k in (ignore_keywords or []) if k)
         self.date_format = date_format or "%Y-%m-%d"
         self.encoding = encoding or "utf-8"
         # require_date_token=False：监控无日期后缀的常驻主日志（如 ok-ef 的
@@ -105,6 +108,8 @@ class ScriptErrorLogWatcher:
                 line = raw_line.strip()
                 if not line:
                     continue
+                if any(keyword in line for keyword in self.ignore_keywords):
+                    continue
                 for keyword in self.error_keywords:
                     if keyword in line:
                         return line
@@ -142,6 +147,10 @@ def build_script_error_watchers(config: dict, logger) -> List[ScriptErrorLogWatc
                     or monitor_config.get("error_markers")
                     or top_level.get("error_markers")
                     or None
+                ),
+                ignore_keywords=(
+                    monitor_config.get("ignore_keywords")
+                    or top_level.get("ignore_keywords")
                 ),
                 date_format=str(monitor_config.get("date_format", "%Y-%m-%d") or "%Y-%m-%d"),
                 encoding=str(monitor_config.get("encoding", "utf-8") or "utf-8"),

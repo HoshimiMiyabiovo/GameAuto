@@ -71,10 +71,41 @@ EXIT_CHECK_SEC = 5           # 每次 ESC 后等主世界特征出现的超时
 # 冒险记录 / 信用点 / 无生残刃…」，清单里的星轨专票/星轨通票在折叠区以下。
 # 一次整窗 OCR 看不到 → 被"看不到=已买过"吞掉，静默漏买。
 # 改成：当前视图定位不到就往下翻着找，翻遍列表仍没有才算"已买过"。
-SCROLL_STEP = -5                    # pyautogui.scroll 负值 = 向下滚
+# 2026-11-04 三次取证（三月七 `module/automation/local_input.py::mouse_scroll`）：
+# 它是 `for _ in range(count): pyautogui.scroll(-1, _pause=True)` —— **一次只发一格、
+# 每格之间带 pause**，日志里「滚轮滚动 -12 次」「-40 次」就是这个循环。旧实现
+# `pyautogui.scroll(-5)` 一次性发 delta=-600，Unity 网格逐帧吃 wheel 事件时会被
+# 吞掉，表现正是「8 屏滚完商品卡一行没动」。这里照抄逐格 + 间隔，并改成 -12。
+SCROLL_STEP = -12                   # 每屏 12 格单格滚轮事件（三月七同款量级）
+SCROLL_TICK_PAUSE_SEC = 0.08        # 单格之间的间隔，让游戏逐帧处理
 SCROLL_SETTLE_SEC = 0.6             # 滚完等列表重绘
 SCROLL_MAX_PAGES = 8                # 最多往下翻几屏
 SCROLL_ANCHOR_DEFAULT = (0.60, 0.55)  # 滚轮落点（窗口比例）：商品网格中部
+# 2026-11-03 修：原来用 32x18 缩略图的 MD5 判断"滚动了没有"，卡片角标有闪烁/
+# 光效，签名每帧都不同 → 「列表没变化」的熔断一次都没触发，每件商品 8 轮 x 25s
+# OCR 全跑满（3 件烧了 12 分钟）。改成灰度缩略图的平均像素差：真实滚动差 > 10，
+# 角标闪烁的面积极小（差 < 1），连续两次低于阈值才判定滚轮无效。
+SCROLL_DIFF_THRESHOLD = 2.0
+SCROLL_STATIC_STREAK = 2
+# 翻页时每屏只需一次整窗 OCR 就能判断有没有该商品，不再等满 25s
+SCROLL_LOCATE_OCR_TIMEOUT = 6
+# 2026-11-04 二次实锤：像素差也被背景动画骗了 —— 余烬兑换每屏差 30~40，
+# 失败截图里商品卡一行没换，effective 却被记成 8、scroll_verified_dead=0，
+# 上层因此把「看不到」当「已买过」（07:51:45 日志实锤的漏买通道）。
+# 现在以「列表文字签名」为准判断内容是否真的换了一批；滚轮连续无效时
+# 改用拖动右侧滚动条（截图右缘能看到滚动条），两种都无效才判 dead。
+SCROLL_BAR_X_FRAC = 0.995        # 滚动条贴着窗口右缘
+SCROLL_BAR_TOP_FRAC = 0.34       # 滑块上部（往下拖的起点）
+SCROLL_BAR_BOTTOM_FRAC = 0.76    # 往下拖的终点 / 往上拖的起点
+# 2026-11-04 五次取证：`tasks/daily/ember_exchange.py::_scroll_to_bottom_for_retry`
+# 才是三月七真正的「翻页」—— 商品在列表最底下，它不逐屏翻，而是顶部整屏扫一遍
+# 后把没命中的商品记进 unresolved_items，鼠标移到列表中心
+# `RETRY_SCROLL_CENTER_CROP=(955/1920,535/1080,10/1920,10/1080)`，
+# 一次性 `mouse_scroll(120,-1,False)` **滚到底**，再补扫一次。
+SCROLL_TO_BOTTOM_TICKS = 120
+SCROLL_TO_BOTTOM_ANCHOR = (955 / 1920, 535 / 1080)
+SCROLL_BOTTOM_TICK_SEC = 0.01
+SCROLL_BOTTOM_SETTLE_SEC = 1.0
 
 # 已选中页签的亮度判据：选中态是亮色胶囊（绝区零黄底 / 崩铁白底），
 # 未选中态是暗底白字。实测 1919x1079：绝区零 145 vs 78，崩铁 188 vs 53。
@@ -547,7 +578,11 @@ def _scroll_shop_list(
     anchor_frac,
     stop_check: Optional[Callable[[], bool]] = None,
 ) -> bool:
-    """在商品网格上滚一屏。返回是否成功滚动。"""
+    """在商品网格上滚一屏：逐格发送单格滚轮事件，返回是否执行成功。
+
+    不能写成 `pyautogui.scroll(amount)` 一次发完 —— 三月七的实机日志证明
+    游戏列表只吃「一格一个事件、事件之间有间隔」的滚动。见 SCROLL_STEP 注释。
+    """
     point = _scroll_anchor_point(hwnd, anchor_frac)
     if not point:
         return False
@@ -556,7 +591,12 @@ def _scroll_shop_list(
 
         _focus_window(hwnd)
         pyautogui.moveTo(point[0], point[1])
-        pyautogui.scroll(amount)
+        step = -1 if int(amount) < 0 else 1
+        for _ in range(abs(int(amount))):
+            if stop_check is not None and stop_check():
+                return False
+            pyautogui.scroll(step)
+            _sleep(SCROLL_TICK_PAUSE_SEC, stop_check)
     except Exception as exc:  # noqa: BLE001 - 滚不动不影响主流程
         logger.debug(f"[每月兑换] 滚动商品列表失败: {exc}")
         return False
@@ -564,16 +604,133 @@ def _scroll_shop_list(
     return True
 
 
-def _list_signature(hwnd: int, anchor_frac) -> str:
-    """商品区粗哈希：判断滚轮到底有没有把列表滚动（取不到返回空串）。"""
-    try:
-        import hashlib
+def _list_text_signature(logger: logging.Logger, hwnd: int):
+    """当前商品列表的 OCR 文字集合签名，用来判列表是否真换了内容。
 
+    2026-11-04 20:17 实跑教训：首版把 y//24 分桶塞进签名，卡片光效让 OCR
+    框每帧抖 1~2px 就跨桶，8 屏全判「文字变化」，`effective=8`、一次都没
+    切到拖动滚动条，严格语义形同虚设。现在**只收文字、不带坐标**，并且用
+    Jaccard 差异率（见 `_signatures_differ`）容忍少量 OCR 抖动。
+    取不到 OCR 时返回 None，调用方自动退回旧的像素差判据。
+    """
+    try:
+        from .ocr_click_tester import ocr_window_content
+
+        items = ocr_window_content(logger, hwnd=hwnd) or []
+    except Exception as exc:  # noqa: BLE001 - OCR 不可用就退回像素差
+        LOGGER.debug("[每月兑换] 列表文字签名 OCR 失败: %s", exc)
+        return None
+    parts = set()
+    for item in items:
+        text = str(item.get("text") or "").strip()
+        if len(text) < 2:
+            continue
+        try:
+            conf = float(item.get("confidence") or 0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        if conf < 0.55:
+            continue
+        parts.add(text)
+    return frozenset(parts) if parts else None
+
+
+def _signatures_differ(before, after, ratio: float = 0.12) -> bool:
+    """两屏文字集合是否真的换了一批内容（差异率 > 12% 才算滚了）。
+
+    游戏卡片光效会让单帧 OCR 少认/多认一两条，全等比较太严；用对称差集
+    占并集的比例容忍这种噪声。任一为空时按"变了"处理，交回像素差兜底。
+    """
+    if before is None or after is None:
+        return True
+    a, b = frozenset(before), frozenset(after)
+    if a == b:
+        return False
+    union = a | b
+    return bool(union) and len(a ^ b) / len(union) > ratio
+
+
+def _drag_shop_scrollbar(
+    logger: logging.Logger,
+    hwnd: int,
+    downward: bool = True,
+    stop_check: Optional[Callable[[], bool]] = None,
+) -> bool:
+    """滚轮对游戏内网格无效时的兜底：直接拖右侧滚动条滑块。
+
+    2026-11-04 证据图右缘 x≈957/960、y≈150~430/540 有一条滚动条滑块，
+    说明列表本身可滚，只是 Unity 网格不吃 WM_MOUSEWHEEL。
+    """
+    try:
+        from .foreground_flow_runner import _focus_window, _window_rect
+
+        rect = _window_rect(hwnd)
+        if not rect:
+            return False
+        left, top, width, height = rect
+        x = int(left + width * SCROLL_BAR_X_FRAC)
+        y_from = SCROLL_BAR_TOP_FRAC if downward else SCROLL_BAR_BOTTOM_FRAC
+        y_to = SCROLL_BAR_BOTTOM_FRAC if downward else SCROLL_BAR_TOP_FRAC
+        _focus_window(hwnd)
+        pyautogui.moveTo(x, int(top + height * y_from))
+        pyautogui.mouseDown()
+        pyautogui.moveTo(x, int(top + height * y_to), duration=0.35)
+        pyautogui.mouseUp()
+    except Exception as exc:  # noqa: BLE001 - 拖不动就如实返回 False
+        logger.debug(f"[每月兑换] 拖动滚动条失败: {exc}")
+        return False
+    _sleep(SCROLL_SETTLE_SEC, stop_check)
+    return True
+
+
+def _scroll_list_to_edge(
+    logger: logging.Logger,
+    hwnd: int,
+    down: bool,
+    anchor_frac,
+    stop_check: Optional[Callable[[], bool]] = None,
+) -> bool:
+    """三月七 `_scroll_to_bottom_for_retry` 同款：一次性逐格滚到列表底（或回顶）。
+
+    落点用它的 `RETRY_SCROLL_CENTER_CROP`（列表正中央），120 个单格
+    `pyautogui.scroll(±1, _pause=False)` 连续发出，中间只留 10ms 让游戏
+    逐帧处理。不要把它拆成「每屏滚一点 + 每屏 OCR」—— 商品就在最底下，
+    一屏一屏找永远碰不到，还会在每屏 8 秒的 OCR 里让惯性回弹。
+    """
+    point = _scroll_anchor_point(hwnd, anchor_frac)
+    if not point:
+        return False
+    try:
+        from .foreground_flow_runner import _focus_window
+
+        _focus_window(hwnd)
+        pyautogui.moveTo(point[0], point[1])
+        _sleep(SCROLL_BOTTOM_SETTLE_SEC, stop_check)
+        step = -1 if down else 1
+        for _ in range(SCROLL_TO_BOTTOM_TICKS):
+            if stop_check is not None and stop_check():
+                return False
+            pyautogui.scroll(step, _pause=False)
+            _sleep(SCROLL_BOTTOM_TICK_SEC, stop_check)
+    except Exception as exc:  # noqa: BLE001 - 滚不动就如实返回 False
+        logger.debug(f"[每月兑换] 一次滚到列表边缘失败: {exc}")
+        return False
+    _sleep(SCROLL_SETTLE_SEC, stop_check)
+    return True
+
+
+def _list_thumb(hwnd: int, anchor_frac):
+    """取商品区灰度缩略图（32x18 像素列表）；取不到返回 None。
+
+    不再用 MD5：卡片角标闪烁/光效会导致每帧哈希都不同，`sig == before` 永远
+    不成立，熔断形同虚设。像素列表可以算平均差，对小幅动画不敏感。
+    """
+    try:
         from .foreground_flow_runner import _window_rect
 
         rect = _window_rect(hwnd)
         if not rect:
-            return ""
+            return None
         left, top, width, height = rect
         fx, fy = float(anchor_frac[0]), float(anchor_frac[1])
         box = (
@@ -583,10 +740,17 @@ def _list_signature(hwnd: int, anchor_frac) -> str:
             max(1, int(height * 0.5)),
         )
         img = pyautogui.screenshot(region=box).convert("L").resize((32, 18))
-        return hashlib.md5(img.tobytes()).hexdigest()
-    except Exception as exc:  # noqa: BLE001 - 取不到指纹按"未知"处理
-        LOGGER.debug("[每月兑换] 取列表指纹失败: %s", exc)
-        return ""
+        return list(img.getdata())
+    except Exception as exc:  # noqa: BLE001 - 取不到缩略图按"未知"处理
+        LOGGER.debug("[每月兑换] 取列表缩略图失败: %s", exc)
+        return None
+
+
+def _thumb_diff(before, after) -> float:
+    """两张缩略图的平均像素差（0~255）；任一为空返回一个大值。"""
+    if not before or not after or len(before) != len(after):
+        return 999.0
+    return sum(abs(int(a) - int(b)) for a, b in zip(before, after)) / len(before)
 
 
 def _scroll_find_item(
@@ -597,47 +761,172 @@ def _scroll_find_item(
     confidences,
     stop_check: Optional[Callable[[], bool]],
     label: str,
+    diag: Optional[Dict[str, int]] = None,
 ) -> Optional[Tuple[int, int]]:
     """当前视图没有该商品时，往下翻着找（长列表页必备）。
 
     2026-11-02 实锤：崩铁余烬兑换页同屏只有 2~3 行商品，证据图里能看到的只有
     「命运的足迹 / 冒险记录 / 煤油以太 / 遗失碎金 / 信用点 / 无生残刃…」，
-    清单里的**星轨专票、星轨通票在折叠区以下**，一次整窗 OCR 根本看不到 →
-    被"看不到=已买过"吞掉，静默漏买。这里翻页找完，找不到再滚回顶部。
+    清单里的**星轨专票、星轨通票在折叠区下方**，一次整窗 OCR 根本看不到 →
+    被"看不到=已买过"吞掉，静默漏买。
 
-    翻页是否真的滚动用列表区域截图指纹判断：像素没变说明这个页面滚不动，
-    立刻停止，别白等几轮 OCR。
+    2026-11-03 二次实锤（用户复核）：这个修复**实测无效**——
+      - 原先用 32x18 缩略图 MD5 判断"滚没滚"，卡片角标闪烁让签名每帧都变，
+        「列表没变化」的熔断一次都没触发；
+      - 滚轮对崩铁商城网格到底有没有效，从未被验证，校验失效后这个未知被完全掩盖；
+      - 每屏 OCR 还等满 25s，8 屏 × 3 件 ≈ 12 分钟纯空转。
+    现在：像素平均差判滚动 + 连续两次判定不动就熔断 + 每屏 OCR 缩短到 6s，
+    并且翻页失败要落 flow_failures 证据（截图 + 当帧文字），不再静默"按已购买处理"。
+
+    2026-11-04 三次实锤：像素差同样会被背景动画骗——余烬兑换每屏差 30~40，
+    可商品卡一行没换，`effective` 被算成 8、`scroll_verified_dead=0`，上层又
+    把「看不到」当「已买过」（07:51:45 日志：三项 0/5 按已购买处理）。
+    现在每屏取一次 OCR 文字集合签名（带 12% 抖动容忍）：签名不变就是没滚；
+    滚轮连续两次没滚就改用拖动右缘滚动条，两种都无效才让 diag 标 dead。
+    20:17 实跑又补一层：滚动本身改成逐格单事件（见 SCROLL_STEP），否则
+    签名判得再准也只是在原地判"没滚"。
+
+    diag（2026-11-04）：调用方传入共享 dict，用于把"滚动到底有没有生效"暴露给
+    `_buy_items` 的判定——`effective_pages` 是画面真的变过的页数；翻遍了仍没找到
+    且 `scroll_verified_dead` 为 1（一屏都没滚成功）时，调用方**不得**把"看不到"
+    当"已买过"（滚轮无效时折叠区下的商品永远看不到，那是漏买不是买完）。
     """
     from .zzz_monthly_shop import _locate_item
 
     anchor = SCROLL_ANCHOR_DEFAULT
+    item_name = str(item.get("name") or "商品")
+    last_diff = 999.0
+    scrolled = 0
+    effective = 0
+    mode = "wheel"
+    diag = diag if diag is not None else {}
     try:
-        before = _list_signature(hwnd, anchor)
+        prev = _list_thumb(hwnd, anchor)
+        prev_sig = _list_text_signature(logger, hwnd)
+        # 只有真拿到 OCR 文字签名才启用「改拖滚动条」这条新路径；无 OCR 的
+        # 测试/降级环境保持旧的像素差熔断行为，不会去动用户的鼠标。
+        sig_enabled = prev_sig is not None
+        static_streak = 0
+        if sig_enabled:
+            # 2026-11-04：三月七 `ember_exchange.py` 的做法是「顶部整屏扫一遍 →
+            # 一次性滚 120 格到底 → 底部补扫」，没有命中才继续别的尝试。
+            # 用户实锤清单商品就在最底下；我们先补这一刀，8 屏逐格滚动留作兜底。
+            logger.info(f"[{label}] 先按三月七口径一次滚到列表底部补扫")
+            if _scroll_list_to_edge(
+                logger, hwnd, True, SCROLL_TO_BOTTOM_ANCHOR, stop_check
+            ):
+                bottom_center = _locate_item(
+                    logger, hwnd, item, scales, confidences, stop_check, label,
+                    ocr_timeout=SCROLL_LOCATE_OCR_TIMEOUT,
+                )
+                if bottom_center:
+                    logger.info(f"[{label}] 列表底部补扫命中商品 @ {bottom_center}")
+                    diag["effective_pages"] = max(1, effective)
+                    return bottom_center
+                # 底部也没有 → 滚回顶部，继续原来的逐屏查找
+                _scroll_list_to_edge(
+                    logger, hwnd, False, SCROLL_TO_BOTTOM_ANCHOR, stop_check
+                )
         for page in range(1, SCROLL_MAX_PAGES + 1):
             if stop_check is not None and stop_check():
                 return None
-            if not _scroll_shop_list(logger, hwnd, SCROLL_STEP, anchor, stop_check):
-                logger.info(f"[{label}] 商品列表滚不动，停止翻页查找")
+            if mode == "drag":
+                advanced = _drag_shop_scrollbar(logger, hwnd, True, stop_check)
+            else:
+                advanced = _scroll_shop_list(logger, hwnd, SCROLL_STEP, anchor, stop_check)
+            if not advanced:
+                logger.warning(f"[{label}] 商品列表滚不动（{mode} 未执行），停止翻页")
                 break
-            sig = _list_signature(hwnd, anchor)
-            if sig and before and sig == before:
-                logger.info(f"[{label}] 列表内容没变化，停止翻页查找")
-                break
-            if sig:
-                before = sig
-            center = _locate_item(logger, hwnd, item, scales, confidences, stop_check, label)
+            cur = _list_thumb(hwnd, anchor)
+            last_diff = _thumb_diff(prev, cur)
+            cur_sig = _list_text_signature(logger, hwnd)
+            if sig_enabled and cur_sig is not None:
+                changed = _signatures_differ(prev_sig, cur_sig)
+            else:
+                # 降级：拿不到文字签名时仍按旧的像素差判断
+                changed = cur is not None and last_diff >= SCROLL_DIFF_THRESHOLD
+            logger.info(
+                f"[{label}] 翻页第 {page} 屏（{mode}）：像素差 {last_diff:.1f}，"
+                f"列表文字{'变化' if changed else '未变'}"
+            )
+            if not changed:
+                static_streak += 1
+                logger.warning(
+                    f"[{label}] 第 {page} 次 {mode} 后列表内容没变（像素差 {last_diff:.1f}）"
+                )
+                if sig_enabled and mode == "wheel" and static_streak >= SCROLL_STATIC_STREAK:
+                    # 像素差大但文字一行没换 = 背景动画，滚轮其实没滚列表。
+                    # 截图右缘有滚动条 → 直接拖滑块再试，别再空烧 8 屏 OCR。
+                    logger.warning(f"[{label}] 滚轮对该网格无效，改用拖动右侧滚动条")
+                    mode = "drag"
+                    static_streak = 0
+                elif static_streak >= SCROLL_STATIC_STREAK:
+                    logger.warning(
+                        f"[{label}] 连续 {static_streak} 次翻不动，停止翻页（不再空等 OCR）"
+                    )
+                    break
+            else:
+                static_streak = 0
+                effective += 1
+            prev = cur if cur is not None else prev
+            prev_sig = cur_sig if cur_sig is not None else prev_sig
+            scrolled = page
+            center = _locate_item(
+                logger, hwnd, item, scales, confidences, stop_check, label,
+                ocr_timeout=SCROLL_LOCATE_OCR_TIMEOUT,
+            )
             if center:
                 logger.info(f"[{label}] 翻到第 {page} 屏后找到商品 @ {center}")
                 # 不滚回去：返回的坐标马上要用来点击，回滚会点错位置
+                diag["effective_pages"] = effective
                 return center
-        # 没找到：滚回顶部，下一个商品从头找
-        for _ in range(SCROLL_MAX_PAGES):
-            if not _scroll_shop_list(logger, hwnd, -SCROLL_STEP, anchor, stop_check):
-                break
+        # 没找到：滚回顶部，下一个商品从头找（滚轮无效时别白滚）
+        if scrolled:
+            for _ in range(SCROLL_MAX_PAGES):
+                if not _scroll_shop_list(logger, hwnd, -SCROLL_STEP, anchor, stop_check):
+                    break
+            if mode == "drag":
+                _drag_shop_scrollbar(logger, hwnd, False, stop_check)
+        diag["effective_pages"] = effective
+        diag["scroll_verified_dead"] = 1 if effective == 0 else 0
+        _record_scroll_failure(logger, hwnd, label, item_name, scrolled, last_diff)
         return None
     except Exception as exc:  # noqa: BLE001 - 翻页兜底失败不能拖垮采购
         logger.warning(f"[{label}] 翻页查找异常（已忽略）: {exc}")
         return None
+
+
+def _record_scroll_failure(
+    logger: logging.Logger,
+    hwnd: int,
+    label: str,
+    item_name: str,
+    scrolled: int,
+    last_diff: float,
+) -> None:
+    """翻页翻遍了仍没找到商品 → 落一条失败取证（截图 + 当帧 OCR）。
+
+    用户 2026-11-03 要求：这种"按已购买处理"的静默路径必须留证据，否则
+    滚轮是否真的滚了、页面停在哪一屏，事后完全查不到。
+    """
+    try:
+        from .flow_diagnostics import record_failure
+
+        record_failure(
+            logger,
+            flow_key=label,
+            step=f"{item_name}·翻页查找",
+            error=(
+                f"翻页 {scrolled} 屏仍未找到（末次像素差 {last_diff:.1f}；"
+                f"以列表文字签名为准，像素差大也可能是背景动画，"
+                f"滚轮无效时会改拖右侧滚动条）"
+            ),
+            hwnd=hwnd,
+            save_image=True,
+            extra={"kind": "monthly_shop_scroll", "scrolled_pages": scrolled},
+        )
+    except Exception as exc:  # noqa: BLE001 - 取证失败不能影响采购
+        logger.debug(f"[{label}] 翻页失败取证写入失败（已忽略）: {exc}")
 
 
 def _buy_items(
@@ -659,12 +948,22 @@ def _buy_items(
     才算真失败。
 
     scroll_search=True 时，当前视图定位不到会先往下翻页找（长列表页必备），
-    翻遍列表仍没有才按"已买过"处理。
+    翻遍列表仍没有才按"已买过"处理。**例外（2026-11-04）**：翻页跑完但一屏都没
+    滚动成功（`scroll_verified_dead`，滚轮对该列表无效）时，"看不到"可能是折叠区
+    下的商品根本没被扫到——这时判失败，不按已购买处理，下次批次会带着
+    flow_failures 的证据重试。
     """
     summaries: List[str] = []
     all_ok = True
     missing_count = 0
-    scroll_finder = _scroll_find_item if scroll_search else None
+    scroll_diag: Dict[str, int] = {}
+
+    def _scroll_finder(*args, **kwargs):
+        # 包一层把共享 diag 塞进去；模块级名字在调用时解析，测试 patch
+        # mx._scroll_find_item 依然生效。
+        return _scroll_find_item(*args, diag=scroll_diag, **kwargs)
+
+    scroll_finder = _scroll_finder if scroll_search else None
 
     for raw in items:
         if stop_check is not None and stop_check():
@@ -707,6 +1006,12 @@ def _buy_items(
                 reason = "页面仍有剩余，未买满"
                 break
             if result == ITEM_MISSING:
+                if scroll_finder is not None and scroll_diag.get("scroll_verified_dead"):
+                    # 2026-11-04：翻页开着却一屏都没滚成功——"看不到"不能当"已买过"，
+                    # 否则滚轮失效时折叠区下的商品永远漏买（11-03 中午崩铁 0/5 实锤）。
+                    # 判失败 → 本步不成功 → 不写月度标记，下批带着翻页取证重试。
+                    reason = "商品未找到且页面无法滚动（滚轮疑似无效），不能按已购买处理"
+                    break
                 missing_count += 1
                 reason = "页面上没看到该商品，按已购买处理"
                 break

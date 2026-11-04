@@ -12,6 +12,13 @@ import threading
 
 import pyautogui
 import win32gui
+
+
+def _guarded_click(*args, **kwargs):
+    """前台点击统一走收口（默认极短按住）；局部 import 避免循环依赖。"""
+    from .foreground_flow_runner import _pyautogui_click_guarded
+    return _pyautogui_click_guarded(*args, **kwargs)
+
 from PIL import ImageOps, ImageEnhance, ImageDraw, Image, ImageFont
 import numpy as np
 from ..settings.paths import OCR_DEBUG_DIR, TEMPLATES_DIR, TESSDATA_DIR, TESSERACT_EXE, WORKFLOW_DB_PATH as PROJECT_WORKFLOW_DB_PATH
@@ -1294,7 +1301,7 @@ def _click_text_with_retry(
                 center = _find_by_template(logger, template_path, region=None)
             if center:
                 logger.info(f"通过模板识别到 [{text}]，点击坐标: {center}")
-                pyautogui.click(center[0], center[1], button="left")
+                _guarded_click(center[0], center[1], button="left")
                 time.sleep(1.0)
                 return True
 
@@ -1305,7 +1312,7 @@ def _click_text_with_retry(
         if center:
             x, y = int(center[0]), int(center[1])
             logger.info(f"识别到文本 [{text}]，点击坐标: ({x}, {y})")
-            pyautogui.click(x, y, button="left")
+            _guarded_click(x, y, button="left")
             time.sleep(1.0)
             return True
         time.sleep(0.8)
@@ -1396,7 +1403,7 @@ def _wait_running_with_retry_start(
             if start_center:
                 sx, sy = int(start_center[0]), int(start_center[1])
                 logger.info(f"未检测到稳定运行中，重试点击[开始]: ({sx}, {sy})")
-                pyautogui.click(sx, sy, button="left")
+                _guarded_click(sx, sy, button="left")
                 last_retry_click = time.time()
                 time.sleep(1.0)
 
@@ -2032,7 +2039,7 @@ def run_xm_enhanced_flow(
             if center:
                 x, y = int(center[0]), int(center[1])
                 logger.info(f"[步骤{step_num}] 点击 ({x}, {y}) [匹配方式: {match_method}]")
-                pyautogui.click(x, y, button="left")
+                _guarded_click(x, y, button="left")
                 time.sleep(1.5 if target_text == "登录" else 1.0)  # 登录后多等一会
             else:
                 logger.error(f"[步骤{step_num}] ❌ 未识别到 \"{target_text}\"")

@@ -58,6 +58,8 @@ class AutomationView:
         if busy:
             self._request_toast("已有任务在运行中", "#b66f1f")
             return
+        # 用户手动点"开始"→解除停止闸门，恢复定时任务/更新补跑的自动触发
+        self._auto_run_paused = False
         if not shutdown_on_finish:
             self._shutdown_pending = False
             self._shutdown_deferred = False
@@ -72,10 +74,19 @@ class AutomationView:
 
     @Slot()
     def stopAutomation(self):
-        """请求停止当前自动化任务。"""
+        """请求停止当前自动化任务，并暂停后续自动补跑（直到用户再次点开始）。"""
+        first_stop = not getattr(self, "_auto_run_paused", False)
+        self._auto_run_paused = True
+        # 排队中的定时任务一并取消：停止就应该停下来，不能等本轮结束再自己开
+        try:
+            self._pending_scheduled.clear()
+        except Exception:
+            pass
         if self._controller:
             self._controller.stop_current_task = True
-            logger.info("[Bridge] 用户请求停止任务")
+            logger.info("[Bridge] 用户请求停止任务（已暂停定时任务/更新补跑）")
+            if first_stop:
+                self._request_toast("正在停止当前任务，并暂停后续自动补跑", "#b66f1f")
         else:
             self._request_toast("没有运行中的任务", "#6d6257")
         # 同步停止 WebUI 侧控制器，保证 WebUI 发起的任务也能被 GUI 停止

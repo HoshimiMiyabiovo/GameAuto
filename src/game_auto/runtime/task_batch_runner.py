@@ -152,6 +152,20 @@ def _run_pending_monthly_flow(controller, app_key: str) -> Optional[Tuple[str, b
     if entry is None or controller.stop_current_task:
         return None
     flow_key, label = entry
+    # 2026-11-04：某游戏的每月事项交给外部脚本（如崩铁交给三月七）时，
+    # flow_configs 里把该流程设 enabled=false。这里提前跳过：否则 run_flow
+    # 会返回「流程已禁用」，被 _append_monthly_report 当成失败写一行 ❌，
+    # 且因为不写月度标记，收尾补漏每批次都会再试一次。
+    try:
+        from .foreground_flow_runner import _load_flow_config
+
+        monthly_cfg = _load_flow_config(flow_key)
+    except Exception as exc:  # noqa: BLE001 - 读配置失败不能挡住原有月度流程
+        controller.logger.debug("[%s] 读取月度流程配置失败: %s", label, exc)
+        monthly_cfg = None
+    if monthly_cfg is not None and not monthly_cfg.get("enabled", True):
+        controller.logger.info("[%s] 流程已禁用，跳过（本月由外部脚本负责）", label)
+        return None
     if is_monthly_flow_done(flow_key):
         return None
 
@@ -191,6 +205,10 @@ def _append_monthly_report(
     if monthly is None:
         return
     line, ok = monthly
+    # 2026-11-04：结果行同步进 runner 日志——以前只有邮件日报里有，
+    # 11-03 崩铁 0/5 那种事日志里全程无痕，只能靠用户看邮件才发现。
+    log_fn = controller.logger.info if ok else controller.logger.warning
+    log_fn("[月商店] %s", line)
     report.append(line)
     if not ok:
         warnings.append(line)
@@ -834,7 +852,14 @@ def _run_single_task(
     # 事后日志复核（绝区零/星铁March7th/鸣潮/终末地/异环）：日志显示没跑完则改判失败；
     # 无当日日志时保持原判。只做 success→failed，不做反向。放在全部分支之后，
     # ok 脚本分支（elif）和常规分支（else）都能覆盖到。
-    if success and not controller.stop_current_task:
+    # 模块模式（ok-ww runner）的结论来自 runner 的 task 返回值，不再用日志标记复核。
+    _module_mode_cfg = app_config.get("module_mode")
+    _module_mode = (
+        isinstance(_module_mode_cfg, dict)
+        and bool(_module_mode_cfg.get("enabled"))
+        and str(app_config.get("script_name") or "") == "ok-ww"
+    )
+    if success and not controller.stop_current_task and not _module_mode:
         _verify_msg = _verify_script_log_result(
             app_key, effective_script_choice, display_name, controller.logger)
         if _verify_msg:
@@ -860,7 +885,11 @@ def _run_single_task(
             report_lines.append(f"{label:20} ❌ 失败: {message} (运行: {time_str}) [已终止进程]")
         else:
             report_lines.append(f"{label:20} ❌ 失败: {message} (运行: {time_str})")
-    elif duration < MIN_RUN_TIME and not app_config.get("skip_min_run_warning"):
+    elif (
+        duration < MIN_RUN_TIME
+        and not app_config.get("skip_min_run_warning")
+        and not _module_mode
+    ):
         state = "warning"
         report_lines.append(f"{label:20} ⚠️ 警告: {message} (仅运行: {time_str})")
     else:

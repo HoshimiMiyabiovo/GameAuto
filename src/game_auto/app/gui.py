@@ -2,6 +2,7 @@ import ctypes
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 # 屏蔽 Qt 剪贴板重试警告（剪贴板被其他进程占用时 Qt 会刷屏）
@@ -188,6 +189,19 @@ def _launch_qml_ui(dep_report=None) -> None:
                 ui_logger.info("[退出] 已请求停止自动化任务")
         except Exception as exc:
             ui_logger.warning("[退出] 停止自动化任务时异常: %s", exc)
+        # 等后台任务收尾（杀游戏/脚本进程）再退出。2026-11-04 19:44 关闭窗口时
+        # 后台重试刚好在启动 BetterGI，os._exit 直接杀解释器 → BetterGI 变孤儿进程，
+        # 用户以为"关不掉、还在开脚本"。
+        try:
+            deadline = time.time() + 8.0
+            while bridge._is_running and time.time() < deadline:
+                time.sleep(0.1)
+            if bridge._is_running:
+                ui_logger.warning("[退出] 后台任务 8 秒内未收尾，强制退出（可能残留子进程）")
+            else:
+                ui_logger.info("[退出] 后台任务已收尾")
+        except Exception as exc:
+            ui_logger.debug("[退出] 等待后台任务收尾失败: %s", exc)
         try:
             # 移除日志 handler 防止 Qt 对象被回收后回调崩溃
             game_logger.removeHandler(ui_log_handler)

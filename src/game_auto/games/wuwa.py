@@ -53,6 +53,16 @@ PROFILE = GameProfile(
         "game_window_min_area": 307200,
         "post_launch_click_game": True,
         "post_launch_click_timeout": 8,
+        # 阶段 1：headless ok-ww runner + DailyTask。默认关闭，验证后再打开。
+        # 打开后 game_auto 不再拉起 ok-ww.exe，而是常驻 runner 并调用其 task。
+        "module_mode": {
+            "enabled": False,
+            "task": "DailyTask",
+            "timeout": 1800,
+            "close_game": True,
+            "runtime_root": "",
+            "humanize_config": "",
+        },
         "ok_ww_log_monitor": {
             "log_dir": "",
             "file_pattern": "app.*",

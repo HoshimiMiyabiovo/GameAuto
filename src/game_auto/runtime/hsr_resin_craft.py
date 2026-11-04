@@ -36,6 +36,8 @@ LOGGER = logging.getLogger("GameAutomation")
 LABEL = "自塑尘脂"
 
 BAG_OPEN_ATTEMPTS = 3       # 按 B 开背包的尝试次数（界面卡在别处时先 ESC 清一层）
+# 背包标题只认左上角区域：ESC 菜单中央也有「背包」按钮，不能当"背包已打开"
+BAG_TITLE_REGION = (0.0, 0.0, 0.30, 0.18)
 BAG_WAIT_SEC = 6            # 按 B 后等背包标题出现的超时
 TAB_WAIT_SEC = 8            # 找「贵重物」页签超时
 DETAIL_WAIT_SEC = 8         # 点完自塑尘脂后等右侧详情出现
@@ -48,6 +50,16 @@ EXIT_CHECK_SEC = 5          # 每次 ESC 后等主世界特征的超时
 MAX_ROUNDS_DEFAULT = 30     # 合成循环上限（每月上限远小于它，纯粹防死循环）
 STUCK_LIMIT = 2             # 连续两次「点了但 N 没变」就判定卡住
 OCR_MIN_CONF = 0.5          # 判据文字的最低置信度
+GRID_SCAN_CLICK_SEC = 0.35  # 网格扫描每格点击后的稳定等待
+# 2026-11-04 首跑：tab/item/source 三个 point_frac 是按 11-01 的 1091x613
+# 缩略图推算的，真机上点了 (1353,61)/(769,207) 都没反应（OCR 始终是 32 个
+# 文本区、找不到「贵重物」）。失败截图又是 ESC 回主界面之后拍的，量不到背包
+# 网格。所以在写死坐标之后加一层网格扫描：逐格点选，直到右侧详情出现目标名。
+GRID_SCAN_DEFAULT = {
+    "x_start": 0.06, "x_end": 0.52,
+    "y_start": 0.12, "y_end": 0.74,
+    "cols": 8, "rows": 5,
+}
 
 REMAIN_KEYWORD = "本月还可合成"
 LIMIT_TEXTS = ("已达上限",)
@@ -268,7 +280,11 @@ def _button_state(
 
 
 def _bag_visible(logger: logging.Logger, hwnd: int, step: Dict, scales, confidences) -> bool:
-    """背包是否已打开：优先模板，其次 OCR 左上「背包」标题。"""
+    """背包是否已打开：优先模板，其次 OCR 左上标题区的「背包」。
+
+    只认左上角标题区：ESC 菜单里也有「背包」按钮（屏幕中央），
+    不限区域会把菜单误判成背包已打开（2026-11-04 页面判定排查）。
+    """
     bag_template = _abs_template(str(step.get("bag_template") or ""))
     if bag_template and os.path.isfile(bag_template):
         if _locate(hwnd, bag_template, scales, confidences, 1, None):
@@ -278,7 +294,88 @@ def _bag_visible(logger: logging.Logger, hwnd: int, step: Dict, scales, confiden
     except Exception as exc:  # noqa: BLE001 - OCR 失败按未见处理
         logger.debug(f"[{LABEL}] 背包标题 OCR 失败: {exc}")
         return False
-    return _find_text(items, ("背包",)) is not None
+    return _find_text(items, ("背包",), hwnd=hwnd, region_frac=BAG_TITLE_REGION) is not None
+
+
+def _capture_bag_evidence(logger: logging.Logger, hwnd: int, reason: str) -> None:
+    """失败当刻（**还在背包/合成页**）先留一张带 OCR 标注的截图。
+
+    `fail()` 会先 `_leave_to_main` 退回主界面再返回，上层统一的失败取证
+    拍到的永远是主界面 —— 11-03、11-04 两次实跑的证据图里只有
+    「观景车厢 / 信使 / Enter」，根本量不到背包网格和页签图标位置。
+    这里只存图不写 flow_failures，避免和上层 dispatch 取证重复计数。
+    """
+    try:
+        from .flow_diagnostics import capture_failure_image
+        from .ocr_click_tester import ocr_window_content
+
+        try:
+            results = ocr_window_content(logger, hwnd=hwnd)
+        except Exception as exc:  # noqa: BLE001 - OCR 失败也要保住原图
+            logger.debug(f"[{LABEL}] 失败前画面 OCR 失败: {exc}")
+            results = None
+        raw, annotated = capture_failure_image(
+            logger, hwnd=hwnd,
+            tag="HSR_MONTHLY_自塑尘脂_失败前画面",
+            ocr_results=results,
+        )
+        if raw:
+            logger.warning(
+                f"[{LABEL}] 失败前画面已存: {raw} / {annotated or '无标注图'}（原因: {reason}）"
+            )
+    except Exception as exc:  # noqa: BLE001 - 取证永远不能拖垮失败收尾
+        logger.debug(f"[{LABEL}] 失败前画面取证异常（已忽略）: {exc}")
+
+
+def _scan_resin_grid(
+    logger: logging.Logger,
+    hwnd: int,
+    cfg: Dict,
+    detail_visible: Callable[[], bool],
+    stop_check: Optional[Callable[[], bool]],
+) -> Tuple[bool, str, Optional[Tuple[int, int]]]:
+    """逐格点击背包网格，直到右侧详情出现目标物品；返回 (命中, 摘要, 命中点)。
+
+    只做「选中」这一种安全动作（崩铁背包点格子不会使用/丢弃物品），
+    每个点都靠 `detail_visible` 复核，绝不盲点确认按钮。
+    """
+    from .foreground_flow_runner import _click_window_local
+
+    def _num(key: str, default: float) -> float:
+        try:
+            return float(cfg.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    x1, x2 = _num("x_start", GRID_SCAN_DEFAULT["x_start"]), _num("x_end", GRID_SCAN_DEFAULT["x_end"])
+    y1, y2 = _num("y_start", GRID_SCAN_DEFAULT["y_start"]), _num("y_end", GRID_SCAN_DEFAULT["y_end"])
+    try:
+        cols = min(12, max(1, int(cfg.get("cols", GRID_SCAN_DEFAULT["cols"]))))
+        rows = min(10, max(1, int(cfg.get("rows", GRID_SCAN_DEFAULT["rows"]))))
+    except (TypeError, ValueError):
+        cols, rows = GRID_SCAN_DEFAULT["cols"], GRID_SCAN_DEFAULT["rows"]
+    if x2 <= x1 or y2 <= y1:
+        return False, "网格范围配置无效", None
+
+    tried = 0
+    for row in range(rows):
+        for col in range(cols):
+            if stop_check is not None and stop_check():
+                return False, "用户停止", None
+            fx = x1 + (x2 - x1) * (col + 0.5) / cols
+            fy = y1 + (y2 - y1) * (row + 0.5) / rows
+            point = _frac_point(hwnd, (fx, fy))
+            if not point:
+                continue
+            _click_window_local(hwnd, point[0], point[1], clicks=1)
+            _sleep(GRID_SCAN_CLICK_SEC, stop_check)
+            tried += 1
+            if detail_visible():
+                logger.info(
+                    f"[{LABEL}] 网格扫描第 {tried} 格命中 @ 比例({fx:.3f},{fy:.3f}) → {point}"
+                )
+                return True, f"网格扫描第 {tried} 格命中", point
+    return False, f"网格扫描 {tried} 格仍未看到目标详情", None
 
 
 def _open_bag(
@@ -372,7 +469,10 @@ def _select_precious_tab(
         items = []
     if _find_text(items, (tab_text,)):
         return True, f"已切到「{tab_text}」"
-    logger.warning(f"[{LABEL}] 点完分类图标后没看到「{tab_text}」标题，继续按物料定位")
+    logger.warning(
+        f"[{LABEL}] 点完分类图标 @ {center} 后没看到「{tab_text}」标题，"
+        f"继续按物料定位（比例坐标可能已失效，需按当前截图重新校准）"
+    )
     return True, f"已点击「{tab_text}」（未确认标题）"
 
 
@@ -431,7 +531,24 @@ def _select_resin(
         if detail_visible():
             return True, f"已选中「{item_text}」"
         _sleep(0.5, stop_check)
-    return False, f"点开后详情区没显示「{item_text}」"
+    # 2026-11-03 / 11-04 两次首跑都卡在这里：比例坐标 (769,207) 是按 11-01
+    # 缩略图推算的，真机没点中；而失败截图又是退回主界面后才拍的，量不到网格。
+    # 不再赌一个坐标，改在背包网格里逐格点选 + 每格复核详情，命中就把实际
+    # 比例写进日志，下次可直接把校准后的值填回 item_point_frac。
+    logger.warning(
+        f"[{LABEL}] 点击「{item_text}」格子 @ {center} 后 {DETAIL_WAIT_SEC}s 内"
+        f"详情区仍未出现，改用网格扫描定位"
+    )
+    grid = step.get("item_grid_frac")
+    if not isinstance(grid, dict):
+        grid = GRID_SCAN_DEFAULT
+    ok, scan_msg, _hit = _scan_resin_grid(
+        logger, hwnd, grid, detail_visible, stop_check
+    )
+    if ok:
+        return True, f"已选中「{item_text}」（{scan_msg}）"
+    logger.warning(f"[{LABEL}] 固定比例坐标与网格扫描都没选中「{item_text}」：{scan_msg}")
+    return False, f"点开后详情区没显示「{item_text}」（{scan_msg}）"
 
 
 def _open_synthesizer(
@@ -647,6 +764,12 @@ def craft_self_modeling_resin(
     label = str(step.get("log_label") or LABEL).strip() or LABEL
 
     def fail(reason: str) -> Tuple[bool, str]:
+        # 2026-11-03 实锤：以前这里只 return，日志里从"点格子"到"下一次流程启动"
+        # 中间一片空白，flow_failures 也没记录。失败原因必须先落日志。
+        logger.warning(f"[{label}] 失败: {reason}")
+        # 2026-11-04：取证必须赶在 ESC 退回主界面之前，否则证据图里只有
+        # 「观景车厢」，永远拿不到背包网格/页签坐标来校准 point_frac。
+        _capture_bag_evidence(logger, hwnd, reason)
         exit_ok = _leave_to_main(logger, hwnd, step, scales, confidences, stop_check)
         return False, reason if exit_ok else f"{reason}（未确认返回主界面）"
 

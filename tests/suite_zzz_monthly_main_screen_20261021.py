@@ -69,9 +69,14 @@ if len(steps) == 7:
         "步骤1 点击后校验文字消失（confirm_type=disappear/10s）",
         s0.get("confirm_type") == "disappear" and s0.get("confirm_timeout_sec") == 10,
     )
+    # 2026-11-04 提权实机推翻了 11-03 的「后台首发 + 前台瞬时兜底」：
+    # 后台 PostMessage 和瞬时 pyautogui.click 都点不动 Unity 启动器，
+    # 只有提权后前台 mouseDown 按住 80ms 才出现「登录成功」。
     check(
-        "步骤1 后台点击 + 失败后切换前台点击",
-        s0.get("background_click") is True and s0.get("click_fallback") is True,
+        "步骤1 前台按住 80ms（停用后台首发与 click_fallback）",
+        s0.get("background_click") is False
+        and s0.get("click_fallback") is False
+        and abs(float(s0.get("click_hold_sec", 0)) - 0.08) < 1e-9,
     )
     check(
         "步骤1 单次超时 30s、最多 2 次（不再 300s×2）",

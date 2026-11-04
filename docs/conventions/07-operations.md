@@ -294,3 +294,123 @@
   （2026-11-01 游戏已关）。首次实跑看 `[恶名狩猎]` 日志的命中坐标与 `[自动战斗]` 的
   「帧/普攻/闪避/特殊技/终结技」统计：帧数高但普攻为 0 说明按钮识别没命中；闪避一直不触发
   说明闪光模型没吃到画面。跑偏时优先补模板、再改 `*_frac`。
+### 月商店翻页与自塑尘脂：11-04 首跑三连翻车（补记）
+
+- **滚轮必须逐格发，且要一次滚到底**（2026-11-04 四次取证，用户实锤）：
+  三月七 `module/automation/local_input.py::LocalInput.mouse_scroll` 是
+  `for _ in range(count): pyautogui.scroll(-1, _pause=True)` —— **一次只发一格、
+  每格带 pause**，日志「滚轮滚动 -12 次 / -40 次」就是这个循环。我们旧实现
+  `pyautogui.scroll(-5)` 一次性发 delta=-600，Unity 网格逐帧吃 wheel 事件时
+  被吞掉，表现正是「8 屏滚完商品卡一行没动」。现改 `SCROLL_STEP=-12` 且
+  `_scroll_shop_list` 逐格发 12 个单格事件（间隔 0.08s）。
+- **真正的翻页策略照抄 `tasks/daily/ember_exchange.py`**：它不做「每屏滚一点
+  + 每屏 OCR」，`start()` 先在顶部整屏扫一遍，没命中的进 `unresolved_items`，
+  然后 `_scroll_to_bottom_for_retry()` 把鼠标移到列表正中央
+  `RETRY_SCROLL_CENTER_CROP=(955/1920,535/1080,10/1920,10/1080)`，
+  `mouse_scroll(RETRY_SCROLL_COUNT=120,-1,False)` **一次性滚到底**，再补扫一次。
+  清单商品就在列表最底下。本项目 `_scroll_find_item` 现加同样的「一次到底补扫」
+  前置（`_scroll_list_to_edge` + `SCROLL_TO_BOTTOM_TICKS=120`），命中即返回，
+  没命中才滚回顶部走原来的 8 屏逐格兜底。
+- **「有效滚动」判据**：`_list_text_signature` 只收文字集合、**不带 y 分桶**
+  （首版 `y//24` 分桶被卡片光效的 1~2px 抖动骗过，20:17 实跑 8 屏全判
+  「文字变化」→ `effective=8`、一次都没切拖动），用 `_signatures_differ`
+  的 12% Jaccard 容忍单帧 OCR 抖动；签名不可用才退回旧的像素差判据。
+  滚轮连续两次没滚自动切 `_drag_shop_scrollbar` 拖右缘滚动条，两种都无效
+  才标 `scroll_verified_dead=1`。真机分支只在签名可用时启用，回归子进程
+  统一关掉，绝不动测试机鼠标。
+- **自塑尘脂失败取证必须赶在 ESC 之前**：`fail()` 以前先 `_leave_to_main` 再返回，
+  上层统一取证拍到的永远是主界面（11-03 / 11-04 证据图只有「观景车厢 / 信使 /
+  Enter」8 项），量不到背包网格。现在先 `_capture_bag_evidence` 存
+  `HSR_MONTHLY_自塑尘脂_失败前画面*.jpg`（原图 + OCR 标注，只存图不写
+  `flow_failures`，避免和 dispatch 层取证重复计数）。
+- **四个 `point_frac` 现状（别再凭缩略图推算）**：`craft_button_point_frac=
+  [0.574,0.806]` 用 1920x1080 参考图 + `崩铁-自塑尘脂-已达上限.png` 模板自匹配
+  核对为 (1102,870)=(0.574,0.8056)，吻合不动；`tab / item / source` 三个是按
+  1091x613 缩略图推的，真机 (1353,61) / (769,207) 都没点中 —— 按 B 后 OCR 从
+  8 项变 32 项说明背包确实开了，但「贵重物」页签是纯图标、OCR 找不到文字。
+  现加 `item_grid_frac` 网格扫描：写死坐标失败后逐格点选，每格用
+  「自塑尘脂 + 获得途径」复核详情，命中就把实际比例打进日志，下次把日志里的
+  比例填回 `item_point_frac` 即可。两份 `flow_configs` 已同步。
+- 回归：`tests/suite_login_agreement_scroll_20261104.py` [3]~[11]（含逐格滚动
+  12 次单格事件、签名抖动容忍、一次到底补扫命中）；旧
+  `suite_monthly_scroll_find_20261102.py` / `suite_hsr_resin_craft_20261101.py` /
+  `suite_monthly_shop_observability_20261104.py` 全部 ALL PASS。
+- **改完必须重启 GUI**：11-04 早批跑的是改代码前的 GUI 进程，日志里仍出现
+  「按已购买处理」的旧口径；Python/QML 不热加载，重启前所有修复都不生效。
+### 三月七小助手已有成熟实现：自塑尘脂 + 余烬兑换（2026-11-04 取证）
+
+**结论：自塑尘脂与专票/通票本月已由三月七完成；「命运的足迹」是开关关着（源码有实现、上限 2 个，不是不支持），本项目清单仍要自己买到。它的「翻页」实现是本项目修滚轮的关键参考。**
+
+- 源码：`github.com/moesnow/March7thAssistant` → `tasks/daily/synthesis.py`
+  `Synthesis.self_molding_resin()`（47-84 行）。安装目录
+  `D:\down\March7thAssistant_v2.2.0.3_full` 是打包版（无 `.py`），但有
+  `assets/images/**` 全套模板、`config.yaml`、逐日与逐次运行日志。GPL-3.0 本地自用，
+  与之前复制 OneDragon 模板同一口径。
+- 本机配置（`config.yaml` 204-211）：`asset_self_molding_resin_enable: true`，
+  timestamp `1793503852` = **2026-11-01 11:30:52 合成成功**；
+  `asset_ember_special_pass / regular_pass_enable: true`，timestamp =
+  11-01 11:31:13 / 11:31:24 **购买成功**；「命运的足迹」本地特意关掉。
+  11-04 20:14 运行日志四项都报「自动…尚未刷新」＝本月已完成，不是没做。
+- **自塑尘脂路径与本项目背包路径完全不同**（11-01 日志 1252-1306 行，1920x1080）：
+  ESC → 手机菜单 → 点「合成」(1601,489) → 消耗品合成页 → 点「材料合成」页签 (911,66)
+  → 点「筛选」(124,988) → OCR 点「遗器培养材料」(568,452) → 确认 (1167,809)
+  → 在 `crop(75,103,421,331)` 里点 `share/synthesis/resin.png`（备 `resin2.png`）命中 (159,182)
+  → 右侧 `crop(1088,125,193,61)` 确认「自塑尘脂」→ `crop(1087,848,200,44)` 判「已达上限」
+  → 点 `plus.png` (1562,870) → 点 `zh_CN/synthesis/synthesis_button.png` (1183,984)
+  → 确认 (1167,700) → `click_close.png` 关闭 → 存时间戳。
+  **先筛选「遗器培养材料」后自塑尘脂固定在第一格**，不需要背包、不需要「贵重物」
+  页签，也不需要任何 `point_frac` 猜测；「已达上限」那块 crop 与本项目
+  `崩铁-自塑尘脂-已达上限.png` 的 y=848~894 完全对齐，是同一条红条。
+- **余烬兑换也由它做**（11-01 日志 1310-1400 行）：商店 (1322,408)
+  → 兑换商店 (166,382) → 「余烬兑换」页签 (664,130)（用 `RGB(224,224,225)` 占比
+  0.7467 / 阈值 0.7 判选中态）→ OCR 读「星轨专票 / 星轨通票 可兑换：5/5」
+  → 点商品 (434,377) → `share/ember_exchange/plus.png` 连点 4 次 (1374,632)
+  **一次买满 5 个** → 确认 (1167,740) → 关闭 (961,790)。
+- **「命运的足迹」是开关，不是没实现**：`tasks/daily/ember_exchange.py` 的
+  `ITEMS` 里第三项就是
+  `EmberExchangeItem("命运的足迹", "asset_ember_tracks_of_destiny_enable", ..., 2)`，
+  与专票/通票共用 `_purchase_item` / `_find_purchasable_item` / `plus` 加号流程，
+  只是本机 `config.yaml` 把该 `enable` 设成 `false`、timestamp=0。
+  11-04 20:14 日志直写「每月自动购买「命运的足迹」未开启」。
+  所以本月它**确实没买**，我们清单里的 ×2 要么自己买、要么把开关打开。
+- **三月七的「翻页」＝下滚补扫**（`ember_exchange.py`）：
+  `RETRY_SCROLL_CENTER_CROP=(955/1920,535/1080,10/1920,10/1080)`、
+  `RETRY_SCROLL_COUNT=120`，`_scroll_to_bottom_for_retry()` 先
+  `auto.click_element(..., "crop", action="move")` 把鼠标移到列表中心，等 1s，
+  再 `auto.mouse_scroll(120,-1,False)` 一次滚到底，`start()` 对
+  `unresolved_items` 在底部补扫一遍（`accept_sold_out=True` 还能认「已售罄」）。
+  11-01 那次商品在顶部第一屏所以没触发，但代码路径一直在。
+- **对 11-04 事故的正确归因（更正上一版错误结论）**：证据图里看不到
+  5/5、2/2 不是「卡片到上限消失」，是**列表没滚到底、商品压在最底下**（用户
+  20:40 实锤）。根因链：① `pyautogui.scroll(-5)` 一次性大 delta 被游戏吞掉；
+  ② 逐屏 12 格 × 8 屏的策略根本到不了底部，中间每屏还夹 6~8s OCR；
+  ③ 首版文字签名带 `y//24` 分桶，卡片光效抖动让 8 屏全判「文字变化」，
+  `effective=8` → 严格语义被绕过，最后又「按已购买处理」。
+  上一版写的「已买完/整卡消失」是凭一屏 OCR 硬推的，作废。
+- 可复用模板（本地路径，1920x1080 基准）：`share/menu/synthesis.png`、
+  `share/synthesis/{filter,enter_material,resin,resin2,plus}.png`、
+  `zh_CN/synthesis/synthesis_button.png`、`zh_CN/base/{confirm,click_close}.png`、
+  `screen/synthesis/{consumables,material}.png`、`share/ember_exchange/plus.png`。
+### 崩铁每月事项交接给三月七（2026-11-04 用户拍板）
+
+- **决定**：自塑尘脂 + 余烬兑换（专票/通票/命运的足迹）整体交给三月七，
+  本项目 `HSR_MONTHLY` 停用，不再重复实现、不再抢游戏窗口。
+- **三月七侧**：`D:\down\March7thAssistant_v2.2.0.3_full\config.yaml` 把
+  `asset_ember_tracks_of_destiny_enable` 从 `false` 改 `true`；
+  `asset_ember_tracks_of_destiny_timestamp` 保持 `0`，这样
+  `Date.is_next_month_x_am(0, refresh_hour)` 判为已跨月，下次 `main` 运行
+  时「命运的足迹」进 `pending_items`，按 `exchange_limit=2` 一次买满。
+  其余三个开关（自塑尘脂 / 专票 / 通票）本来就是 `true`，且 11-01 的
+  timestamp 已写，本月不会重复买。
+- **本项目侧**：`flow_configs(.example).json` 的 `HSR_MONTHLY.enabled=false`
+  （步骤定义保留，随时可改回）。**不能只改配置**：`run_flow` 对 disabled
+  返回「流程已禁用」，`_append_monthly_report` 会把它当失败写一行 ❌，
+  而且不写月度标记 → 收尾补漏每批次重试。所以
+  `task_batch_runner._run_pending_monthly_flow` 新增前置检查：
+  读到 `enabled=false` 就打一行 info 并返回 `None`，不启动客户端、不报错。
+  其它 `ZZZ_MONTHLY / GENSHIN_MONTHLY / NTE_MONTHLY` 不受影响。
+- **注意**：改的是本机外部程序的配置（不在本仓库版本控制内）；换机器或
+  重装三月七要重新确认这四个开关。`m7a.exe --status` 可查运行状态，
+  运行任务会弹 UAC 并接管游戏窗口，别在无人值守时静默触发。
+- 回归：`tests/suite_hsr_monthly_handoff_20261104.py`（开关/两份配置/
+  禁用安静跳过/未禁用仍触发，4 组 ALL PASS）。

@@ -767,6 +767,53 @@ def _refresh_flow_window(
         time.sleep(0.2)
 
 
+def _window_is_dead(hwnd: Optional[int]) -> bool:
+    """窗口句柄是否已经失效（窗口被销毁了）。
+
+    2026-11-04 实锤（异环 NTE_MONTHLY）：更新完游戏自己起来并重建了窗口，旧的
+    HWND 直接失效，但流程还攥着它不放 → SetForegroundWindow 报「无效的窗口句柄
+    (1400)」、OCR 扫 0 个区域（_ocr_scan 拒绝回退全屏）→ 一步空转 11 分钟。
+    句柄真死时要重新按进程名找窗口，不能只按 pid 找（游戏窗口属于另一个进程）。
+    """
+    if not hwnd:
+        return True
+    try:
+        return not win32gui.IsWindow(hwnd)
+    except Exception:
+        return True
+
+
+def _recover_flow_window(
+    pid: Optional[int],
+    hwnd: Optional[int],
+    title_keywords: Optional[List[str]],
+    process_names: Optional[List[str]],
+    logger: logging.Logger,
+    flow_key: str,
+) -> Tuple[Optional[int], Optional[int]]:
+    """追踪的窗口句柄失效时，按流程声明的进程名/标题重新找一个能用的窗口。
+
+    只在句柄**真的死了**时触发（不是最小化、不是窗口还在），
+    避免把正常的窗口切换误判成故障。返回 (新 hwnd, 新 pid)；无需恢复时返回 (None, None)。
+    """
+    if not _window_is_dead(hwnd):
+        return None, None
+    if not process_names and not title_keywords:
+        return None, None
+    alt = _find_window_by_filters(
+        title_keywords=title_keywords,
+        process_names=process_names,
+        launched_after=0.0,
+        logger=logger,
+    )
+    if not alt or alt[0] == hwnd:
+        return None, None
+    logger.info(
+        f"[{flow_key}] 目标窗口已失效（HWND={hwnd}），按进程名重新接管到 HWND={alt[0]} PID={alt[1]}"
+    )
+    return alt[0], alt[1]
+
+
 def _focus_window(hwnd: int):
     try:
         if win32gui.IsIconic(hwnd):
@@ -1113,11 +1160,16 @@ def _post_click_window(hwnd: int, x_local: int, y_local: int) -> bool:
         return False
 
 
-def _click_window_local(hwnd: int, x_local: int, y_local: int, clicks: int = 1, interval: float = 0.2, background: bool = False):
+def _click_window_local(hwnd: int, x_local: int, y_local: int, clicks: int = 1,
+                        interval: float = 0.2, background: bool = False,
+                        hold_sec: Optional[float] = None):
     """窗口内点击。默认前台真实输入（pyautogui），XM/CJ 等游戏只吃这个。
 
     background=True 才是 ok-script 式 PostMessage 后台点击，需按 step/cfg
-    显式 opt-in；投递成功≠游戏响应，失败靠后续 confirm 重试兜底。
+    显式 opt-in；投递成功≠游戏响应，失败靠后续 confirm 重试兜底
+    （其 DOWN/UP 之间已有 20ms 间隔，天然是按住式）。
+    hold_sec 交给 `_pyautogui_click_guarded`：None=全局默认按住，
+    0=显式瞬时，>0=指定时长。
     """
     rect = _window_rect(hwnd)
     if not rect:
@@ -1135,7 +1187,8 @@ def _click_window_local(hwnd: int, x_local: int, y_local: int, clicks: int = 1, 
             return
     _release_modifier_keys()
     _focus_window(hwnd)
-    _pyautogui_click_guarded(l + int(x_local), t + int(y_local), clicks=clicks, interval=interval)
+    sx, sy = l + int(x_local), t + int(y_local)
+    _pyautogui_click_guarded(sx, sy, clicks=clicks, interval=interval, hold_sec=hold_sec)
 
 
 def _hover_window_local(hwnd: int, x_local: int, y_local: int, duration: float = 0.2):
@@ -1173,10 +1226,57 @@ _FAILSAFE_HINT = (
 )
 
 
-def _pyautogui_click_guarded(x: int, y: int, clicks: int = 1, interval: float = 0.2, button: str = "left"):
-    """pyautogui.click 的包装：fail-safe 触发时抛带说明的 FailSafeAborted。"""
+# 2026-11-04 实机：Unity 启动器不认瞬时 down+up，且瞬时点击是典型脚本特征。
+# 所有前台点击默认按住一小段时间；环境变量可全局调/关，步骤级 click_hold_sec
+# 可单独覆盖，显式 0 = 退回瞬时（逃生口）。
+try:
+    DEFAULT_CLICK_HOLD_SEC = max(0.0, float(os.environ.get("GAMEAUTO_CLICK_HOLD_SEC", "0.06")))
+except (TypeError, ValueError):
+    DEFAULT_CLICK_HOLD_SEC = 0.06
+
+
+def _pyautogui_click_guarded(x: int, y: int, clicks: int = 1, interval: float = 0.2,
+                             button: str = "left", hold_sec: Optional[float] = None):
+    """前台点击统一收口：默认走极短按住式点击，fail-safe 抛 FailSafeAborted。
+
+    hold_sec=None → 用 `DEFAULT_CLICK_HOLD_SEC`（全局默认，所有调用点自动受益）；
+    hold_sec=0    → 显式瞬时 `pyautogui.click`（确有需要时才用）；
+    hold_sec>0    → 按住指定秒数（如绝区零启动器用 0.08）。
+    """
+    hold = DEFAULT_CLICK_HOLD_SEC if hold_sec is None else max(0.0, float(hold_sec))
     try:
-        pyautogui.click(int(x), int(y), clicks=clicks, interval=interval, button=button)
+        if hold > 0:
+            _pyautogui_click_held(int(x), int(y), hold, clicks=clicks,
+                                  interval=interval, button=button)
+        else:
+            pyautogui.click(int(x), int(y), clicks=clicks, interval=interval, button=button)
+    except pyautogui.FailSafeException as exc:
+        logger = logging.getLogger("GameAutomation")
+        logger.warning("[fail-safe] %s", _FAILSAFE_HINT)
+        raise FailSafeAborted(_FAILSAFE_HINT) from exc
+
+
+def _pyautogui_click_held(
+    x: int, y: int, hold_sec: float = 0.08, clicks: int = 1,
+    interval: float = 0.2, button: str = "left",
+):
+    """按住式点击：Unity 启动器的按钮不认瞬时 `pyautogui.click`。
+
+    2026-11-04 21:35 提权实机（用户当场开着绝区零验证）：
+      - 普通权限进程 → UIPI 静默拦截，三种点击全无效；
+      - 提权后瞬时 `pyautogui.click` → 「点击进入游戏」10s 仍不消失；
+      - 提权 + `mouseDown` 按住 80ms 再 `mouseUp` → 3s 内出现「登录成功」。
+    所以权限对齐（见 `_uipi_block_reason`）和按住这两个条件缺一不可。
+    """
+    count = max(1, int(clicks))
+    try:
+        pyautogui.moveTo(int(x), int(y))
+        for i in range(count):
+            pyautogui.mouseDown(button=button)
+            time.sleep(max(0.0, float(hold_sec)))
+            pyautogui.mouseUp(button=button)
+            if i + 1 < count and interval:
+                time.sleep(interval)
     except pyautogui.FailSafeException as exc:
         logger = logging.getLogger("GameAutomation")
         logger.warning("[fail-safe] %s", _FAILSAFE_HINT)
@@ -1811,8 +1911,11 @@ def _dispatch_step_action(
         # 所以在签到流程**第一步**就先把它关掉，别等末步日志核验失败才救火。
         from .wool_claim_logs import dismiss_minimax_update_popup
 
-        dismissed, dismiss_msg = dismiss_minimax_update_popup(logger, hwnd)
-        logger.info(f"[{flow_key}] 步骤{step_no}公告弹窗处理: {dismiss_msg}")
+        dismissed = dismiss_minimax_update_popup(logger, hwnd)
+        logger.info(
+            f"[{flow_key}] 步骤{step_no}公告弹窗: "
+            f"{'已关闭' if dismissed else '未检测到/未关闭（继续）'}"
+        )
         # 非致命：关不掉也继续走（末步日志核验会再兜一次），这里只留痕
     elif action == "wool_verify_log":
         # MiniMax/TRAE 以接口日志为准，避免 UI 确认误报
@@ -1887,8 +1990,13 @@ def _collect_failure_evidence(
     retry_count: int,
     max_attempts: int,
     step_enable_ocr: bool,
+    error: str = "未匹配模板/OCR（超过重试上限）",
 ) -> None:
-    """步骤重试耗尽时抓当帧 OCR + 截图并落库（一次识别，两处复用）。"""
+    """步骤重试耗尽时抓当帧 OCR + 截图并落库（一次识别，两处复用）。
+
+    error 允许调用方覆盖：2026-11-03 崩铁自塑尘脂是 action 分支自己失败返回，
+    以前只把原因写进日报一行，日志和 flow_failures 全空，事后查不出点歪在哪。
+    """
     ocr_results = None
     try:
         from .ocr_click_tester import ocr_window_content
@@ -1909,7 +2017,7 @@ def _collect_failure_evidence(
             logger,
             flow_key=flow_key,
             step=name,
-            error="未匹配模板/OCR（超过重试上限）",
+            error=str(error or "未匹配模板/OCR（超过重试上限）"),
             hwnd=hwnd,
             retry_count=retry_count,
             ocr_results=ocr_results,
@@ -1927,6 +2035,67 @@ def _collect_failure_evidence(
     except Exception as exc:
         logger.debug("[%s] 记录失败诊断异常: %s", flow_key, exc)
 
+
+
+def _resolve_start_guard(
+    cfg: dict,
+    flow_key: str,
+    hwnd: int,
+    scales,
+    confidences,
+    steps_len: int,
+    logger,
+) -> Tuple[int, set]:
+    """统一入口守卫：优先从主界面开始（2026-11-04 用户要求，参照白荆）。
+
+    - `start_from_main`: {"template": 主界面模板, "skip_to_step": N}
+      模板命中 → 从第 N 步开始，不再做进入操作。
+    - `skip_steps_if_process`: {"process_name": 进程名, "steps": [1-based...]}
+      游戏进程已在运行 → 跳过这些启动器步骤（例如异环已在游戏里）。
+
+    返回 (起始索引, 需要跳过的 0-based 步骤索引集合)。
+    """
+    skip_indices: set = set()
+    start_index = 0
+    guard = cfg.get("start_from_main")
+    if isinstance(guard, dict):
+        guard_tpl = str(guard.get("template") or cfg.get("exit_marker_template") or "").strip()
+        try:
+            skip_to = int(guard.get("skip_to_step", 1))
+        except (TypeError, ValueError):
+            skip_to = 1
+        if guard_tpl and skip_to > 1:
+            guard_rect = _window_rect(hwnd)
+            if guard_rect and _locate_template_on_screen(
+                guard_tpl, guard_rect, scales, confidences, throttle_sec=0.0
+            ):
+                start_index = max(0, min(skip_to - 1, max(0, steps_len - 1)))
+                logger.info(
+                    f"[{flow_key}] 已在主界面（{os.path.basename(guard_tpl)} 命中），"
+                    f"跳过前 {start_index} 步"
+                )
+    proc_guard = cfg.get("skip_steps_if_process")
+    if isinstance(proc_guard, dict) and str(proc_guard.get("process_name") or "").strip():
+        proc_name = str(proc_guard["process_name"]).strip()
+        try:
+            running = any(
+                (p.info.get("name") or "").strip().lower() == proc_name.lower()
+                for p in psutil.process_iter(["name"])
+            )
+        except Exception:
+            running = False
+        if running:
+            for raw_no in proc_guard.get("steps") or []:
+                try:
+                    skip_indices.add(int(raw_no) - 1)
+                except (TypeError, ValueError):
+                    continue
+            if skip_indices:
+                logger.info(
+                    f"[{flow_key}] 进程 {proc_name} 已在运行，跳过步骤 "
+                    f"{sorted(n + 1 for n in skip_indices)}（不再走启动器）"
+                )
+    return start_index, skip_indices
 
 
 def run_flow(
@@ -2065,15 +2234,23 @@ def run_flow(
             close_flow_processes(logger, flow_key, pid, window_process_names)
         return False, f"[{flow_key}] 配置中无步骤"
 
+    start_index, skip_step_indices = _resolve_start_guard(
+        cfg, flow_key, hwnd, scales, confidences, len(steps), logger
+    )
+
     # 判断是否启用OCR备选（XM流程默认启用，CJ流程不启用）
     enable_ocr = cfg.get("enable_ocr_fallback", flow_key == "XM")
 
     step_attempts: Dict[int, int] = {}
     step_local_region: Dict[int, Optional[Tuple[int, int, int, int]]] = {}
-    i = 0
+    i = start_index
     flow_ok = False
     try:
         while i < len(steps):
+            if i in skip_step_indices:
+                logger.info(f"[{flow_key}] 步骤{i + 1} 因游戏进程已在运行跳过")
+                i += 1
+                continue
             step = steps[i]
             step_no = i + 1
             name = step.get("name", f"step{step_no}")
@@ -2122,6 +2299,16 @@ def run_flow(
                 )
                 hwnd = refreshed_hwnd
                 step_local_region.pop(i, None)
+            else:
+                # 句柄真死了（游戏重建窗口/换进程承载）→ 按进程名重新接管
+                new_hwnd, new_pid = _recover_flow_window(
+                    pid, hwnd, window_title_keywords, window_process_names, logger, flow_key,
+                )
+                if new_hwnd:
+                    hwnd = new_hwnd
+                    if new_pid:
+                        pid = new_pid
+                    step_local_region.pop(i, None)
 
             local_region = step_local_region.get(i)
 
@@ -2181,6 +2368,18 @@ def run_flow(
                         hwnd = refreshed_hwnd
                         local_region = None
                         step_local_region.pop(i, None)
+                    else:
+                        # 句柄真死了（游戏重建窗口/换进程承载）→ 按进程名重新接管，
+                        # 否则 OCR 会一直扫 0 个区域（_ocr_scan 拒绝回退全屏），空转到超时。
+                        new_hwnd, new_pid = _recover_flow_window(
+                            pid, hwnd, window_title_keywords, window_process_names, logger, flow_key,
+                        )
+                        if new_hwnd:
+                            hwnd = new_hwnd
+                            if new_pid:
+                                pid = new_pid
+                            local_region = None
+                            step_local_region.pop(i, None)
 
                     # 每次匹配前置顶窗口，防止其他窗口（如游戏退出后弹出的启动器）遮挡
                     _focus_window(hwnd)
@@ -2306,11 +2505,27 @@ def run_flow(
                 elif no_click:
                     logger.info(f"[{flow_key}] 仅确认不点击: {name}")
                 else:
+                    # 2026-11-04：所有前台点击默认极短按住（见 DEFAULT_CLICK_HOLD_SEC）。
+                    # 未配置 → None 用全局默认；显式 0 → 瞬时；>0 → 指定时长（绝区零 0.08）。
+                    raw_hold = step.get("click_hold_sec", cfg.get("click_hold_sec", None))
+                    try:
+                        hold_sec = None if raw_hold is None else max(0.0, float(raw_hold))
+                    except (TypeError, ValueError):
+                        hold_sec = None
+                    effective_hold = None if use_background else hold_sec
                     if search_scope == "screen":
-                        _click_screen(center[0], center[1], clicks=clicks)
+                        _pyautogui_click_guarded(center[0], center[1], clicks=clicks,
+                                                 hold_sec=effective_hold)
                     else:
-                        _click_window_local(hwnd, center[0], center[1], clicks=clicks, background=use_background)
-                    logger.info(f"[{flow_key}] 已点击: ({center[0]}, {center[1]}) [方式: {match_method}][点击: {'后台' if use_background else '前台'}]")
+                        _click_window_local(hwnd, center[0], center[1], clicks=clicks,
+                                            background=use_background, hold_sec=effective_hold)
+                    if use_background:
+                        hold_tag = ""
+                    else:
+                        shown = DEFAULT_CLICK_HOLD_SEC if effective_hold is None else effective_hold
+                        hold_tag = f"[按住: {shown:.2f}s]" if shown > 0 else "[瞬时]"
+                    logger.info(f"[{flow_key}] 已点击: ({center[0]}, {center[1]}) "
+                                f"[方式: {match_method}][点击: {'后台' if use_background else '前台'}]{hold_tag}")
 
                     refreshed_hwnd = _refresh_flow_window(
                         pid,
@@ -2345,6 +2560,32 @@ def run_flow(
                     stop_check=stop_check,
                 )
                 if not dispatch_ok:
+                    if "用户停止" in str(dispatch_msg):
+                        # 用户主动停止不是故障：只留一行日志，不写 flow_failures
+                        # （否则每次手动停止都多一条假失败记录）。
+                        logger.info(f"[{flow_key}] 步骤{step_no}由用户停止: {name}")
+                        return False, dispatch_msg
+                    # 2026-11-03 实锤（崩铁自塑尘脂）：action 分支失败以前三层都不打日志，
+                    # 只留日报一行 ❌，连 flow_failures 都没记录。这里补日志 + 统一取证
+                    # （截图 + 当帧 OCR 写库），下次首跑失败能直接看图定位。
+                    logger.error(
+                        f"[{flow_key}] 步骤{step_no}执行失败: {name} ({dispatch_msg})"
+                    )
+                    _collect_failure_evidence(
+                        logger=logger,
+                        flow_key=flow_key,
+                        step=step,
+                        name=name,
+                        step_no=step_no,
+                        action=action,
+                        target_texts=target_texts,
+                        template=template,
+                        hwnd=hwnd,
+                        retry_count=step_attempts.get(i, 0),
+                        max_attempts=max_attempts,
+                        step_enable_ocr=step_enable_ocr,
+                        error=str(dispatch_msg)[:500],
+                    )
                     return False, dispatch_msg
 
             if action == "click_template" and not no_click:

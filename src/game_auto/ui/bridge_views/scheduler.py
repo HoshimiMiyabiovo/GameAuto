@@ -144,6 +144,9 @@ class SchedulerView:
 
     def _check_scheduled_tasks(self):
         """每 30s 由 QTimer 调用；到点且今天未触发过的任务启动一次。"""
+        if getattr(self, "_auto_run_paused", False):
+            # 用户已主动停止：不再自动拉起定时任务，直到手动点"开始"
+            return
         try:
             today = time.strftime("%Y-%m-%d")
             now_hm = time.strftime("%H:%M")
@@ -486,6 +489,8 @@ class SchedulerView:
 
     def _check_update_retries(self) -> None:
         """每 30s 由定时器调用：到点的更新补跑启动一批。"""
+        if getattr(self, "_auto_run_paused", False):
+            return
         if self._is_running:
             return
         now = datetime.now(CN_TZ)
