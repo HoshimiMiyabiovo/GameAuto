@@ -114,13 +114,26 @@ class AutomationController:
             '[%(asctime)s.%(msecs)03d] [%(levelname)-8s] %(name)s:%(funcName)s:%(lineno)d - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
-        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-        from ..settings.manager import get_log_config
-        backup_count = max(0, int(get_log_config().get("backup_count", BACKUP_COUNT) or 0))
-        file_handler = TimedRotatingFileHandler(
-            LOG_FILE, when='midnight', interval=1, backupCount=backup_count, encoding='utf-8'
+        # 2026-11-04：回归套件会实例化 AutomationController，旧逻辑无条件把
+        # TimedRotatingFileHandler 挂到生产 LOG_FILE，FakeSession 等测试日志直接
+        # 混进 data/logs/auto_runner.log（当天 1.86MB），次日排障分不清真假运行。
+        # 测试子进程由 tests/test_suites.py 设 GAMEAUTO_LOG_FILE_DISABLED=1；
+        # pytest 进程靠 PYTEST_CURRENT_TEST 兜底。生产 GUI/CLI 两者都不满足，
+        # 文件日志行为完全不变（日志长期保留的约定也不受影响）。
+        disable_file = (
+            os.environ.get("GAMEAUTO_LOG_FILE_DISABLED", "").strip().lower()
+            in ("1", "true", "yes")
+            or bool(os.environ.get("PYTEST_CURRENT_TEST"))
         )
-        file_handler.setFormatter(formatter)
+        file_handler = None
+        if not disable_file:
+            os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+            from ..settings.manager import get_log_config
+            backup_count = max(0, int(get_log_config().get("backup_count", BACKUP_COUNT) or 0))
+            file_handler = TimedRotatingFileHandler(
+                LOG_FILE, when='midnight', interval=1, backupCount=backup_count, encoding='utf-8'
+            )
+            file_handler.setFormatter(formatter)
 
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(formatter)
@@ -137,8 +150,11 @@ class AutomationController:
             _LOG_LISTENER = None
         log_queue: "queue.Queue" = queue.Queue(-1)
         logger.addHandler(logging.handlers.QueueHandler(log_queue))
+        listener_handlers = [
+            h for h in (file_handler, console_handler, *preserved) if h is not None
+        ]
         _LOG_LISTENER = logging.handlers.QueueListener(
-            log_queue, file_handler, console_handler, *preserved,
+            log_queue, *listener_handlers,
             respect_handler_level=True,
         )
         _LOG_LISTENER.start()
@@ -451,6 +467,12 @@ class AutomationController:
                 else:
                     self.logger.debug(f"等待游戏进程中... (已等待: {elapsed}s, 剩余: {remaining}s)")
                 last_log = time.time()
+            # 任务线程心跳：这里是「等游戏进程 / 等版本更新」的长轮询，必须和
+            # _monitor_game 主循环一样每轮上报。2026-11-05 异环更新补跑连撞
+            # 3 次 600s：timeouts.launch=600、update=7200 都不短于全局心跳阈值
+            # 600s，而本循环以前不打心跳 → 看门狗把正常轮询当成死锁，10 分钟就
+            # 强杀，补跑队列 attempt 1/2/3 各白烧一次（现场栈停在 time.sleep(2)）。
+            self._heartbeat.beat()
             time.sleep(2)
 
         # 预算耗尽时如果更新行还新鲜（超大更新超过 update 上限），记跳过而非失败，

@@ -45,6 +45,15 @@ TAB_SWITCH_SETTLE_SEC = 2.0  # 页签切换后等待
 POST_BUY_SETTLE_SEC = 2.5
 # 第一次点商品后没等到确认弹窗时的重试间隔：等「获得物品」浮层散掉再定位一次。
 RETRY_SETTLE_SEC = 2.0
+# 2026-11-05 异环实锤：它的「获得物品」浮层写着「点击空白区域关闭」，
+# **不会自动散掉**（原神/崩铁的浮层会自动消失，所以 2.5s 的等待以前够用）。
+# 浮层一直盖在商品卡上，下一轮定位/点击全落在浮层 → 质感骰子 1/5、
+# 三重钥匙 0/20，还被当成「已达上限」写进成功报告与月度标记。
+REWARD_POPUP_TEXTS = ("获得物品", "点击空白区域关闭")
+# 浮层是居中大卡片，右下角是明确的空白区（避开左侧导航、顶部页签、商品卡）。
+REWARD_POPUP_DISMISS_FRAC = (0.92, 0.93)
+REWARD_POPUP_DISMISS_TRIES = 3
+REWARD_POPUP_SETTLE_SEC = 0.8
 EXIT_MAX_ESC = 3             # 采购完最多按几次 ESC 回主世界
 EXIT_CHECK_SEC = 5           # 每次 ESC 后等主世界特征出现的超时
 
@@ -54,6 +63,7 @@ NO_POPUP = "no_popup"            # 点商品后无弹窗（大概率已达上限
 NOT_FULL = "not_full"            # 点商品无弹窗，但页面还显示有剩余（中断，未买满）
 ITEM_MISSING = "item_missing"    # 商品图标匹配不到
 CONFIRM_GONE_FAIL = "confirm_gone_fail"  # 点了确认但弹窗不关（如余额不足换了提示）
+REWARD_POPUP_STUCK = "reward_popup_stuck"  # 「获得物品」浮层关不掉，后续采购不可信
 STOPPED = "stopped"              # 用户请求停止
 
 # 「本月已经买过」的两种表现，都不计失败（用户 2026-11-01 拍板）：
@@ -306,6 +316,44 @@ def _read_item_remaining(
     return best_val
 
 
+def _dismiss_reward_popup(logger: logging.Logger, hwnd: int, label: str):
+    """买成功后确保「获得物品」浮层消失。
+
+    原神/崩铁的浮层会自动散掉（POST_BUY_SETTLE_SEC 够用），异环的浮层
+    写着「点击空白区域关闭」、**不点就一直挂着**，把商品卡全遮住。这里
+    OCR 检测浮层文字 → 点右下角空白 → 复查，最多 3 次。
+
+    返回 None=本来就没有浮层（正常）、True=已关闭、False=关不掉（异常）。
+    """
+    from .foreground_flow_runner import _click_window_local, _window_rect
+    from .ocr_click_tester import ocr_window_content
+
+    rect = _window_rect(hwnd)
+    if not rect:
+        return None
+    _, _, width, height = rect
+    x = int(width * REWARD_POPUP_DISMISS_FRAC[0])
+    y = int(height * REWARD_POPUP_DISMISS_FRAC[1])
+    seen = False
+    for attempt in range(1, REWARD_POPUP_DISMISS_TRIES + 1):
+        try:
+            texts = [
+                str(r.get("text") or "")
+                for r in (ocr_window_content(logger, hwnd=hwnd) or [])
+            ]
+        except Exception as exc:  # noqa: BLE001 - OCR 不可用就按"没有浮层"处理，不拖垮采购
+            LOGGER.debug("[%s] 检测获得物品浮层失败: %s", label, exc)
+            return None
+        if not any(any(k in t for k in REWARD_POPUP_TEXTS) for t in texts):
+            return True if seen else None
+        seen = True
+        logger.info(f"[{label}] 检测到「获得物品」浮层，点空白关闭（第 {attempt} 次）@ ({x},{y})")
+        _click_window_local(hwnd, x, y, clicks=1)
+        time.sleep(REWARD_POPUP_SETTLE_SEC)
+    logger.error(f"[{label}] 「获得物品」浮层点了 {REWARD_POPUP_DISMISS_TRIES} 次仍在，停止本商品采购")
+    return False
+
+
 def _buy_once(
     logger: logging.Logger,
     hwnd: int,
@@ -388,8 +436,13 @@ def _buy_once(
         logger.warning(f"[{label}] 已点确认但弹窗未关闭（可能余额不足或界面异常）")
         return CONFIRM_GONE_FAIL
     # 等「获得物品」浮层散掉：不等的话下一次 OCR 会命中浮层上的商品名，
-    # 点过去不是商品卡、等不到确认弹窗，就被误判成"已达上限"（2026-11-03 实锤）
+    # 点过去不是商品卡、等不到确认弹窗，就被误判成"已达上限"（2026-11-03 实锤）。
     time.sleep(POST_BUY_SETTLE_SEC)
+    # 2026-11-05：异环的浮层不会自己散，必须点空白关掉；关不掉就返回失败码，
+    # 让上层判失败、不写月度标记，避免「1/5 + 0/20 却算本月已买完」。
+    popup = _dismiss_reward_popup(logger, hwnd, label)
+    if popup is False:
+        return REWARD_POPUP_STUCK
     return BOUGHT
 
 
@@ -546,6 +599,9 @@ def buy_shop_groups(
                     break
                 if result == CONFIRM_GONE_FAIL:
                     reason = "确认后弹窗未关"
+                    break
+                if result == REWARD_POPUP_STUCK:
+                    reason = "「获得物品」浮层未关闭，无法继续采购"
                     break
 
             if bought >= count:

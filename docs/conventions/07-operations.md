@@ -414,3 +414,38 @@
   运行任务会弹 UAC 并接管游戏窗口，别在无人值守时静默触发。
 - 回归：`tests/suite_hsr_monthly_handoff_20261104.py`（开关/两份配置/
   禁用安静跳过/未禁用仍触发，4 组 ALL PASS）。
+
+### 异环「获得物品」浮层：不点不散，会伪造「本月已买完」 (2026-11-05)
+
+- **事故**：20:23 迷迭兑换采购前截图 OCR 是「本月库存 5/5」「20/20」（本月根本
+  没买），结果只买了质感骰子 1 个、三重钥匙 0 个，日志却写
+  `质感骰子: 1/5（已达上限或无弹窗），三重钥匙: 0/20（已达上限或无弹窗）`
+  + `✅ 流程执行成功（本月已记录，下月再执行）`。
+- **根因**：买完弹的是「TIPS / 获得物品 / 点击空白区域关闭」浮层，**不点不会
+  自动消失**；`zzz_monthly_shop._buy_once` 结尾只 `sleep(POST_BUY_SETTLE_SEC=2.5)`
+  —— 原神/崩铁的浮层会自动散掉，所以这套写法从 11-03 起一直够用，异环不行。
+  浮层盖住商品卡后，下一轮模板全失配 → 退固定比例坐标 → 点到的还是浮层 →
+  等不到确认弹窗 → `_read_item_remaining` 在坐标附近找不到商品名返回 None →
+  `NO_POPUP` → 理由「已达上限或无弹窗」恰好在 `ALREADY_BOUGHT_REASONS` 里 →
+  `all_ok=True`，`_run_monthly_flow` 就写了 `monthly_flow:NTE_MONTHLY=2026-11`。
+  早批 07:53 原神星尘兑换 4/5、4/5 也是同一条静默漏买通道（那边浮层会散，
+  但 2.5s 未必够）。
+- **现在的处理**：`_dismiss_reward_popup` 在每次买成功后 OCR 检测浮层文字，
+  有就点右下空白 `(0.92, 0.93)`（浮层是居中卡片，右下避开左侧导航/顶部页签/
+  商品卡），复查最多 3 次；三态返回 `None`=本来没有、`True`=已关闭、
+  `False`=关不掉。关不掉时 `_buy_once` 返回新码 `REWARD_POPUP_STUCK`，
+  `monthly_exchange._buy_items` 和 `zzz_monthly_shop._buy_items` 都把它判成
+  失败（**不在** `ALREADY_BOUGHT_REASONS`），于是不会写月度标记，下批会重试。
+- **误写标记要手工清**：`_run_monthly_flow` 只看 `run_flow` 的 bool，一旦误判
+  成功就写死本月标记，代码修好也不会自动补买。11-05 已把
+  `monthly_flow:NTE_MONTHLY` 的值备份到
+  `data/artifacts/monthly_flow_nte_marker_backup_20261105.json` 后清成空串。
+  **以后遇到「买了但数量不足却报 ✅」先查这个键**，别只改代码。
+- **买完不关**：`NTE_MONTHLY.close_process_on_finish` 原为 `false`，20:17 启动的
+  启动器窗口挂到 20:44。现改 `true`；同时 `run_flow` 的 finally 增加
+  `reused_window` 保护 —— 流程接管用户已经开着的游戏时只保留、不误杀
+  （`skip_steps_if_process` 正是这种场景），确实要连复用窗口一起关就显式配
+  `close_reused_window: true`。`_leave_to_main_world` 的 ESC 现在走扫描码按键
+  （见 04-game-flows 绝区零段），浮层关掉后能正常逐层退回主世界。
+- 回归：`tests/suite_nte_reward_popup_20261105.py`（浮层三态 / 失败码 /
+  两个购买循环 / 收尾配置 / 备份取证）。

@@ -201,6 +201,12 @@ TEA_DRINK_TEXTS = ("喝茶", "再来一杯", "请喝茶", "干杯")  # 喝茶交
 # 进的是角色详情/邀约页，还需要再点一次明确入口。这里只认语义明确的词，**不碰
 # 「确认」**——同页有「将离开休息室」的确认框，误点会直接退回上一层。
 TEA_INVITE_TEXTS = ("邀请", "开始茶憩", "一同品茶", "邀约")
+# 2026-11-04 实锤：角色详情页的说明文字
+# 「每名同调者一天仅能邀请一次，重复邀请请使用通用邀请函」也含「邀请」，
+# 旧逻辑按子串命中后点了这行正文，页面原地不动 → 茶憩永远进不去。
+# 邀请入口只认短按钮名；含这些字样的一律不是按钮。
+TEA_INVITE_EXCLUDE_TEXTS = ("一天仅能邀请一次", "重复邀请", "通用邀请函")
+TEA_INVITE_MAX_CHARS = 12
 # 关键点击位（窗口相对比例，实测 @1919x1079）
 TEA_CONFIRM_OK = (0.623, 0.634)          # 前往确认-确定 (1196,684)
 TEA_FIRST_CHARACTER = (0.412, 0.417)     # 角色选择页首个角色卡 (790,450)
@@ -2059,6 +2065,20 @@ def _click_ratio(logger: logging.Logger, hwnd, ratio: Tuple[float, float], label
     return (cx, cy)
 
 
+def _invite_hit_usable(hit: Optional[Dict]) -> bool:
+    """角色详情页的「邀请」候选是否像按钮。
+
+    2026-11-04：说明文字「每名同调者一天仅能邀请一次，重复邀请请使用通用邀请函」
+    含「邀请」且置信度 0.92，被当成按钮点了一次。按钮名是短词，正文一律排除。
+    """
+    if not hit:
+        return False
+    text = "".join(str(hit.get("text") or "").split())
+    if not text or len(text) > TEA_INVITE_MAX_CHARS:
+        return False
+    return not any(marker in text for marker in TEA_INVITE_EXCLUDE_TEXTS)
+
+
 def _nudge_into_tea_scene(logger: logging.Logger, hwnd, stop_check=None) -> bool:
     """点完角色卡后补一脚：先快检茶憩场景，没进就找详情页的「邀请/开始茶憩」。
 
@@ -2066,15 +2086,29 @@ def _nudge_into_tea_scene(logger: logging.Logger, hwnd, stop_check=None) -> bool
     区域（不是茶憩场景），接着老逻辑点底部对话框 (0.50,0.92) 把页面退回了休息室。
     也就是说这一下进的是角色详情/邀约页，还差一次「邀请」类点击。
 
-    只做 5 秒快检（正常流程场景会立刻出现，不会额外拖时间）；找不到邀请类按钮
-    就什么都不点，交给后面的 `_wait_page_markers` 按老逻辑处理，避免盲点把页面
-    退掉。返回是否已确认进入场景或已点了邀请入口。
+    2026-11-04 实锤：这页的说明文字「每名同调者一天仅能邀请一次，重复邀请请
+    使用通用邀请函」含「邀请」，旧逻辑把正文当按钮点，页面原地不动。现在只认
+    短按钮名并排除这些说明文字；找不到就什么都不点，交给后面的
+    `_wait_page_markers` 按老逻辑处理，避免盲点把页面退掉。
+
+    返回是否已确认进入场景或已点了邀请入口。
     """
     if _wait_page_markers(logger, hwnd, TEA_SCENE_MARKERS, timeout=8.0, stop_check=stop_check):
         return True
     if _stopped(stop_check):
         return False
-    hit = _ocr_best_match(logger, TEA_INVITE_TEXTS, hwnd, min_conf=0.55)
+    hit = _ocr_best_match(
+        logger,
+        TEA_INVITE_TEXTS,
+        hwnd,
+        min_conf=0.55,
+        exclude=TEA_INVITE_EXCLUDE_TEXTS,
+    )
+    if hit and not _invite_hit_usable(hit):
+        logger.warning(
+            f"[白荆回廊·日常] 拒绝把说明文字当邀请按钮: {hit.get('text')!r} @ {hit.get('center')}"
+        )
+        hit = None
     if hit:
         _pyautogui_click_guarded(*hit["center"])
         logger.info(f"[白荆回廊·日常] 角色详情页点击 {hit['text']!r} @ {hit['center']}")

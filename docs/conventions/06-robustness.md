@@ -215,3 +215,68 @@
 - 新增 dispatch 分支时不要绕过这段自己 return；失败原因字符串要写清楚（带坐标 /
   等待时长更好），取证图才有用。
 - 回归：`tests/suite_monthly_shop_observability_20261104.py` [2][3]。
+
+### 确认失败取证 / 窗口不可用止损 / Cookie 过期 / 测试日志隔离 (2026-11-04 晚)
+
+- **取证路径一共有三条，别只补两条**：`run_flow` 里「未匹配模板/OCR 重试耗尽」
+  (2456 附近) 与「内建动作 dispatch 失败」(2574 附近) 早就调
+  `_collect_failure_evidence`，但 `execute_confirm_strategy` 返回 False 的分支
+  重试耗尽直接 `return False`。结果 11-04 绝区零三次「点击进入游戏：元素 10s
+  未消失」一张图都没有、`flow_failures` 里连一条 `ZZZ_MONTHLY` 都没有。现在
+  第三条也统一打 `logger.error` + 取证（`error="确认失败: {reason}"`），
+  **"用户停止"仍然不算失败、不落库**。新增失败返回分支时先对照这三条。
+- **窗口不可用要止损，但不能一刀切缩短 timeout**：异环 `NTE_MONTHLY` 步骤2
+  `wait_template` 的 `timeout_sec=1200` 是给"游戏真在下载/更新"留的，改成 300
+  会误伤。11-04 20:35:31→20:47:23 的空转是启动器/游戏本体互抢窗口导致 HWND
+  失效或最小化，`ocr_click_tester._ocr_scan` 恒返回空结果，上层却一直按"未匹配"
+  轮询。现在 `run_flow` 每轮用 `_window_available_for_ocr`（复用
+  `_ensure_window_region` 这个唯一判据）计时，连续 `window_dead_timeout_sec`
+  秒不可用就 break 出匹配循环 → 走既有「未匹配 → 重试 → 取证」，既留痕又不空转。
+  配置为流程级/步骤级可选，默认 45s，`0` 可退回旧行为；只写在 `NTE_MONTHLY`。
+  **只判窗口不可用，不判被遮挡**：异环可后台点击，被别的窗口挡住不影响操作，
+  把遮挡当失败是过度保守。
+- **米游社 cookie_token 有两份来源**：签到链路
+  `mihoyo_sign._ensure_fresh_cookie_token` 会用 stoken 刷新，但结果只用于当次
+  签到、不回写 `app_config.json`；`check_games_progress` 每次 `load(force=True)`
+  读到的还是旧 token → 20:15:41 `[星铁] Cookie 已过期`。`enrich_cookie_for_record_api`
+  只在 `cookie_token` **缺失**时补，过期不会补。现在 `_query_hoyo_daily_note`
+  遇到 retcode 10001 才现场刷新并重试一次（正常路径不多发请求、不写配置），
+  三个米游社游戏共用。另外 `_check_hoyo_accounts` 旧口径把
+  `stoken/stoken_v2/stuid/stuid_v2` 全当必需还用子串判断，本机每天误报
+  「缺少 stuid_v2」；改成只检查账号标识 + cookie_token。
+- **测试不许写生产日志**：`AutomationController._init_logger()` 以前无条件挂
+  `TimedRotatingFileHandler(LOG_FILE)`，套件里 `ac.AutomationController()` 就会把
+  `FakeSession` 行写进 `data/logs/auto_runner.log`（11-04 21:21-21:58 一堆，
+  次日排障分不清真假运行）。现在 `GAMEAUTO_LOG_FILE_DISABLED=1` 或
+  `PYTEST_CURRENT_TEST` 存在时只挂 console/UI handler；`tests/test_suites.py`
+  给所有子进程套件统一设开关，`suite_okww_module_20261104.py` 顶部再
+  `setdefault` 兜住手动单跑。**生产 GUI/CLI 两个变量都不满足，文件日志行为不变**
+  （「日志长期保留、不自动删除」的约定不受影响）。验证口径：跑一次套件前后
+  比较 `auto_runner.log` 字节数，应完全不变。
+- 回归：`tests/suite_failure_evidence_cookie_20261104.py`（26 项，含 AST 检查
+  confirm 分支必调取证、窗口可用性判据、过期重试的三种分支、日志两条路径）。
+
+### 长等待循环必须每轮打任务心跳 (2026-11-05)
+
+- **两套预算会打架**：`TaskHeartbeatWatchdog` 盯的是**任务线程主动 `beat()`**，
+  全局阈值 `_global.task_heartbeat_timeout_sec` 未配时是 **600s**；而
+  `app_config.apps.<游戏>.timeouts` 里的 `launch` / `update` 是「等多久算超时」。
+  只要等待预算 ≥ 600s 且等待循环不打心跳，线程明明在正常轮询也会被误判死锁。
+- **11-05 异环实锤**：更新补跑 11:05:27 / 11:15:57 / 11:26:27 三次都是
+  `_wait_for_game_process_snapshot` 等 `HTGame.exe`。11:15 / 11:26 已明确打出
+  「游戏正在更新，按更新预算等待（最长 120 分钟），更新完继续跑」，结果每次
+  到 600s 就被 `_on_task_stall` 强杀。看门狗现场栈
+  (`data/logs/watchdog_task_heartbeat.log`) 三次都停在
+  `automation_controller.py:470 in _wait_for_game_process_snapshot`
+  → `_monitor_game` → `execute_task`，也就是 `time.sleep(2)`，**不是死锁**。
+  异环 `launch=600`、`update=7200` 都不短于 600s，所以必然撞。
+- **为什么正好 3 次**：`scheduler._check_update_retries` 每 30s 扫队列，
+  `max_attempts=3`；被强杀的任务没写完成标记，attempt 已 +1 但到点又重排，
+  间隔约 10 分 30 秒（600s 等待 + 30s 排队），三次耗尽才清空队列。
+- **修法**：`_wait_for_game_process_snapshot` 的轮询循环每轮
+  `self._heartbeat.beat()`，与 `_monitor_game` 主循环同口径。`beat()` 只是更新
+  monotonic 时间戳，不要求 `start()`，也不影响 `stop_current_task` 的停止检查。
+  **以后新增任何 `while True` + `sleep` 的等待循环，都要先问有没有打心跳**；
+  只加日志/只 sleep 不算活着。
+- 回归：`tests/suite_nte_launch_heartbeat_20261105.py`（AST 断言 beat 在 sleep
+  之前、动态 mock 跑 3 轮验证 beat 次数、预算不匹配证据、补跑队列口径）。

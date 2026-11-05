@@ -42,6 +42,7 @@ from ..settings.paths import BAIJING_VERIFY_DIR, TEMPLATES_DIR, WORKFLOW_DB_PATH
 from .foreground_flow_runner import _pyautogui_click_guarded
 from .ocr_click_tester import (
     ocr_and_template_match,
+    ocr_window_content,
     _find_by_template,
     _window_obscured_ratio,
     grab_screen,
@@ -83,6 +84,14 @@ BAIJING_VERIFY_KEEP_DAYS = 7
 ENTER_GAME_WAIT_SEC = 60
 # 等待游戏本体进程超过这个秒数仍未启动 → 触发一次启动器状态诊断（写日志+失败原因）
 PROCESS_WAIT_DIAGNOSIS_SEC = 60
+
+# ── 启动器更新提示（2026-11-05 实锤）──
+# 游戏维护后启动器会弹「检测到游戏有新版本，请确认是否更新？」+ 取消/确定。
+# 旧流程只找「开始游戏」，不点「确定」→ 游戏本体进程永远起不来（300s 超时）。
+# 更新下载可能很久，确认过一次后等待上限放宽到 30 分钟（按停止键仍可中断）。
+LAUNCHER_UPDATE_MARKERS = ("检测到游戏有新版本", "确认是否更新", "游戏有新版本")
+LAUNCHER_UPDATE_CONFIRM_TEXTS = ("确定",)
+UPDATE_WAIT_TIMEOUT_SEC = 1800
 # 常态匹配阶段最大循环次数（每轮约 1~2s，足够覆盖正常载入与过场）
 MAIN_LOOP_MAX_CYCLES = 150
 # 连续 ESC 恢复的最大次数
@@ -490,15 +499,21 @@ def _wait_process(
     timeout: int = 300,
     stop_check=None,
     on_wait=None,
+    on_poll=None,
+    poll_after: float = 8.0,
+    poll_interval: float = 30.0,
 ) -> Optional[int]:
     """等待指定进程启动，返回 PID。stop_check 命中则立即返回 None。
 
     on_wait：等待超过 60s 仍未启动时回调一次（用于中途诊断并落日志），
     回调异常不影响主流程。
+    on_poll：启动后每隔 poll_interval 秒回调一次；返回正数可把剩余等待时间
+    延长到该秒数（用于「点完开始游戏才发现启动器弹了更新提示」的场景）。
     """
     deadline = time.time() + timeout
     started_at = time.time()
     diagnosed = False
+    next_poll = time.time() + poll_after
     while time.time() < deadline:
         if stop_check and stop_check():
             logger.info(f"[白荆回廊] 等待 {process_name} 期间收到停止信号，中止等待")
@@ -517,9 +532,105 @@ def _wait_process(
                 on_wait()
             except Exception as exc:
                 logger.debug(f"[白荆回廊] 等待进程期间诊断失败（已忽略）: {exc}")
+        if on_poll is not None and time.time() >= next_poll:
+            next_poll = time.time() + poll_interval
+            try:
+                extra = on_poll()
+            except Exception as exc:
+                logger.debug(f"[白荆回廊] 等待进程期间轮询失败（已忽略）: {exc}")
+                extra = None
+            if isinstance(extra, (int, float)) and extra > 0:
+                deadline = max(deadline, time.time() + float(extra))
+                logger.info(f"[白荆回廊] 等待游戏进程的时限已延长到 {extra:.0f}s（更新/下载中）")
         time.sleep(2)
     logger.warning(f"[白荆回廊] 等待游戏本体进程超时: {process_name} ({timeout}s)")
     return None
+
+
+def _compact_ocr_text(value) -> str:
+    """去掉 OCR 文本里的空白，便于 '' 判断与短按钮名匹配。"""
+    return "".join(str(value or "").split())
+
+
+def _find_launcher_update_prompt(results) -> Optional[Dict]:
+    """从 OCR 结果里找启动器更新确认弹窗；没有返回 None。"""
+    for item in results or []:
+        text = _compact_ocr_text(item.get("text"))
+        if any(marker in text for marker in LAUNCHER_UPDATE_MARKERS):
+            return item
+    return None
+
+
+def _confirm_launcher_update(
+    logger: logging.Logger,
+    hwnd: Optional[int],
+    stop_check=None,
+) -> bool:
+    """检测并点击启动器「检测到游戏有新版本」弹窗的「确定」。
+
+    2026-11-05 实锤：08:53 / 09:36 两轮都在等游戏进程，启动器一直停在
+    「检测到游戏有新版本，请确认是否更新？」（截图
+    `20261105_093654_BaiJing_等待游戏进程.jpg`），「开始游戏」按钮还在但点不动。
+    旧流程从不识别这个弹窗，300s 后只会报「点击未生效」。
+
+    返回 True 表示确实看到并点击了更新确认（调用方据此放宽后续等待）。
+    没看到弹窗、或弹窗里找不到「确定」都返回 False，不会盲点。
+    """
+    if not hwnd:
+        return False
+    try:
+        results = ocr_window_content(logger, hwnd=hwnd) or []
+    except Exception as exc:  # noqa: BLE001 - 识别失败不能拖死启动
+        logger.debug("[白荆回廊] 检查启动器更新提示失败: %s", exc)
+        return False
+
+    marker = _find_launcher_update_prompt(results)
+    if not marker:
+        return False
+
+    logger.warning(
+        "[白荆回廊] 检测到启动器更新提示: %r（需要点「确定」才能继续）",
+        marker.get("text"),
+    )
+    marker_center = marker.get("center") or (0, 0)
+    best = None
+    best_dist = None
+    for item in results:
+        text = _compact_ocr_text(item.get("text"))
+        if text not in LAUNCHER_UPDATE_CONFIRM_TEXTS:
+            continue
+        center = item.get("center") or (0, 0)
+        dist = abs(center[0] - marker_center[0]) + abs(center[1] - marker_center[1])
+        if best is None or dist < best_dist:
+            best = item
+            best_dist = dist
+    if best is None:
+        logger.error("[白荆回廊] 更新提示已出现，但 OCR 没找到「确定」按钮，无法自动确认")
+        return False
+
+    center = best.get("center")
+    if not center:
+        logger.error("[白荆回廊] 更新提示的「确定」按钮没有中心坐标，无法点击")
+        return False
+    _pyautogui_click_guarded(int(center[0]), int(center[1]))
+    logger.info(f"[白荆回廊] 已点击启动器更新提示的「确定」@ {center}")
+
+    # 等弹窗消失；更新下载期间启动器可能自己刷新，最多等 20s。
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        if stop_check and stop_check():
+            return True
+        time.sleep(1.0)
+        try:
+            latest = ocr_window_content(logger, hwnd=hwnd) or []
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[白荆回廊] 等待更新提示消失时 OCR 失败: %s", exc)
+            return True
+        if not _find_launcher_update_prompt(latest):
+            logger.info("[白荆回廊] 启动器更新提示已关闭")
+            return True
+    logger.warning("[白荆回廊] 点击「确定」后更新提示仍在（可能正在下载/刷新）")
+    return True
 
 
 def _diagnose_launcher_state(logger: logging.Logger, hwnd: Optional[int]) -> str:
@@ -550,6 +661,15 @@ def _diagnose_launcher_state(logger: logging.Logger, hwnd: Optional[int]) -> str
         parts.append(f"「开始游戏」按钮仍在原位 {still}（点击未生效，疑似点到控制台/日志窗口）")
     else:
         parts.append("「开始游戏」按钮已消失（点击已生效，游戏可能仍在加载）")
+    try:
+        prompt = _find_launcher_update_prompt(
+            ocr_window_content(logger, hwnd=hwnd) or []
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"[白荆回廊] 诊断更新提示失败: {exc}")
+        prompt = None
+    if prompt:
+        parts.append(f"启动器仍显示更新提示「{prompt.get('text')}」（需点「确定」并等更新完成）")
     return "；".join(parts)
 
 
@@ -587,6 +707,13 @@ def _find_and_click(
             return False
         region = _window_region(hwnd)
         if not region:
+            # 启动器更新/刷新时窗口可能重建：句柄失效就按进程名重新接管，
+            # 否则会在旧句柄上一直空转到 timeout（2026-11-05 更新弹窗场景）。
+            fresh = _resolve_launcher_window(logger)
+            if fresh and fresh != hwnd:
+                logger.info(f"[白荆回廊] 启动器窗口句柄已刷新 {hwnd} -> {fresh}")
+                hwnd = fresh
+                continue
             logger.warning("[白荆回廊] 目标窗口不可用（已关闭/最小化），本轮跳过识别")
             time.sleep(poll_interval)
             continue
@@ -736,8 +863,30 @@ def run_baijing_ingame_flow(config: dict, logger: logging.Logger, stop_check=Non
             "[白荆回廊] 未定位到启动器窗口，拒绝全屏识别"
             "（全屏会把日志/控制台窗口的文字当成按钮，2026-11-02 就是这么点歪的）"
         )
+
+    # 2026-11-05 实锤：启动器先弹「检测到游戏有新版本，请确认是否更新？」，
+    # 不点「确定」的话「开始游戏」点了也没用。先处理弹窗，再去找按钮。
+    update_confirmed = False
+    if launcher_hwnd:
+        update_confirmed = _confirm_launcher_update(
+            logger, launcher_hwnd, stop_check=stop_check
+        )
+        if update_confirmed:
+            logger.warning(
+                "[白荆回廊] 启动器需要更新：已确认提示，等待启动器就绪/下载完成后再点「开始游戏」"
+            )
+            time.sleep(2.0)
+            launcher_hwnd = _wait_launcher_window(logger, timeout=20) or launcher_hwnd
+            _focus_game_window(logger, launcher_hwnd)
+
+    start_timeout = UPDATE_WAIT_TIMEOUT_SEC if update_confirmed else 120
     if not _find_and_click(
-        logger, "launcher_start", "开始游戏", timeout=120, stop_check=stop_check, hwnd=launcher_hwnd
+        logger,
+        "launcher_start",
+        "开始游戏",
+        timeout=start_timeout,
+        stop_check=stop_check,
+        hwnd=launcher_hwnd,
     ):
         if _stopped():
             logger.info("[白荆回廊] 用户停止，退出进入流程")
@@ -751,7 +900,8 @@ def run_baijing_ingame_flow(config: dict, logger: logging.Logger, stop_check=Non
                     "（未定位到启动器窗口，已拒绝全屏识别）"
                     if not launcher_hwnd
                     else "（模板+OCR 均未在启动器窗口内命中）"
-                ),
+                )
+                + (f"；已确认更新提示，等待 {start_timeout}s 仍未就绪" if update_confirmed else ""),
                 hwnd=launcher_hwnd,
             )
         return False
@@ -769,19 +919,43 @@ def run_baijing_ingame_flow(config: dict, logger: logging.Logger, stop_check=Non
         diagnosis["text"] = text
         logger.warning(f"[白荆回廊] 等待游戏进程已超过 60s 仍未启动：{text}")
 
+    def _poll_update():
+        """点完「开始游戏」后才弹更新提示的启动器也要兜住。"""
+        nonlocal launcher_hwnd, update_confirmed
+        if update_confirmed:
+            return None
+        fresh = _resolve_launcher_window(logger)
+        if fresh:
+            launcher_hwnd = fresh
+        if _confirm_launcher_update(logger, launcher_hwnd, stop_check=stop_check):
+            update_confirmed = True
+            return UPDATE_WAIT_TIMEOUT_SEC
+        return None
+
+    process_timeout = UPDATE_WAIT_TIMEOUT_SEC if update_confirmed else 300
     game_pid = _wait_process(
-        logger, GAME_PROCESS, timeout=300, stop_check=stop_check, on_wait=_diagnose
+        logger,
+        GAME_PROCESS,
+        timeout=process_timeout,
+        stop_check=stop_check,
+        on_wait=_diagnose,
+        on_poll=_poll_update,
+        poll_after=8.0,
+        poll_interval=30.0,
     )
     if not game_pid:
         if _stopped():
             logger.info("[白荆回廊] 用户停止，退出进入流程")
         else:
             detail = diagnosis.get("text") or _diagnose_launcher_state(logger, launcher_hwnd)
+            timeout_label = UPDATE_WAIT_TIMEOUT_SEC if update_confirmed else 300
             logger.error(f"[白荆回廊] 游戏本体进程 {GAME_PROCESS} 未启动：{detail}")
             _record_baijing_flow_failure(
                 logger,
                 "等待游戏进程",
-                f"游戏本体进程 {GAME_PROCESS} 未启动（超时 300s）；{detail}",
+                f"游戏本体进程 {GAME_PROCESS} 未启动（超时 {timeout_label}s）"
+                + ("；已确认更新提示" if update_confirmed else "")
+                + f"；{detail}",
                 hwnd=launcher_hwnd,
             )
         return False

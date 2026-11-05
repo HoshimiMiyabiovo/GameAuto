@@ -932,6 +932,11 @@
         "item_scroll_search": false,
         "shop_entry_template": "assets/templates\\绝区零-商城入口.png",
         "shop_entry_text": "商城",
+        "shop_entry_point_frac": [
+          0.7167,
+          0.8981
+        ],
+        "_comment_shop_entry": "2026-11-05 实机：主菜单底部商城是「24 HOUR」纯图标，OCR 认成 24/HOUR，中文「商城」标签常识别不到，模板也可能在动态背景下失配。按过 ESC 之后允许用固定比例坐标兜底（实机命中点 1376,970 @1920x1080）。",
         "nav_text": "信源清单",
         "tab_text": "信号残响",
         "tab_template": "assets/templates\\绝区零-信号残响页签.png",
@@ -1435,9 +1440,11 @@
       }
     ]
   },
-  "NTE_MONTHLY": {
-    "enabled": true,
-    "_comment_start_from_main": "2026-11-04 用户要求所有流程统一从主世界开始：异环游戏本体已在运行（HTGame.exe）时不再走启动器「开始更新/开始游戏」，直接从游戏内进商城；步骤 6「进入游戏」找不到就跳过（说明已经在游戏里）。",
+ "NTE_MONTHLY": {
+  "enabled": true,
+  "window_dead_timeout_sec": 45,
+  "_comment_window_dead": "2026-11-04：启动器与游戏本体换窗口时 HWND 会短暂失效/最小化，OCR 恒返回空结果，旧逻辑空转到 timeout_sec=1200s（实跑 12 分钟、被 GUI 退出打断后连一条失败记录都没有）。窗口连续不可用 45s 就提前收场，走正常重试/失败取证。只判「窗口不可用」，不判被遮挡——异环可后台点击，被别的窗口挡住不影响操作。设 0 可禁用止损。",
+  "_comment_start_from_main": "2026-11-04 用户要求所有流程统一从主世界开始：异环游戏本体已在运行（HTGame.exe）时不再走启动器「开始更新/开始游戏」，直接从游戏内进商城；步骤 6「进入游戏」找不到就跳过（说明已经在游戏里）。",
     "skip_steps_if_process": {
       "process_name": "HTGame.exe",
       "steps": [1, 2, 3, 4]
@@ -1468,7 +1475,9 @@
       0.84,
       0.8
     ],
-    "close_process_on_finish": false,
+    "close_process_on_finish": true,
+    "_comment_close": "2026-11-05：买完后启动器/游戏窗口挂了 27 分钟（20:17→20:44）不关。改成功后关闭本流程自己拉起来的进程；run_flow 对「复用用户已开着的窗口」会保留游戏，不会误伤。",
+
     "steps": [
       {
         "name": "开始更新",

@@ -15,6 +15,7 @@
 跑法：.venv\\Scripts\\python.exe tests\\suite_hsr_monthly_handoff_20261104.py
 """
 
+import datetime
 import json
 import logging
 import re
@@ -63,8 +64,17 @@ def test_m7a_switch():
     text = M7A_CONFIG.read_text(encoding="utf-8")
     check("asset_ember_tracks_of_destiny_enable: true",
           bool(re.search(r"^asset_ember_tracks_of_destiny_enable:\s*true", text, re.M)))
-    check("timestamp 保持 0（本月才会进 pending 补买）",
-          bool(re.search(r"^asset_ember_tracks_of_destiny_timestamp:\s*0", text, re.M)))
+    # 2026-11-05：开关打开后三月七下次运行就会消费它，把 timestamp 写成当月
+    # 时间。0（待补买）与本月时间戳（已买）都是合法状态——这条是一次性交接
+    # 动作，不能把「还没消费」写死成永久断言。
+    m = re.search(r"^asset_ember_tracks_of_destiny_timestamp:\s*([\d.]+)", text, re.M)
+    ts = float(m.group(1)) if m else None
+    this_month = datetime.datetime.now().strftime("%Y-%m")
+    valid = ts is not None and (
+        ts == 0
+        or datetime.datetime.fromtimestamp(ts).strftime("%Y-%m") == this_month
+    )
+    check("timestamp 为 0（待补买）或本月已消费（三月七跑过）", valid, ts)
 
 
 def test_flow_configs():

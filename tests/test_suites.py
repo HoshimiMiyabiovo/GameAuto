@@ -33,6 +33,10 @@ def test_legacy_suite(suite: str) -> None:
     env = {
         **os.environ,
         "PYTHONIOENCODING": "utf-8",
+        # 2026-11-04：套件里实例化 AutomationController 会挂生产文件 handler，
+        # FakeSession 等测试日志会写进 data/logs/auto_runner.log。统一关掉，
+        # 生产 GUI/CLI 不受影响（默认不开这个变量）。
+        "GAMEAUTO_LOG_FILE_DISABLED": "1",
         # src 布局：套件脚本即使没自己插 sys.path，也能导入 game_auto
         "PYTHONPATH": str(SUITE_DIR.parent / "src") + os.pathsep + os.environ.get("PYTHONPATH", ""),
     }

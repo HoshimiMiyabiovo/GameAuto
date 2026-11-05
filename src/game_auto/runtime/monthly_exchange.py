@@ -44,6 +44,7 @@ from .zzz_monthly_shop import (
     ITEM_MISSING,
     NO_POPUP,
     NOT_FULL,
+    REWARD_POPUP_STUCK,
     STOPPED,
     _buy_once,
     _frac_point,
@@ -56,6 +57,7 @@ LOGGER = logging.getLogger("GameAutomation")
 
 MENU_ATTEMPTS = 3            # ESC 打开主菜单的尝试次数（三次都见不到商店入口 = 界面不对）
 MENU_WAIT_SEC = 10           # 单次找商店入口超时
+ESC_HOLD_SEC = 0.15          # 扫描码 ESC 的按住时长（2026-11-05 绝区零实机值）
 NAV_WAIT_SEC = 20            # 商店页里找左侧导航超时（页面加载有过渡动画）
 TAB_WAIT_SEC = 15            # 找目标页签超时
 TAB_SWITCH_SEC = 8           # 点页签后等「未选中态」消失的超时
@@ -177,14 +179,29 @@ def _sleep(seconds: float, stop_check: Optional[Callable[[], bool]] = None) -> N
 
 
 def _press_escape(hwnd: int) -> None:
-    """在游戏窗口内按 ESC。pyautogui 的 fail-safe 与点击同样处理，转成可读异常。"""
-    from .foreground_flow_runner import _focus_window, FailSafeAborted, _FAILSAFE_HINT
+    """在游戏窗口内按 ESC：必须发带硬件扫描码的按键，且按住一小会儿。
+
+    2026-11-05 绝区零实机逐项对比（双方都提权、UIPI 无阻碍、前台窗口就是游戏）：
+    - `pyautogui.press("escape")` / `keyDown+keyUp` / `press("f3")` —— 全无反应，
+      主菜单根本打不开，`_open_exchange_page` 按 3 次 ESC 全是白按；
+    - `win32api.keybd_event(vk, MapVirtualKey(vk), ...)` 按住 0.15s ——
+      vk=114 立刻开出城募页面、vk=27 一次退回主世界、再一次开出主菜单。
+    Unity 只认带扫描码的按键事件。这里统一改掉，崩铁/异环的 ESC 退出链路
+    同样受益；用 finally 保证异常时也会松开键，不留下卡住的 ESC。
+    """
+    import win32api
+    import win32con
+
+    from .foreground_flow_runner import _focus_window
 
     _focus_window(hwnd)
+    vk = win32con.VK_ESCAPE
+    scan = win32api.MapVirtualKey(vk, 0)
     try:
-        pyautogui.press("escape")
-    except pyautogui.FailSafeException as exc:
-        raise FailSafeAborted(_FAILSAFE_HINT) from exc
+        win32api.keybd_event(vk, scan, 0, 0)
+        time.sleep(ESC_HOLD_SEC)
+    finally:
+        win32api.keybd_event(vk, scan, win32con.KEYEVENTF_KEYUP, 0)
 
 
 def _visible_texts(logger: logging.Logger, hwnd: int) -> List[Dict]:
@@ -297,13 +314,28 @@ def _find_shop_entry(
     confidences,
     timeout_sec: int,
     stop_check: Optional[Callable[[], bool]],
+    point_frac: Optional[Sequence[float]] = None,
 ) -> Optional[Tuple[int, int]]:
-    """主菜单里的商店入口：模板优先，OCR 文字兜底。"""
+    """主菜单里的商店入口：模板 → OCR 文字 → 固定比例坐标。
+
+    2026-11-05 绝区零实机：主菜单底部商城入口是「24 HOUR」纯图标，OCR 把
+    它认成 `24 / HOUR`，中文「商城」标签太小也常常识别不到；模板在动态背景下
+    也可能失配。`point_frac` 是最后一道兜底，坐标系与 `_locate` / `_locate_ocr`
+    一致（窗口局部像素），调用方只在按过 ESC 之后才传，避免在主世界瞎点。
+    """
     if template and os.path.isfile(template):
         center = _locate(hwnd, template, scales, confidences, timeout_sec, stop_check)
         if center:
             return center
-    return _locate_ocr(logger, hwnd, text, SHORT_WAIT_SEC, stop_check)
+    center = _locate_ocr(logger, hwnd, text, SHORT_WAIT_SEC, stop_check)
+    if center:
+        return center
+    if point_frac:
+        fixed = _frac_point(hwnd, point_frac)
+        if fixed:
+            logger.info("[每月兑换] 模板/OCR 都没命中商店入口，改用固定比例坐标 @ %s", fixed)
+            return fixed
+    return None
 
 
 def _tab_brightness(logger: logging.Logger, hwnd: int, center: Tuple[int, int]) -> Optional[float]:
@@ -484,6 +516,9 @@ def _open_exchange_page(
     tab_text = str(step.get("tab_text") or "").strip()
     tab_template = _abs_template(str(step.get("tab_template") or ""))
 
+    # 固定比例坐标只在按过 ESC（确认已进主菜单）之后才允许用；第一轮还在
+    # 主世界时直接点会把点击浪费在大世界上。
+    entry_point_frac = step.get("shop_entry_point_frac")
     entry = None
     for attempt in range(1, MENU_ATTEMPTS + 1):
         if stop_check is not None and stop_check():
@@ -491,6 +526,7 @@ def _open_exchange_page(
         entry = _find_shop_entry(
             logger, hwnd, shop_template, shop_text, scales, confidences,
             MENU_WAIT_SEC, stop_check,
+            point_frac=entry_point_frac if attempt > 1 else None,
         )
         if entry:
             break
@@ -1017,6 +1053,9 @@ def _buy_items(
                 break
             if result == CONFIRM_GONE_FAIL:
                 reason = "确认后弹窗未关"
+                break
+            if result == REWARD_POPUP_STUCK:
+                reason = "「获得物品」浮层未关闭，无法继续采购"
                 break
 
         if bought >= count:

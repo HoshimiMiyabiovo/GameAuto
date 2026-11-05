@@ -190,3 +190,28 @@
 - **回归**：`tests/suite_script_version_check_20261103.py`（版本解析/路径提取/
   配置解析/TTL/stale 回退/notified 去重/本地未知不误报/桥接与 QML 接线/
   离屏 stub-bridge 冒烟）。仓库 slug 变更（脚本换家）只改 games 档案里的 repo。
+
+## ok-ww v3.7.13 上游锁定与工坊域名（2026-11-04）
+
+- **主程序锁 v3.7.13 不升级**（上游 #1824 零氪封号 + v3.7.16/17 砍角色代码/多账号
+  tab），`data/apps/ok-ww/app.json` 的 `update_method` 已写死 `MANUAL_UPDATE`。
+  **没有任何静默重开路径**：应用源码不调 `update_app_config`，壳每次启动从盘读
+  app.json，pyappify 里两处 AUTO 只是读盘前的内存初值。会回到 AUTO 的只有三种
+  **显式动作**：手改 app.json、壳 UI 里切换、删 app.json 重装（缺省即 AUTO）——
+  换机部署用 `D:\backup\ok-ww\ok-ww_v3.7.13_full_20261104.zip`（内层 app.json 同样
+  已是 MANUAL_UPDATE）。
+- **工坊域名现状**：`cfokwwchar.ok-script.com` 被上游删 DNS（NXDOMAIN），数据本体
+  在 `okwwcharcode.ok-script.com`（= 公网仓库 `ok-oldking/ok-ww-char-code` 的
+  GitHub Pages；`/teams.json`、`/teams/{slug}.json`、`/codes/*.zip` 路径与 JSON
+  结构和 v3.7.13 解析器完全兼容，49 队/69 轴，仍在活跃更新）。
+- **本地补丁**：v3.7.13 安装内 `src/gui/CharacterCodeTab.py` 的
+  `WORKSHOP_TEAMS_ALL_URL` / `WORKSHOP_TEAM_URL` / `WORKSHOP_ARCHIVE_HOSTS` 三个
+  常量已改指新域名（`repo/` 与 `working/` 两份同改，改前各有
+  `CharacterCodeTab.py.bak_20261104`；`_import_workshop_code` 的旧域名重写对
+  新域名是恒等映射，保留不动）。**重装/更新冲掉补丁后两份都要重打**；离线兜底
+  是本地整仓镜像重导（重导只丢行尾，`Hsin_h2_r2_gap_0.5.patch` 可机械恢复）。
+- **版本检测口径**：`games/wuwa.py` 的 ScriptTool repo 仍指向
+  `ok-oldking/ok-wuthering-waves`，本地 v3.7.13 vs 上游最新（2026-11-04 当日
+  三连发至 v3.7.18，全是收缩性变更：砍 tab/下载/赞助、ok-script 3.x、改为
+  游戏退出后才查更新），脚本管理页会一直显示「有新版本」——这是**有意保留的
+  观测窗口**（盯上游动向），不是误报；勿据此升级，也勿为消红把 repo 置空。

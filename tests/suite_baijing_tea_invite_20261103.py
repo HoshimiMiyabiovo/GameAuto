@@ -49,6 +49,7 @@ class TeaEnv:
         self.scene = scene
         self.invite = invite
         self.clicks = []
+        self.ocr_kwargs = []
         self._saved = {}
 
     def install(self):
@@ -72,6 +73,7 @@ class TeaEnv:
             setattr(bd, k, v)
 
     def _ocr(self, logger, texts, hwnd, frac_region=None, min_conf=0.5, exclude=()):
+        self.ocr_kwargs.append({"texts": tuple(texts), "exclude": tuple(exclude)})
         if any(t in texts for t in bd.TEA_INVITE_TEXTS):
             return self.invite
         return None
@@ -116,11 +118,47 @@ def test_4_candidates_exclude_confirm():
     check("不含「确认」", "确认" not in bd.TEA_INVITE_TEXTS, bd.TEA_INVITE_TEXTS)
 
 
+def test_5_warning_text_not_clicked():
+    print("[5] 说明文字含「邀请」也不能当按钮点（2026-11-04 实锤）")
+    hit = {
+        "text": "每名同调者一天仅能邀请一次，重复邀请请使用通用邀请函",
+        "confidence": 0.92,
+        "center": (1052, 899),
+    }
+    ok, env = run(scene=False, invite=hit)
+    check("返回 False", ok is False, ok)
+    check("没点正文", not env.clicks, env.clicks)
+    passed_exclude = any(
+        tuple(bd.TEA_INVITE_EXCLUDE_TEXTS) == tuple(k.get("exclude") or ())
+        for k in env.ocr_kwargs
+    )
+    check("exclude 已传给 OCR", passed_exclude, env.ocr_kwargs)
+
+
+def test_6_invite_hit_usable():
+    print("[6] 邀请候选只接受短按钮名")
+    check("短按钮可用", bd._invite_hit_usable({"text": "邀请"}) is True)
+    check(
+        "长正文不可用",
+        bd._invite_hit_usable(
+            {"text": "每名同调者一天仅能邀请一次，重复邀请请使用通用邀请函"}
+        )
+        is False,
+    )
+    check(
+        "含排除词不可用",
+        bd._invite_hit_usable({"text": "通用邀请函"}) is False,
+    )
+    check("空命中不可用", bd._invite_hit_usable(None) is False)
+
+
 def main():
     test_1_scene_immediately()
     test_2_invite_found()
     test_3_nothing_found()
     test_4_candidates_exclude_confirm()
+    test_5_warning_text_not_clicked()
+    test_6_invite_hit_usable()
     print("-" * 60)
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} -> {FAILURES}")

@@ -107,14 +107,14 @@ def _click(center) -> None:
 
 
 def _press_esc() -> None:
-    import pyautogui
-    from .foreground_flow_runner import FailSafeAborted
-    try:
-        pyautogui.press("escape")
-    except pyautogui.FailSafeException as exc:
-        raise FailSafeAborted(
-            "PyAutoGUI 紧急停止已触发：鼠标位于屏幕左上角 (0,0)。"
-        ) from exc
+    """ESC 退回上一层：走带扫描码的真实按键，别用 pyautogui.press。
+
+    2026-11-05 与 nikki_calendar._press_key 统一口径；瞬时虚拟键事件在游戏内
+    UI 上不生效（绝区零实机逐项验证过）。
+    """
+    from .foreground_flow_runner import press_key_scancode
+
+    press_key_scancode("esc")
 
 
 def _launcher_button(logger, hwnd: int):

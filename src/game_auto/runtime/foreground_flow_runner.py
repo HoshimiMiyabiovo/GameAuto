@@ -837,6 +837,40 @@ def _focus_window(hwnd: int):
         _LOGGER.debug("[窗口] SetForegroundWindow 失败: %s", exc)
 
 
+_SCANCODE_VK_ALIASES = {
+    "esc": 27, "escape": 27, "enter": 13, "return": 13, "tab": 9,
+    "space": 32, "backspace": 8,
+    **{f"f{i}": 111 + i for i in range(1, 13)},  # VK_F1=112 ... VK_F12=123
+}
+
+# 游戏内按键的按住时长：瞬时虚拟键事件会被 Unity/UE 一帧漏掉。
+SCANCODE_KEY_HOLD_SEC = 0.15
+
+
+def press_key_scancode(key: str, hold_sec: float = SCANCODE_KEY_HOLD_SEC) -> None:
+    """发带硬件扫描码的按键事件；游戏内 UI 只认这个。
+
+    2026-11-05 绝区零实机逐项对比：双方提权、UIPI 无阻碍、前台窗口就是游戏时，
+    `pyautogui.press` / `keyDown` 的 ESC、F3 完全无效，只有
+    `win32api.keybd_event(vk, MapVirtualKey(vk))` 按住 0.15s 才被 Unity 接收
+    （见 `monthly_exchange._press_escape`）。无限暖暖的 L（奇想日历）、
+    H（商城）、ESC 是同一条链路，11-01～11-05 反复「按 L/H 没反应」即此因。
+    finally 保证异常时也松开键。
+    """
+    k = str(key).strip().lower()
+    vk = _SCANCODE_VK_ALIASES.get(k)
+    if vk is None and len(k) == 1 and k.isalnum():
+        vk = ord(k.upper())
+    if vk is None:
+        raise ValueError(f"无法把按键 {key!r} 映射成虚拟键码")
+    scan = win32api.MapVirtualKey(vk, 0)
+    try:
+        win32api.keybd_event(vk, scan, 0, 0)
+        time.sleep(max(0.0, hold_sec))
+    finally:
+        win32api.keybd_event(vk, scan, win32con.KEYEVENTF_KEYUP, 0)
+
+
 _MODIFIER_VKS = (
     win32con.VK_MENU,      # Alt
     win32con.VK_CONTROL,
@@ -872,6 +906,26 @@ def _resolve_background_click(step: Dict, cfg: Dict, attempt: int) -> bool:
     if attempt > 0 and bool(step.get("click_fallback", cfg.get("click_fallback", False))):
         return not base
     return base
+
+
+def _window_available_for_ocr(hwnd: int) -> bool:
+    """窗口当前能否被 OCR 取到有效区域（最小化/句柄失效/尺寸为 0 → False）。
+
+    与 `ocr_click_tester._ocr_scan` 的「窗口不可用」分支同源：那种状态下 OCR
+    一定返回空结果，上层却只会当「未匹配」继续轮询到 timeout_sec。
+    2026-11-04 异环启动器在启动器/游戏本体间反复换窗口，就是这样空转了
+    12 分钟（20:35:31→20:47:23）却连一条失败记录都没留下。
+
+    注意只判「窗口不可用」，**不判被遮挡**：异环可后台点击，被别的窗口挡住
+    不影响操作，不该因此把流程判死。
+    """
+    try:
+        from .ocr_click_tester import _ensure_window_region
+
+        return _ensure_window_region(hwnd) is not None
+    except Exception as exc:  # noqa: BLE001 - 探测失败也按不可用，靠连续时长阈值兜底
+        logging.getLogger("GameAutomation").debug("[流程] 窗口可用性探测失败: %s", exc)
+        return False
 
 
 def _locate_template_on_screen(
@@ -2329,6 +2383,17 @@ def run_flow(
             end = time.time() + timeout_sec
             center = None
             match_method = None
+            # 窗口连续不可用的止损时长（秒），0 = 禁用并保留旧的「空等到
+            # timeout_sec」行为。真在下载/更新时按钮确实要等很久，所以不能一刀切
+            # 缩短 timeout_sec；只有窗口本身已经死了才提前收场，并借既有「重试
+            # 耗尽」路径落下失败截图与 flow_failures 记录。
+            try:
+                dead_window_timeout = max(0.0, float(step.get(
+                    "window_dead_timeout_sec",
+                    cfg.get("window_dead_timeout_sec", 45)) or 0))
+            except (TypeError, ValueError):
+                dead_window_timeout = 45.0
+            window_dead_since = None
 
             while time.time() < end:
                 # 步骤搜索期间响应停止请求：直接退出，由 finally 按既有 close_on_exit 规则收尾
@@ -2380,6 +2445,29 @@ def run_flow(
                                 pid = new_pid
                             local_region = None
                             step_local_region.pop(i, None)
+
+                    # 2026-11-04：窗口连续「最小化/句柄失效」时 OCR 恒返回空结果，
+                    # 旧逻辑会一直空转到 timeout_sec（异环 NTE_MONTHLY 是 1200s）。
+                    # 提前 break 出匹配循环，交给下面的「未匹配 → 重试 → 取证」路径，
+                    # 既不误伤真实更新等待，也不会出现「跑了 12 分钟却没落失败」。
+                    # 只判窗口不可用，不判被遮挡：异环可后台点击，被挡住不影响操作。
+                    if (
+                        dead_window_timeout > 0
+                        and search_scope != "screen"
+                        and not _window_available_for_ocr(hwnd)
+                    ):
+                        now = time.time()
+                        if window_dead_since is None:
+                            window_dead_since = now
+                        elif now - window_dead_since >= dead_window_timeout:
+                            logger.warning(
+                                f"[{flow_key}] 步骤{step_no}「{name}」窗口连续 "
+                                f"{now - window_dead_since:.0f}s 不可用（最小化/句柄失效），"
+                                f"提前结束本轮匹配，转入重试/失败取证"
+                            )
+                            break
+                    else:
+                        window_dead_since = None
 
                     # 每次匹配前置顶窗口，防止其他窗口（如游戏退出后弹出的启动器）遮挡
                     _focus_window(hwnd)
@@ -2602,6 +2690,28 @@ def run_flow(
                 if not ok:
                     step_attempts[i] = step_attempts.get(i, 0) + 1
                     if step_attempts[i] > max_attempts:
+                        # 2026-11-04 实锤：绝区零「点击进入游戏」三次「元素 10s 未消失」，
+                        # 一张失败截图都没有、flow_failures 里也没有 ZZZ_MONTHLY。取证此前
+                        # 只覆盖「未匹配模板/OCR」(2456) 与「内建动作失败」(2574) 两条路径，
+                        # 确认失败重试耗尽直接 return，事后完全查不出当时窗口长什么样。
+                        logger.error(
+                            f"[{flow_key}] 步骤{step_no}确认失败且重试耗尽: {name} ({reason})"
+                        )
+                        _collect_failure_evidence(
+                            logger=logger,
+                            flow_key=flow_key,
+                            step=step,
+                            name=name,
+                            step_no=step_no,
+                            action=action,
+                            target_texts=target_texts,
+                            template=template,
+                            hwnd=hwnd,
+                            retry_count=step_attempts[i],
+                            max_attempts=max_attempts,
+                            step_enable_ocr=step_enable_ocr,
+                            error=f"确认失败: {reason}"[:500],
+                        )
                         return False, f"[{flow_key}] 步骤失败: {name} ({reason})（超过重试上限）"
                     if on_fail == "retry_prev" and i > 0:
                         logger.warning(f"[{flow_key}] 步骤{step_no}确认失败({reason})，回退上一步")
@@ -2624,7 +2734,13 @@ def run_flow(
             i += 1
         flow_ok = True
     finally:
-        if close_on_exit and (flow_ok or close_on_fail):
+        # 2026-11-05：复用用户已经开着的游戏窗口时，进程不是本流程拉起来的，
+        # 买完直接杀掉会误伤正在玩的游戏（NTE_MONTHLY 的 skip_steps_if_process
+        # 就是为接管已运行游戏设计的）。只有自己启动的才按配置关闭；确实要连
+        # 复用窗口一起关，显式配 close_reused_window: true。
+        if close_on_exit and reused_window and not cfg.get("close_reused_window", False):
+            logger.info(f"[{flow_key}] 复用已运行窗口，保留游戏进程")
+        elif close_on_exit and (flow_ok or close_on_fail):
             close_flow_processes(logger, flow_key, pid, window_process_names)
         elif close_on_exit:
             logger.info(f"[{flow_key}] 流程未成功，按配置保留进程(close_process_on_fail=false)")

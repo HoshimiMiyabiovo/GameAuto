@@ -446,6 +446,20 @@ This file mirrors important repository-level development notes inside the projec
   等待 10s 后再来一杯（共 2 轮）→「茶憩结束」摘要随意点击 → 休息室「返回」→「确认」→
   主界面。喝茶/再来一杯是场景内动态交互（截图未捕捉按钮形态），OCR 轮询文字点击，
   轮询不到只记警告不盲点 3D 场景；话题菜单（选择话题）出现时点第一个话题兜底。
+  **2026-11-04 实锤**：角色详情页的说明文字「每名同调者一天仅能邀请一次，重复邀请请
+  使用通用邀请函」含「邀请」，旧逻辑 OCR 子串命中后点了正文，页面原地不动 → 茶憩
+  永远进不去。现在邀请入口只认 ≤12 字的短按钮名，并排除「一天仅能邀请一次/重复邀请/
+  通用邀请函」；找不到入口就落 flow_failures 返回，不再误点正文。午后茶憩在
+  11-01/11-03/11-04 的连续失败就是这一条；11-05 的整轮失败则是下面的启动器更新弹窗。
+  11-02 的失败是另一条旧 bug（全屏 OCR 读到控制台日志里的「开始游戏」），已由
+  `suite_baijing_launcher_scope_20261102.py` 的窗口限定修复覆盖。
+- **启动器维护后更新弹窗（2026-11-05 实锤）**：游戏维护后启动器会弹「检测到游戏有
+  新版本，请确认是否更新？」+ 取消/确定，不点「确定」时「开始游戏」按钮还在但点不动，
+  300s 等不到 `GateMK-Win64-Shipping.exe`（11-05 08:53/09:36 两轮，失败截图
+  `20261105_093654_BaiJing_等待游戏进程.jpg`）。`run_baijing_ingame_flow` 现在点开始前
+  先 `_confirm_launcher_update`，等待进程时每 30s 再兜一次；确认更新后等待上限放宽到
+  `UPDATE_WAIT_TIMEOUT_SEC=1800`（可停止），启动器窗口重建时按进程名重新接管。
+  失败诊断会明确写「启动器仍显示更新提示」，不再只报“点击未生效”。
 - **显影行动等四个关卡战斗「前往」任务已自动化**（`_handle_stage_battle_task`，
   同日用户截图实测 + 用户确认操作相同）：显影行动/自由贸易/定向物资保障/光刻协议
   共用 `STAGE_BATTLE_TASKS` 配置（task_key, 行关键词, 展示名）。流程：点行内「前往」
@@ -1126,3 +1140,58 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
   登录页由 BetterGI 自己的 GameLoading 任务负责，本项目不介入；11-04 两次
   90 分钟超时属那条链路，别把两者混为一谈。
 - 回归：`tests/suite_login_agreement_scroll_20261104.py` [1][2]。
+
+## 绝区零 ZZZ_MONTHLY 商城入口（2026-11-05 实机逐项验证）
+
+- **键盘必须用带扫描码的真实按键**。11-05 提权单步实测（双方管理员、
+  UIPI 无阻碍、前台窗口确认为游戏、1920x1080）：
+  `pyautogui.press("escape")` / `keyDown+keyUp` / `press("f3")` **全部无效**，
+  主菜单根本打不开 → `_open_exchange_page` 按 3 次 ESC 全是白按，最后报
+  「未找到主菜单「商城」入口」。只有
+  `win32api.keybd_event(vk, win32api.MapVirtualKey(vk, 0), 0, 0)` 按住
+  `ESC_HOLD_SEC=0.15` 再发 `KEYEVENTF_KEYUP` 才被 Unity 接收：
+  vk=114(F3) 开出城募页、vk=27(ESC) 一次退回主世界、再一次开出主菜单。
+  `monthly_exchange._press_escape` 已统一改掉（崩铁/异环的 ESC 退出同受益），
+  `finally` 保证异常时也松开键。**别再退回 `pyautogui.press`。**
+- **商城入口是纯图标，不是文字**。主菜单底部一排图标里商城是「24 HOUR」
+  艺术字，OCR 把图标认成 `24` / `HOUR`，中文「商城」标签太小常漏识别；
+  旧模板 `绝区零-商城入口.png`（54x75 白色 24HOUR）在动态背景下也可能失配。
+  因此 `_find_shop_entry` 改为 **模板 → OCR 文字 → `shop_entry_point_frac`
+  固定比例坐标** 三级；`_frac_point` 与其它判据同属窗口局部坐标系。
+  **固定坐标只在 `attempt > 1`（按过至少一次 ESC、确认已进主菜单）时启用**，
+  否则第一轮还在主世界就瞎点。
+- **实机路径**（1920x1080，按住点击 0.08s）：
+  主世界 → 扫描码 ESC ×2 → 主菜单 → 点 24HOUR 图标 **(1376, 970)**
+  → 商城（热销推荐/礼包商店/珍藏兑换/信源清单/底片选购）→ 点「信源清单」
+  **(183, 573)** → 信号残响页（信号残响 / 月剩余×1）。
+  配置比例 `[0.7167, 0.8981]` 对应 (1376,970)；换分辨率按比例走，
+  游戏改版布局变了要重新量。
+- 回归：`tests/suite_zzz_shop_entry_20261105.py`（扫描码按键/优先级/
+  attempt 门控/两份配置同步）。
+
+## 无限暖暖 · 奇想日历/晶石兑换/共鸣商店（2026-11-05）
+
+- **L / H / ESC 也要发扫描码按键**。`nikki_calendar._press_key` 与
+  `nikki_launcher._press_esc` 以前都是 `pyautogui.press` 的瞬时虚拟键事件，
+  和绝区零 ESC 同一个坑（见上节）。11-01～11-05 反复「按 L 三次没打开奇想日历」、
+  11-04「按 H 后未进入商城」，注释里曾归因为「焦点没切过来」「ESC 打开暂停菜单」，
+  都只是表象。现统一走 `foreground_flow_runner.press_key_scancode`
+  （`vk + MapVirtualKey(vk)` 按住 0.15s + `KEYEVENTF_KEYUP`，finally 保证松开）。
+- **今天商店根本没执行，不是买失败**。08:32:11 点右上角奇想日历图标
+  (1503,65) 没打开 → 08:32:26 / 08:32:41 按 L 两次也没打开 →
+  08:32:55 落失败 #184「按 L 后未出现奇想日历」；失败截图 OCR 是主世界 HUD
+  （「奇想日历 / 活动大厅 / 无限之心 / 暂无追踪中的任务」），不是日历页。
+  `_run_flow_inner` 在这条分支上 `return True, "已记录，继续后续任务"` →
+  `[NikkiLauncher] 流程执行成功`，但 `_exchange_crystals` / `_run_resonance_shop`
+  全在 `if` 之后，**整段被静默跳过**。库里
+  `monthly_sequence:nikki_crystal_exchange` / `:nikki_resonance_shop` 一条都没有。
+- **为什么不能直接改成返回 False**：`NikkiLauncher` 是 `InfinityNikki` 的
+  `prelaunch_flow`，`automation_controller.execute_task:1795` 对 prelaunch 失败
+  直接 `return False` → 整个 whimbox 日常都不跑。所以保留 `return True` 的容错，
+  但改成 `logger.error` + 明确文案「本月晶石兑换/共鸣商店未执行」，日报不能再
+  看起来像商店跑完了。
+- **星海拾光 failed 与商店无关**：whimbox 自己的日志
+  `08:44:02 goto_page failed: 前往页面「拍照」失败` → 进度停在 200/500，
+  属第三方脚本问题。
+- 回归：`tests/suite_nikki_shop_scancode_20261105.py`（vk/扫描码/抬起、
+  L/H/ESC 两处接线、日历失败文案不再冒充成功、月度键与取证）。

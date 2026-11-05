@@ -11,6 +11,7 @@
 
 import io
 import json
+import os
 import sys
 import time
 import types
@@ -20,6 +21,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "tools" / "okww_module"))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+# 2026-11-04：直接单跑本套件（不经 test_suites.py 的子进程 env）时，里面的
+# AutomationController() 也会挂生产文件 handler。这里兜底关掉，避免测试日志
+# 混进 data/logs/auto_runner.log。
+os.environ.setdefault("GAMEAUTO_LOG_FILE_DISABLED", "1")
 
 import humanize  # noqa: E402
 

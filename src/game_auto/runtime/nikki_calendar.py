@@ -177,16 +177,15 @@ def _click_ratio(logger: logging.Logger, hwnd: int, frac: Tuple[float, float], l
 
 
 def _press_key(key: str) -> None:
-    import pyautogui
+    """游戏内按键（L 奇想日历 / H 商城）：必须发带扫描码的真实按键。
 
-    from .foreground_flow_runner import FailSafeAborted
+    2026-11-05：旧实现 `pyautogui.press(key)` 的瞬时虚拟键事件被游戏吞掉，
+    11-01～11-05 反复出现「按 L 三次都没打开奇想日历」「按 H 后未进入商城」。
+    统一走 `press_key_scancode`，与绝区零 ESC 同一口径。
+    """
+    from .foreground_flow_runner import press_key_scancode
 
-    try:
-        pyautogui.press(key)
-    except pyautogui.FailSafeException as exc:
-        raise FailSafeAborted(
-            "PyAutoGUI 紧急停止已触发：鼠标位于屏幕左上角 (0,0)。"
-        ) from exc
+    press_key_scancode(key)
 
 
 def _focus_and_press(hwnd: int, key: str) -> None:
@@ -1239,8 +1238,14 @@ def _run_flow_inner(
     if not _open_calendar(logger, hwnd, stop_check=stop_check):
         _record_failure(logger, "奇想日历-打开", "按 L 后未出现奇想日历", hwnd)
         _ensure_main_or_close(logger, hwnd, scales, confidences, stop_check=stop_check)
-        logger.warning("[无限暖暖·奇想日历] 奇想日历未打开（已记录，继续后续任务）")
-        return True, "奇想日历未打开（已记录，继续后续任务）"
+        # 2026-11-05：以前返回 True「已记录，继续后续任务」，日报看起来像前置
+        # 流程成功了，实际 _exchange_crystals / _run_resonance_shop 整段没跑，
+        # task_meta 里本月两个 nikki 商店标记一条都没有。这里保留「不阻断
+        # whimbox 日常」的容错（prelaunch 返回 False 会让整个暖暖任务失败），
+        # 但必须把「商店未执行」写进报告，不能冒充成功。
+        message = "奇想日历未打开：本月晶石兑换/共鸣商店未执行（不阻断 whimbox 日常）"
+        logger.error("[无限暖暖·奇想日历] %s", message)
+        return True, message
 
     notes: List[str] = []
     try:

@@ -443,7 +443,33 @@ def _query_hoyo_daily_note(cookie: str, uid: int, server: str, game: str,
 
     device_headers 为设备绑定请求头（见 ensure_device_headers），配置了
     mihoyo_sign.device 时携带，可显著降低 1034/10041 风控触发概率。
+
+    2026-11-04：签到链路 `_ensure_fresh_cookie_token` 会用 stoken 刷新
+    cookie_token，但刷新结果只用于当次签到、没有回写 app_config；每日检查每次
+    `load(force=True)` 读到的还是旧 token → 20:15:41 `[星铁] Cookie 已过期`。
+    这里在真的遇到 10001 时现场刷新并重试一次：不写配置、不改正常路径，
+    只有 token 确实过期才多发一次请求。
     """
+    try:
+        return _query_hoyo_daily_note_once(cookie, uid, server, game, device_headers)
+    except RuntimeError as exc:
+        if "Cookie 已过期" not in str(exc):
+            raise
+        from .mihoyo_sign import _ensure_fresh_cookie_token
+
+        fresh = _ensure_fresh_cookie_token(cookie)
+        if not fresh or fresh == cookie:
+            LOGGER.warning(
+                "[每日检查] %s 便笺 Cookie 已过期，stoken 刷新未生效，需重新登录米游社", game
+            )
+            raise
+        LOGGER.info("[每日检查] %s 便笺 Cookie 已过期，已用 stoken 刷新 cookie_token 并重试", game)
+        return _query_hoyo_daily_note_once(fresh, uid, server, game, device_headers)
+
+
+def _query_hoyo_daily_note_once(cookie: str, uid: int, server: str, game: str,
+                                device_headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """单次便笺请求；过期重试的编排在 `_query_hoyo_daily_note`。"""
     from urllib.request import Request, urlopen
 
     fields = _extract_cookie_fields(cookie)
@@ -519,9 +545,19 @@ def _query_zzz_notes(cookie: str, uid: int,
 
 
 def _check_hoyo_accounts(cookie: str, game_key: str) -> List[Dict[str, Any]]:
-    missing = [f for f in ("stoken", "stoken_v2", "stuid", "stuid_v2") if f not in cookie]
-    if missing:
-        LOGGER.warning("[每日检查] Cookie 可能缺少游戏记录所需字段：%s", ", ".join(missing))
+    # 2026-11-04：旧口径把 stoken/stoken_v2/stuid/stuid_v2 四个全当必需，还用
+    # `f not in cookie` 做子串判断（v2 变体本来就不一定存在），本机每天刷
+    # 「缺少 stuid_v2」但 get_bound_accounts 照常拿到角色——纯误报，反而把后面
+    # 真正的「Cookie 已过期」淹没。便笺查询真正需要的是账号标识 + cookie_token。
+    fields = _extract_cookie_fields(cookie)
+    has_id = any(fields.get(k) for k in (
+        "account_id", "account_id_v2", "stuid", "stuid_v2", "ltuid", "ltuid_v2"))
+    has_token = any(fields.get(k) for k in ("cookie_token", "cookie_token_v2"))
+    if not has_id or not has_token:
+        LOGGER.warning(
+            "[每日检查] Cookie 缺少查询所需字段（账号标识/cookie_token），%s 可能查询失败",
+            game_key,
+        )
     return get_bound_accounts(cookie, game_key)
 
 
