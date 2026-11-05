@@ -91,8 +91,10 @@
   满值 500，常年 0/500 不刷新——**Pearpal 落库已于 2026-10-24 停用**，5 项假进度
   任务（每日心愿/周常奖励/能量体力/派遣/登录天数）删除，名字仅为兼容历史记录）、
   `genshin=每日委托`、`zzz=活跃度`、`endfield=日活跃`、
-  `nte=活跃度`（塔吉多 roleHome 的 dayvalue，2026-10-24 接入，上限 100）。
-  脚本型游戏无计数，用 `KEY_STATUS_TASKS` 按状态判定：`nte=日常领取`、
+  `nte=活跃度`（塔吉多 roleHome 的 dayvalue，上限 100；**2026-11-05 起仅展示**
+  ——接口无日期归属且实测滞后，写库带 stale 标记不判完成，见下方事故条目）。
+  脚本型游戏无计数，用 `KEY_STATUS_TASKS` 按状态判定：`nte=日常领取`
+  （2026-11-05 起为主判定口径，解析结果已补落库）、
   `nikki=朝夕心愿`（success=完成，failed=失败，优先级高于计数口径）。
 ### 每日进度 UI 呈现口径（2026-10-19 用户拍板，快赢档）
 
@@ -180,6 +182,23 @@
   暖暖进度只来自 whimbox 日志。注意：`_load_api_key_progress_tasks` 只取
   source != "script" 的记录，塔吉多侧落库 source 必须 community。
   回归 `artifacts/test_nte_dayvalue_20261024.py`（25 项）。
+- **异环 roleHome dayvalue 降级为仅展示（2026-11-05 事故，翻新上述 dayvalue 口径）**：
+  维护日三次补跑全卡启动器（游戏从未进入），11:36 发信前实时刷新仍拿到
+  dayvalue=100 写进邮件 → 「没跑却显示完成」假阳性。探针抓全量 238 字段实证：
+  roleHome 响应**无任何日期归属字段**，三个数值字段各自滞后互相矛盾（同一次
+  查询 stamina 停在副本消耗前、dayvalue 与游戏内实时活跃度双向不符，23 点
+  游戏内 100/接口 70）。处置四件套：
+  ① `check_tajiduo_daily` 三项数值（活跃度/本性像素/都市活力）永不判完成，
+  写库带 `stale=True + stale_reason`；
+  ② `real_progress_percent` 跳过 stale 行（通用防护，历史无 stale 行口径不变）；
+  ③ `nte.augment_verify` 复核保护从「dayvalue 满」改为「日常领取 success」
+  （脚本自身证据，边角失败不改判烧重试）；
+  ④ `check_games_progress` nte 分支补上 ok-nte 解析结果落库——「日常领取」
+  此前只在展示层注入（`_inject_external_log_progress`），从未写 tracker，
+  补跑/单跑路径的脚本证据整段丢失。
+  教训：**无日期归属的聚合接口不能作当天完成判据**；接入时「实测吻合」可能是
+  数值碰巧对上（假验证），必须用异常日（维护日/大额消耗日）做反向验证，并让
+  用户在游戏内核对。回归 `tests/suite_nte_dayvalue_20261024.py` 翻新为 28 项。
 - **ok-ef 一天可产出多份报告**（异常重跑、执行中快照），`find_today_ok_ef_report()`
   必须取时间戳最新一份；报告里空列表的占位符「无」不是任务名，解析时必须滤掉
   （2026-10-05 事故：读到 15:00 异常快照 +「无」被当任务名 → "无: 未知原因" 改判失败并烧掉一次重试）。

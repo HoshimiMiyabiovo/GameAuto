@@ -160,17 +160,16 @@ def merge_daily_log(bridge, game, data, tool_name, game_key):
 
 
 def augment_verify(data, load_api_tasks, logger):
-    """复核前并入塔吉多 roleHome 活跃度；满 100 时调用方直接保持原判。"""
+    """复核保护：脚本日志确认「日常领取」完成时保持原判，边角失败不改判。
+
+    2026-11-05 事故后 roleHome 的 dayvalue 不再可信（无日期归属、字段各自滞后、
+    与游戏内实时值双向矛盾），复核保护从「活跃度满」改为脚本自身的核心任务
+    证据：日常领取 success = 当日日常（含活跃度奖励领取）已做。
+    """
     data.setdefault("tasks", []).extend(load_api_tasks("nte", logger))
     for t in data["tasks"]:
-        if str(t.get("task_name") or "") != "活跃度":
-            continue
-        extra = t.get("extra") or {}
-        try:
-            cur, total = int(extra.get("current")), int(extra.get("total"))
-        except (TypeError, ValueError):
-            continue
-        if total > 0 and cur >= total:
+        if (str(t.get("task_name") or "") == "日常领取"
+                and str(t.get("status") or "") in ("success", "already")):
             return True
     return False
 

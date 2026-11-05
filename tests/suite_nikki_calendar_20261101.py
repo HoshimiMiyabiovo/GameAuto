@@ -346,9 +346,14 @@ class Harness:
         elif s == "reward" and _points_near((x, y), (959, 884)):
             self.state = "stage"
 
-    def click_ratio(self, logger, hwnd, frac, label):
+    def click_ratio(self, logger, hwnd, frac, label, unlock_mouse=False):
+        # unlock_mouse 是主世界顶栏点击的 Alt 呼出开关；桩里只关心坐标与状态
         self.click((int(WIN[2] * frac[0]), int(WIN[3] * frac[1])))
         return True
+
+    def click_with_alt(self, point):
+        # 对应 nc._click_with_alt：真实实现按下 Alt → 点击 → 松开，桩里只转发点击
+        self.click(point)
 
     def press_key(self, key):
         self.keys.append(key)
@@ -412,6 +417,7 @@ def _run_flow(h: Harness, stop_check=None, plan=None, with_resonance=False):
     names = [
         "_ocr_full",
         "_click",
+        "_click_with_alt",
         "_click_ratio",
         "_press_key",
         "_press_esc",
@@ -425,6 +431,7 @@ def _run_flow(h: Harness, stop_check=None, plan=None, with_resonance=False):
         "_record_failure",
         "_scroll_at",
         "_close_game_for_whimbox_restart",
+        "_record_key_no_response",
         "time",
     ]
     if not with_resonance:
@@ -433,6 +440,7 @@ def _run_flow(h: Harness, stop_check=None, plan=None, with_resonance=False):
     try:
         nc._ocr_full = h.ocr
         nc._click = h.click
+        nc._click_with_alt = h.click_with_alt
         nc._click_ratio = h.click_ratio
         nc._press_key = h.press_key
         nc._press_esc = h.press_esc
@@ -458,6 +466,7 @@ def _run_flow(h: Harness, stop_check=None, plan=None, with_resonance=False):
         )
         nc._scroll_at = h.scroll_at
         nc._close_game_for_whimbox_restart = lambda logger: h.close_game()
+        nc._record_key_no_response = lambda *a, **k: None
         nc.time = FakeTime()
         if not with_resonance:
             nc._run_resonance_shop = lambda logger, hwnd, stop_check=None: "共鸣商店：测试跳过"

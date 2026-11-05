@@ -67,12 +67,18 @@ LIMIT_KEYWORD = "本月限购"
 CONFIRM_TEXTS = ("确认兑换", "确认", "确定", "购买")
 CANCEL_TEXTS = ("取消",)
 
-# 主界面右上角「奇想日历」图标（ref_nikki_main_20261101.png 1919x1079 实测）：
-# 图标中心约 (1540,66) → (0.802,0.061)；文字标签在图标下方，OCR 命中标签时上移 0.035 窗高。
-# 2026-11-03：11-02/11-03 按 L 连续三次都打不开，改为优先点图标（鼠标点击不受输入法/
-# 键盘焦点影响），点不到再退回按 L。
+# ── 顶栏图标点击：已停用，勿再接回主世界入口（2026-11-05 23:28 用户拍板）────
+# 主世界鼠标被 UE5 锁在屏幕中心、按 Alt 才有光标；而顶栏每个图标都有官方
+# 快捷键（商城 H / 奇想日历 L，见 nikki_topbar_ref_20261105.png）。
+# `_open_calendar` / `_open_shop` 现在只按 L / H 三次，焦点由
+# `_ensure_game_foreground` 保证。下面这些常量与 `_top_bar_icon_point`、
+# `_calendar_icon_point` / `_shop_icon_point` / `_click_with_alt` 仅留给
+# **纯 UI 页面内**的点击（那种页面鼠标自动可用），主世界入口不再调用。
 CALENDAR_ICON_POINT = (0.802, 0.061)
 CALENDAR_LABEL_OFFSET_RATIO = 0.035
+CALENDAR_ICON_ATTEMPT = 2
+SHOP_ICON_POINT = (0.637, 0.061)  # 1222/1920, 66/1080
+SHOP_ICON_ATTEMPT = 2
 # 主世界顶部菜单文字（OCR 兜底判主界面，日历页没有这些）
 MAIN_OCR_MARKERS = ("商城", "换装", "任务", "设计图", "无限之心")
 
@@ -164,52 +170,198 @@ def _click(center) -> None:
     _click_screen(int(center[0]), int(center[1]))
 
 
-def _click_ratio(logger: logging.Logger, hwnd: int, frac: Tuple[float, float], label: str) -> bool:
+def _click_with_alt(point) -> None:
+    """主世界顶栏点击：先按住 Alt 呼出被 UE5 锁定的鼠标，点完松开。
+
+    用户 2026-11-05 指出：暖暖正常游玩时鼠标被锁在屏幕正中，**按 Alt 才有
+    可自由移动的光标**。项目里 `_click_screen` 是 `pyautogui.moveTo(x,y)` +
+    按住点击，光标被游戏拉回中心时点击就落在世界里，顶栏图标收不到
+    （11-05 08:32 点「奇想日历」图标、11-04 点「商城」都没反应）。
+    顶栏放大图 `data/artifacts/nikki_topbar_ref_20261105.png` 证实每个图标
+    都有官方快捷键（商城 H / 奇想日历 L / 共鸣 O / 任务 U / 换装 C…），
+    **键盘仍是主路径**；这里只给鼠标兜底加一道保险。
+
+    「按一下 Alt 切换显示」和「必须按住 Alt 才显示」两种机制都覆盖：
+    按下 → 等一帧 → 点击 → 松开，点击全程 Alt 处于按下状态。
+    finally 保证异常时也松开，不把修饰键留在系统里。
+    """
+    import win32api
+    import win32con
+
+    scan = win32api.MapVirtualKey(win32con.VK_MENU, 0)
+    win32api.keybd_event(win32con.VK_MENU, scan, 0, 0)
+    try:
+        time.sleep(0.15)
+        _click(point)
+        time.sleep(0.10)
+    finally:
+        win32api.keybd_event(win32con.VK_MENU, scan, win32con.KEYEVENTF_KEYUP, 0)
+
+
+def _click_ratio(logger: logging.Logger, hwnd: int, frac: Tuple[float, float], label: str,
+                 unlock_mouse: bool = False) -> bool:
     rect = _window_rect(hwnd)
     if not rect:
         logger.warning("[无限暖暖·奇想日历] 窗口区域不可用，无法点击%s", label)
         return False
     left, top, width, height = rect
     point = (left + int(width * frac[0]), top + int(height * frac[1]))
-    _click(point)
-    logger.info("[无限暖暖·奇想日历] 点击%s @ %s", label, point)
+    if unlock_mouse:
+        _click_with_alt(point)
+    else:
+        _click(point)
+    logger.info("[无限暖暖·奇想日历] 点击%s @ %s%s", label, point,
+                "（Alt 呼出鼠标）" if unlock_mouse else "")
     return True
 
 
 def _press_key(key: str) -> None:
-    """游戏内按键（L 奇想日历 / H 商城）：必须发带扫描码的真实按键。
+    """游戏内按键（L 奇想日历 / H 商城）：统一发带扫描码、按住 0.15s 的真实按键。
 
-    2026-11-05：旧实现 `pyautogui.press(key)` 的瞬时虚拟键事件被游戏吞掉，
-    11-01～11-05 反复出现「按 L 三次都没打开奇想日历」「按 H 后未进入商城」。
-    统一走 `press_key_scancode`，与绝区零 ESC 同一口径。
+    2026-11-05 更正归因：扫描码是**加固**，不是「日历打不开」的根因。
+    11-01 12:26:10 用 `pyautogui.press('l')` 第 2 下就打开了日历（OCR 区域数
+    18→33，随后进到奇迹之冠 hub），证明瞬时按键对暖暖并非一概无效；暖暖是
+    **UE5**，与今天绝区零（Unity）按键被吞是两件事，别再合并解释。
+    11-05 真正的退化在 `_open_calendar` 的尝试顺序与图标坐标（见该函数注释）。
     """
     from .foreground_flow_runner import press_key_scancode
 
     press_key_scancode(key)
 
 
-def _focus_and_press(hwnd: int, key: str) -> None:
-    """聚焦游戏窗口，等它真正拿到前台后再按键。
+def _foreground_snapshot() -> Dict:
+    """当前**前台窗口**的硬证据：hwnd / pid / exe / title。
 
-    SetForegroundWindow 是异步的：原实现 `_focus()` 后立刻 `pyautogui.press`
-    会把按键发给旧前台窗口（2026-11-02 17:31 连按 3 次 L 都没打开奇想日历，
-    截图却停在主世界的典型表现）。
+    `record_failure` 的 `window_title` 记的是**目标**窗口，不是前台窗口；
+    截图又是按目标 hwnd 矩形裁剪的全屏画面。所以历史失败记录能证明
+    「游戏画面没变」，却回答不了「按键发给了谁」（用户 23:50 追问）。
+    这里专门把前台窗口本身查出来，随日志/快照一起留证。
     """
     import win32gui
+    import win32process
 
+    try:
+        fg = win32gui.GetForegroundWindow()
+        _, pid = win32process.GetWindowThreadProcessId(fg) if fg else (0, 0)
+        exe = ""
+        if pid:
+            try:
+                import psutil
+
+                exe = psutil.Process(pid).name()
+            except Exception:  # noqa: BLE001 - 取不到进程名不影响其它字段
+                pass
+        return {
+            "hwnd": int(fg or 0),
+            "pid": int(pid or 0),
+            "exe": exe,
+            "title": win32gui.GetWindowText(fg) if fg else "",
+        }
+    except Exception as exc:  # noqa: BLE001 - 取证自身不能拖垮按键链路
+        return {"error": str(exc)}
+
+
+def _record_key_no_response(logger: logging.Logger, key: str, hwnd: int) -> None:
+    """三次按键都没打开目标页面：落**全屏**快照 + 前台窗口硬证据。
+
+    故意 `hwnd=None`：`capture_failure_image` 传了 hwnd 会按窗口矩形裁剪，
+    只能看到游戏；不传才是整屏，能看出有没有别的窗口盖着 / 谁在前台。
+    只在三次全失败这条罕见路径抓一次，避免把用户桌面常态化存盘。
+    """
+    snap = _foreground_snapshot()
+    logger.error("[无限暖暖] 按 %s 三次无反应｜前台窗口=%s｜目标 hwnd=%s",
+                 str(key).upper(), snap, hwnd)
+    try:
+        from .flow_diagnostics import capture_failure_image
+
+        raw, annotated = capture_failure_image(
+            logger, hwnd=None,
+            tag=f"NikkiLauncher_按{key.upper()}三次无反应_前台取证",
+        )
+        logger.info("[无限暖暖] 全屏取证快照: %s", raw or annotated or "无")
+    except Exception as exc:  # noqa: BLE001 - 取证失败不影响流程
+        logger.debug("[无限暖暖] 全屏取证失败: %s", exc)
+
+
+def _ensure_game_foreground(logger: logging.Logger, hwnd: int) -> bool:
+    """按键前把游戏窗口拉到前台；按 **PID** 比较，兼容 UE5 多窗口。
+
+    2026-11-05 23:50 更正：`keybd_event` 只发给前台窗口是事实，但
+    **11-04 按 H 那一刻前台是谁，现有日志/快照都没有记录**：
+    - 08:49 两次 `SetForegroundWindow 失败` 发生在**启动器阶段**（游戏窗口
+      08:50:09 才就绪），不能拿来说 08:52 的 H；
+    - 08:50:40「窗口已最小化、还原失败」之后 08:51:44 起 OCR 正常、08:52:16
+      报「已进入主界面」，按 H 时窗口是可用的；
+    - 失败快照是按目标 hwnd 裁剪的全屏图，画面是干净的游戏主世界、没有被
+      别的窗口遮挡 —— 反而**不支持**「窗口被盖住」。
+    所以「H 发丢了」只是候选解释之一（另有按键形式、游戏状态、页面判定
+    假阴性），不是定论。这个函数是**加固 + 取证**：每轮记录真实前台窗口，
+    三次失败另有全屏快照（见 `_record_key_no_response`）。
+
+    不用 `_focus_window`：它会发一次 Alt 短按绕过 Windows 前台锁，而 Alt 正是
+    暖暖「呼出鼠标」的切换键，会顺手把游戏状态切走（用户 23:11 指出）。
+    这里改用 `AttachThreadInput` 正经抢前台，finally 保证一定 detach。
+    """
+    import win32api
+    import win32con
+    import win32gui
+    import win32process
+
+    try:
+        _, target_pid = win32process.GetWindowThreadProcessId(hwnd)
+        snap = _foreground_snapshot()
+        logger.info("[无限暖暖] 按键前前台窗口: %s（目标 hwnd=%s pid=%s）",
+                    snap, hwnd, target_pid)
+        fg = win32gui.GetForegroundWindow()
+        _, fg_pid = win32process.GetWindowThreadProcessId(fg) if fg else (0, 0)
+        if fg_pid == target_pid:
+            return True
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        tid_fg = win32process.GetWindowThreadProcessId(fg)[0] if fg else 0
+        tid_me = win32api.GetCurrentThreadId()
+        attached = False
+        try:
+            if tid_fg and tid_fg != tid_me:
+                win32process.AttachThreadInput(tid_me, tid_fg, True)
+                attached = True
+            win32gui.BringWindowToTop(hwnd)
+            win32gui.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                win32process.AttachThreadInput(tid_me, tid_fg, False)
+        time.sleep(0.35)
+        fg2 = win32gui.GetForegroundWindow()
+        _, fg2_pid = win32process.GetWindowThreadProcessId(fg2) if fg2 else (0, 0)
+        ok = fg2_pid == target_pid
+        if not ok:
+            snap2 = _foreground_snapshot()
+            logger.warning(
+                "[无限暖暖] 前台不是游戏：目标 hwnd=%s pid=%s，前台窗口=%s",
+                hwnd, target_pid, snap2,
+            )
+        return ok
+    except Exception as exc:  # noqa: BLE001 - 聚焦失败仍按键，但必须留下证据
+        logger.warning("[无限暖暖] 聚焦游戏窗口失败：%s", exc)
+        return False
+
+
+def _focus_and_press(hwnd: int, key: str) -> None:
+    """L / H 按键：先确保游戏在前台，再发带扫描码的真实按键。
+
+    11-02 曾把「按 L 三次打不开」归因为焦点没切过来（方向对，但实现只是
+    `_focus()` 后 sleep 0.35 再查一次 hwnd 是否相等，抢不回来照样静默按键）。
+    现在改成 PID 校验 + AttachThreadInput 抢前台，抢不回来明确告警。
+    """
     from .foreground_flow_runner import _release_modifier_keys
 
-    _focus(hwnd)
-    time.sleep(0.35)
-    try:
-        if win32gui.GetForegroundWindow() != hwnd:
-            _focus(hwnd)
-            time.sleep(0.25)
-    except Exception:  # noqa: BLE001 - 前台查询失败不阻断按键
-        pass
-    # 先抬起 Alt/Ctrl/Shift/Win：上次流程中断留下修饰键时，L/H 会被当成组合键吞掉
+    logger = logging.getLogger("GameAutomation")
+    ok = _ensure_game_foreground(logger, hwnd)
+    # 先抬起 Alt/Ctrl/Shift/Win：残留修饰键会让 L/H 被当成组合键吞掉
     _release_modifier_keys()
     _press_key(key)
+    logger.info("[无限暖暖] 已按 %s（前台确认=%s，目标 hwnd=%s）",
+                str(key).upper(), ok, hwnd)
 
 
 def _press_esc() -> None:
@@ -335,18 +487,36 @@ def _is_main_world(items: List[Dict]) -> bool:
     return len(_markers_present(items, MAIN_OCR_MARKERS)) >= 2
 
 
-def _calendar_icon_point(items: List[Dict], rect) -> Optional[Tuple[int, int]]:
-    """右上角「奇想日历」图标点击点：OCR 命中标签后上移到图标中心。
+def _top_bar_icon_point(items: List[Dict], rect, label: str) -> Optional[Tuple[int, int]]:
+    """顶栏图标点击点：只认**独立短标签**，命中后上移到图标中心。
 
     标签在图标下方（参考图实测标签 y≈105、图标中心 y≈66，1919x1079），
-    因此命中标签时按窗口高度的 0.035 上移；找不到标签返回 None，由调用方用固定比例。
+    所以按窗口高度的 0.035 上移；连读/无标签返回 None，由调用方退回固定比例。
+
+    **顶栏连读不能当标签**（2026-11-05 08:32 实锤）：RapidOCR 常把整排图标读成
+    「奇迹之旅活动大厅 奇想日历 无限之心」@(1502,103)，其 center 是整排中心，
+    旧代码据此算出 (1503,65) 点下去 —— 落在相邻图标/空白处，日历没开，
+    后续按 L 也没恢复。「商城」标签同样可能与相邻图标连读。
     """
     if not rect:
         return None
     left, top, width, height = rect
+    # 连读特征词要排除 label 自身，否则「奇想日历 L」「商城 H」这类带键位提示的
+    # 独立标签会被自己误杀（2026-11-05 回归 [5] 抓到）
+    connected_words = tuple(
+        word for word in MAIN_OCR_MARKERS
+        + ("活动大厅", "奇迹之旅", "奇想日历", "共鸣")
+        if word != label
+    )
     for item in items or []:
         text = _norm(item.get("text") or "")
-        if "奇想日历" not in text:
+        if label not in text:
+            continue
+        # 连读块含其它顶栏词或明显过长：中心不代表该图标的位置
+        if text != label and (
+            len(text) > len(label) + 2
+            or any(word in text for word in connected_words)
+        ):
             continue
         center = item.get("center")
         if not center:
@@ -356,6 +526,16 @@ def _calendar_icon_point(items: List[Dict], rect) -> Optional[Tuple[int, int]]:
         if y <= top + height * 0.16 and x >= left + width * 0.55:
             return (int(x), int(y - height * CALENDAR_LABEL_OFFSET_RATIO))
     return None
+
+
+def _calendar_icon_point(items: List[Dict], rect) -> Optional[Tuple[int, int]]:
+    """右上角「奇想日历」图标点击点；连读时返回 None 由调用方用固定比例。"""
+    return _top_bar_icon_point(items, rect, CALENDAR_TITLE)
+
+
+def _shop_icon_point(items: List[Dict], rect) -> Optional[Tuple[int, int]]:
+    """主世界顶栏「商城」图标点击点：按 H 打不开商城时的兜底入口。"""
+    return _top_bar_icon_point(items, rect, "商城")
 
 
 def _is_stage_page(items: List[Dict]) -> bool:
@@ -687,16 +867,21 @@ def _buy_one(
 
 
 def _open_calendar(logger: logging.Logger, hwnd: int, stop_check=None) -> bool:
-    """打开奇想日历：优先点右上角图标，点不到再按 L。
+    """打开奇想日历：**就按 L，三次**。L 是顶栏图标的官方快捷键。
 
-    背景（11-01～11-03 实盘）：
-    - 11-01 按 L 三次中的第 2 次才打开（第 1 下常被窗口激活吞掉）；
-    - 11-02 旧代码连按 3 次 L 全失败；11-03 改成「ESC 收起再按 L」仍然全失败——
-      主世界 ESC 会打开暂停菜单，菜单盖着时 L 完全无效。
-    - 11-03 定标参考图确认右上角有「奇想日历」图标（键位提示 L），鼠标点击不受
-      输入法/键盘焦点影响，所以先点图标；图标点不到才退回按 L。
+    历史（别再往「点图标」方向绕）：
+    - 11-01 纯按 L 第 2 下成功（12:26:10，OCR 18→33）并进到奇迹之冠 hub，
+      用的还是瞬时 `pyautogui.press('l')`。第 1 下常被窗口激活吞掉，故留 3 次。
+    - 11-02 / 11-03 三次 L 全失败；11-04 被顶栏连读误判成「已在日历页」；
+      11-05 改成「点右上角图标」也没打开。
+    - 11-05 23:28：主世界鼠标被 UE5 锁在屏幕中心、按 Alt 才有光标，
+      **点图标本来就不该是入口**；改为每轮按键前由 `_focus_and_press` 抢前台。
+    - 11-05 23:50 更正：「11-04 按键发丢了」只是候选解释，**没有直接证据**
+      （两次 `SetForegroundWindow 失败` 在启动器阶段、窗口不可用之后已恢复、
+      失败快照是干净的游戏画面）。现在每轮记录真实前台窗口，三次失败另落
+      全屏快照，明早实跑才能定案。
+    - 不按 ESC：主世界 ESC 会开暂停菜单，菜单盖着时 L 完全无效（11-03 实锤）。
     """
-    rect = _window_rect(hwnd)
     for attempt in range(1, 4):
         if _stop(stop_check):
             return False
@@ -704,17 +889,8 @@ def _open_calendar(logger: logging.Logger, hwnd: int, stop_check=None) -> bool:
         if _is_calendar_page(items):
             logger.info("[无限暖暖·奇想日历] 已在奇想日历页")
             return True
-        if attempt == 1 and rect:
-            _focus(hwnd)
-            point = _calendar_icon_point(items, rect)
-            if point:
-                _click(point)
-                logger.info("[无限暖暖·奇想日历] 点击右上角「奇想日历」图标 @ %s", point)
-            else:
-                _click_ratio(logger, hwnd, CALENDAR_ICON_POINT, "奇想日历图标")
-        else:
-            _focus_and_press(hwnd, "l")
-            logger.info("[无限暖暖·奇想日历] 按 L 打开奇想日历（第 %s/3 次）", attempt)
+        _focus_and_press(hwnd, "l")
+        logger.info("[无限暖暖·奇想日历] 按 L 打开奇想日历（第 %s/3 次）", attempt)
         items = _wait_for(logger, hwnd, _is_calendar_page, timeout=8.0, stop_check=stop_check)
         if items:
             logger.info("[无限暖暖·奇想日历] 已进入奇想日历")
@@ -726,11 +902,7 @@ def _open_calendar(logger: logging.Logger, hwnd: int, stop_check=None) -> bool:
         if _is_calendar_page(items):
             logger.info("[无限暖暖·奇想日历] 收掉奖励页后已进入奇想日历")
             return True
-        if attempt == 1 and not _is_main_world(items):
-            # 图标点到别的页面：ESC 退回主世界，下一步再按 L
-            _focus(hwnd)
-            _press_esc()
-            time.sleep(0.8)
+    _record_key_no_response(logger, "l", hwnd)
     return False
 
 
@@ -1025,6 +1197,15 @@ def _scroll_at(logger: logging.Logger, hwnd: int, point, clicks: int) -> None:
 
 
 def _open_shop(logger: logging.Logger, hwnd: int, stop_check=None) -> bool:
+    """主界面 → 商城：**就按 H，三次**。H 是顶栏「商城」图标的官方快捷键。
+
+    11-01～11-05「已进入商城」0 次。11-04 08:52 按 H 三次，OCR 恒定 17 区域、
+    失败截图仍是主世界 3D HUD；同一次运行里 08:49 两次 `SetForegroundWindow
+    失败`、08:50:40 游戏窗口「已最小化或已关闭，还原失败」——但这两条都在
+    按 H 之前且对象/时点错配，**不能据此断定 H 发给了别的窗口**（23:50 更正）。
+    23:28 起不再绕鼠标（主世界光标被 UE5 锁在中心），改由 `_focus_and_press`
+    每轮先抢前台再发带扫描码的 H；是否真因待明早全屏快照 + 前台窗口记录定案。
+    """
     for attempt in range(1, 4):
         if _stop(stop_check):
             return False
@@ -1035,6 +1216,7 @@ def _open_shop(logger: logging.Logger, hwnd: int, stop_check=None) -> bool:
             logger.info("[无限暖暖·共鸣商店] 已进入商城")
             return True
         _dismiss_continue_screens(logger, hwnd, stop_check, max_rounds=2)
+    _record_key_no_response(logger, "h", hwnd)
     return False
 
 
@@ -1106,7 +1288,7 @@ def _select_serene_tab(logger: logging.Logger, hwnd: int, stop_check=None) -> bo
 
 
 def _run_resonance_shop(logger: logging.Logger, hwnd: int, stop_check=None) -> str:
-    """主界面 H → 商城 → 左列滚动找共鸣商店 → 静谧水滴兑换 → 换抽卡道具（每月）。"""
+    """主界面（H 或顶栏商城图标）→ 商城 → 左列滚动找共鸣商店 → 静谧水滴兑换 → 换抽卡道具（每月）。"""
     plan = load_resonance_shop_plan(logger)
     if not plan.get("enabled"):
         return "共鸣商店已关闭"
@@ -1119,8 +1301,8 @@ def _run_resonance_shop(logger: logging.Logger, hwnd: int, stop_check=None) -> s
         return "用户停止"
 
     if not _open_shop(logger, hwnd, stop_check=stop_check):
-        _record_failure(logger, "共鸣商店-商城", "按 H 后未进入商城", hwnd)
-        return "商城未打开（已记录）"
+        _record_failure(logger, "共鸣商店-商城", "按 H / 点顶栏商城图标后仍未进入商城", hwnd)
+        return "商城未打开（按 H 与顶栏图标均无效，已记录）"
     entry = _find_resonance_entry(logger, hwnd, stop_check=stop_check)
     if not entry:
         _record_failure(logger, "共鸣商店-入口", "左列滚动后未找到「共鸣商店」", hwnd)

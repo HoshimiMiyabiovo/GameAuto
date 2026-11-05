@@ -240,6 +240,11 @@ class GameDailyRecord:
                 if (t.task_name or t.task_key) != want:
                     continue
                 extra = t.extra if isinstance(t.extra, dict) else {}
+                if extra.get("stale"):
+                    # 接口数值被标记不可信（异环 roleHome 无日期归属且实测滞后，
+                    # 2026-11-05 事故）→ 不作为当天完成依据，交由 KEY_STATUS /
+                    # unknown 分支兜底
+                    continue
                 try:
                     cur_i = int(extra.get("current"))
                     total_i = int(extra.get("total"))

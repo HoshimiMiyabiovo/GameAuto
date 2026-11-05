@@ -902,10 +902,14 @@ def check_tajiduo_daily(
                         return 0
 
                 dayvalue = _num("dayvalue")
+                # 2026-11-05 事故：roleHome 响应无任何日期归属字段，且实测三个数值
+                # 字段各自滞后、互相矛盾（同一次查询里 stamina 停在副本消耗前、
+                # dayvalue 与游戏内实时活跃度双向不符）——dayvalue 不能再作为
+                # 「当天完成」依据，永远只展示；完成判定回归 ok-nte 日志的日常领取。
                 tasks.append(DailyTaskItem(
                     name="活跃度", current=min(dayvalue, NTE_DAILY_ACTIVITY_MAX),
                     total=NTE_DAILY_ACTIVITY_MAX,
-                    is_completed=dayvalue >= NTE_DAILY_ACTIVITY_MAX,
+                    is_completed=False,
                 ))
                 # 字段名沿用接口原义：H5 名片把 stamina 显示为「本性像素」，
                 # citystamina 显示为「都市活力」。不要叫「体力/城市体力」，
@@ -941,9 +945,11 @@ def check_tajiduo_daily(
                 is_completed=bool(gs.get("signed")),
             ))
 
-        # 本性像素/都市活力是资源计量不是任务，不参与"每日完成"判定
-        daily_completed = bool(tasks) and all(
-            t.is_completed for t in tasks if t.name not in ("本性像素", "都市活力"))
+        # 完成语义（2026-11-05 收窄）：roleHome 三项数值（活跃度/本性像素/都市
+        # 活力）均不参与「每日完成」，本接口已无法判定游戏内日常是否完成——
+        # 恒 False；游戏内日常的完成判定走 ok-nte 日志的「日常领取」
+        # （KEY_STATUS_TASKS），任务明细照常返回供展示。
+        daily_completed = False
 
         # 金币任务进度（塔吉多社区金币，非游戏内货币）
         coin_state: Dict[str, Any] = {}
@@ -1403,6 +1409,13 @@ def check_games_progress(
             result.games.append(nte_status)
             if tracker is not None:
                 for task in nte_status.tasks:
+                    extra = {"current": task.current, "total": task.total}
+                    # roleHome 三项数值各自滞后且无日期归属（2026-11-05 事故），
+                    # 标 stale 让 completion_state/real_progress_percent 不把它们
+                    # 当成当天完成依据，UI 走「未刷新」展示。
+                    if task.name in ("活跃度", "本性像素", "都市活力"):
+                        extra["stale"] = True
+                        extra["stale_reason"] = "roleHome 接口数值无日期归属且实测滞后，仅供展示"
                     tracker.record_task(
                         game_key="nte", game_name="异环",
                         task_key=task.name, task_name=task.name,
@@ -1410,7 +1423,28 @@ def check_games_progress(
                         source="community",
                         message=f"{task.current}/{task.total}",
                         uid=tajiduo_uid,
-                        extra={"current": task.current, "total": task.total},
+                        extra=extra,
+                    )
+                # ok-nte 日志证据落库（2026-11-05 补）：「日常领取」是异环完成判定
+                # 的关键状态（KEY_STATUS_TASKS），此前只在 bridge 展示层注入、从未
+                # 落库，补跑/单跑路径的脚本证据会整段丢失。解析按天过滤（当天日志
+                # 才有效），record_task 幂等 UPSERT，与批处理路径互不冲突。
+                try:
+                    from ..services.ok_nte_daily_parser import parse_latest_ok_nte_log
+
+                    parsed = parse_latest_ok_nte_log()
+                except Exception as exc:
+                    parsed = None
+                    LOGGER.debug("[每日检查] ok-nte 日志解析失败: %s", exc)
+                for t in (parsed or {}).get("tasks") or []:
+                    tracker.record_task(
+                        game_key="nte", game_name="异环",
+                        task_key=str(t.get("task_name") or ""),
+                        task_name=str(t.get("task_name") or ""),
+                        status=str(t.get("status") or "pending"),
+                        source="script",
+                        message=str(t.get("message") or ""),
+                        uid=tajiduo_uid,
                     )
         except Exception as exc:
             LOGGER.warning("[每日检查] 塔吉多检查失败：%s", exc)

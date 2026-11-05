@@ -853,8 +853,10 @@ def press_key_scancode(key: str, hold_sec: float = SCANCODE_KEY_HOLD_SEC) -> Non
     2026-11-05 绝区零实机逐项对比：双方提权、UIPI 无阻碍、前台窗口就是游戏时，
     `pyautogui.press` / `keyDown` 的 ESC、F3 完全无效，只有
     `win32api.keybd_event(vk, MapVirtualKey(vk))` 按住 0.15s 才被 Unity 接收
-    （见 `monthly_exchange._press_escape`）。无限暖暖的 L（奇想日历）、
-    H（商城）、ESC 是同一条链路，11-01～11-05 反复「按 L/H 没反应」即此因。
+    （见 `monthly_exchange._press_escape`）。绝区零是 Unity；**无限暖暖是 UE5**，
+    L/H/ESC 也统一到这里只是加固，**不能据此解释暖暖日历打不开**：
+    11-01 用 `pyautogui.press('l')` 第 2 下就打开了日历，真正的退化在
+    `nikki_calendar._open_calendar` 的尝试顺序与顶栏连读图标坐标。
     finally 保证异常时也松开键。
     """
     k = str(key).strip().lower()

@@ -11,9 +11,14 @@
 
 修法：
   1. 奇想日历页面判定把标题「奇想日历」也算特征。2026-11-02 的「ESC 收起 → 再按 L」
-     在 11-03 实盘证明是错的（主世界 ESC 会打开暂停菜单，菜单盖着时 L 全部无效）；
-     现改为**优先点右上角「奇想日历」图标**（鼠标点击不受输入法/键盘焦点影响），
-     图标点不到再退回按 L，失败后先收掉奖励页再复检。
+     在 11-03 实盘证明是错的（主世界 ESC 会打开暂停菜单，菜单盖着时 L 全部无效）。
+     **2026-11-05 23:28 / 23:50 定案**：11-01 纯按 L 第 2 下成功过；
+     主世界鼠标被 UE5 锁在屏幕中心（按 Alt 才有光标），顶栏图标本就不该是
+     入口。至于之前为何失败**尚无直接证据**（11-04 的
+     `SetForegroundWindow 失败` 发生在启动器阶段，「窗口已最小化」之后已恢复），
+     待全屏快照 + 前台窗口记录实跑定案。现 `_open_calendar` 只按 L 三次，
+     每轮由 `_ensure_game_foreground` 抢前台，不再点图标、不再按 ESC。
+     本套件的顺序断言已同步。
   2. 点「奇迹之冠搭配赛」最多重试 3 次；实在进不去就退出 hub（左上角返回箭头）。
   3. 搭配赛页左列「晶石兑换」入口轮询 3 次再判失败。
   4. 回主界面失败时先退出 hub 再回一次，别让共鸣商店被整段跳过。
@@ -87,7 +92,7 @@ def test_calendar_icon_point():
 
 
 def test_open_calendar_clicks_icon_then_l():
-    print("[2] 打开奇想日历：先点图标，点不到再按 L；不盲按 ESC")
+    print("[2] 打开奇想日历：只按 L 三次，不点图标、不按 ESC")
     keys = []
     with mock.patch.object(nc, "_ocr_full", lambda logger, hwnd, region=None: []), \
          mock.patch.object(nc, "_wait_for", lambda *a, **k: None), \
@@ -96,12 +101,15 @@ def test_open_calendar_clicks_icon_then_l():
          mock.patch.object(nc, "_click_ratio", lambda *a, **k: keys.append("ratio")), \
          mock.patch.object(nc, "_focus_and_press", lambda hwnd, key: keys.append(key)), \
          mock.patch.object(nc, "_press_esc", lambda: keys.append("esc")), \
-         mock.patch.object(nc, "_dismiss_continue_screens", lambda *a, **k: 0):
+         mock.patch.object(nc, "_dismiss_continue_screens", lambda *a, **k: 0), \
+         mock.patch.object(nc, "_record_key_no_response"):
         ok = nc._open_calendar(LOGGER, 1234)
     check("没打开返回 False", ok is False)
-    check("第 1 次点图标（OCR 没标签时走固定比例）", keys[0] == "ratio", keys)
-    check("点图标后不在主界面才 ESC，后续退回按 L",
-          keys[1:] == ["esc", "l", "l"], keys)
+    # 11-05 23:28 定案：主世界鼠标被 UE5 锁在中心（按 Alt 才有光标），
+    # 顶栏图标本就不该是入口；L 是官方快捷键，问题在按键发给了非前台窗口。
+    check("三次都是 L", keys == ["l", "l", "l"], keys)
+    check("不点图标、不按 ESC",
+          not any(k in ("ratio", "click", "esc") for k in keys), keys)
 
 
 def test_open_calendar_already_open():
