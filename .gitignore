@@ -23,7 +23,26 @@ app_config.json.bak*
 flow_configs.json
 
 # Runtime data（2026-10-29 起统一在 data/：logs / artifacts / cache / workflow.sqlite3）
-/data/
+# 注意：不能直接写 /data/——父目录被整体忽略后 git 不再下钻，子目录的 ! 例外失效。
+# 改用逐级排除：只忽略 data/ 下的运行时目录，其余（模型）正常跟踪。
+/data/logs/
+/data/artifacts/
+/data/cache/
+/data/backups/
+/data/okww/
+/data/reference/
+/data/*.sqlite3
+/data/*.sqlite3.*
+/data/*.bak*
+/data/*.log
+# 但 OCR 引擎模型必须入库：换机 clone 即跑，否则 onnxocr v6 拿不到模型
+# 返回空、整个文字定位链路失效（2026-11-07 用户拍板）。模型来自 OneDragon
+# fork 的 OnnxOCR（Apache-2.0），来源与许可见 src/onnxocr/readme.md。
+# 注意：不能写 /data/models/（父目录被整体忽略后 ! 例外失效，同 /data/ 陷阱），
+# 只能逐文件忽略已下线引擎的模型，放行在用的 v6 与 flash_classifier。
+/data/models/ch_PP-OCRv4_det_server.onnx
+/data/models/ch_PP-OCRv4_rec_server.onnx
+/data/models/onnx_ocr/ppocrv5/
 # 兼容旧版本残留（迁移脚本执行前的目录）
 logs/
 artifacts/

@@ -23,5 +23,8 @@
 - `onnx_paddleocr.py`：v6 默认参数里的模型根目录改为 `<仓库根>/data/models/onnx_ocr`（`ONNXOCR_MODEL_ROOT` 可覆）；推理异常走标准日志；删掉依赖 one_dragon 的 `__debug()` 入口。
 - `inference_engine.py`：CUDA EP 用 `HEURISTIC` 卷积算法搜索 + `kSameAsRequested` arena（对齐本项目 v4 实测，上游 `DEFAULT` 在动态 shape 下刷屏 Conv fallback 警告）；`log_severity_level=3` 只留 Error。
 
-模型不入库（`data/` 已 gitignore），本机从 OneDragon 的
-`assets/models/onnx_ocr/{ppocrv5,ppocrv6}/` 拷贝 `det.onnx` / `rec.onnx` / `cls.onnx` / 字典。
+模型（v6）已随仓库入库（`data/models/onnx_ocr/ppocrv6/`，2026-11-07 用户拍板
+换机 clone 即跑；v5 模型已下线不入库，ppocrv5/ 在 .gitignore 排除）。
+来源：本机 OneDragon 安装 `assets/models/onnx_ocr/ppocrv6/` 拷贝
+`det.onnx` / `rec.onnx` / `cls.onnx` / `ppocrv6_dict.txt`（Apache-2.0）。
+换机无需手动拷贝；若需从上游重新拉取，用 ModelScope 同名 PP-OCRv6 onnx。
