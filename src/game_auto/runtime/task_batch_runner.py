@@ -46,6 +46,7 @@ from .background_template_runner import (
     run_wool_background,
     run_wool_flow_background,
     run_xm_background,
+    run_zzz_logistics_monthly_background,
     run_zzz_monthly_background,
     run_zzz_notorious_hunt_background,
 )
@@ -135,23 +136,48 @@ _MONTHLY_RUNNERS: Dict[str, Callable[..., Tuple[bool, str]]] = {
     "NTE_MONTHLY": run_nte_monthly_background,
 }
 
+# 2026-11-06 用户拍板：一个游戏可以有多条**互相独立**的每月任务。
+# 绝区零的信号残响与后勤商店都是月度刷新，旧配置把 7 步串成一条 run_flow，
+# 步骤3失败会直接 return False，步骤4-7（后勤商店）连跑都跑不到；而且整条流程
+# 只有 monthly_flow:ZZZ_MONTHLY 一个标记，一个失败下月两条都得重来。
+# 这里保持主映射「一个 app 一条主流程」不变（其它三个游戏零影响），把附加的
+# 独立月流程单独挂出来：独立 flow_key、独立 monthly_flow:<KEY> 门控、独立 runner，
+# 主流程失败/已完成都不影响附加流程执行。
+_EXTRA_MONTHLY_FLOWS: Dict[str, Tuple[Tuple[str, str], ...]] = {
+    "ZenlessZoneZero": (("ZZZ_LOGISTICS_MONTHLY", "绝区零后勤商店"),),
+}
+_EXTRA_MONTHLY_RUNNERS: Dict[str, Callable[..., Tuple[bool, str]]] = {
+    "ZZZ_LOGISTICS_MONTHLY": run_zzz_logistics_monthly_background,
+}
+
 # 本批次已检查过月商店的游戏（批次开始时清空）。
 # 用来在收尾时补跑「当天没进批次、但本月还没买」的月商店，避免同一个批次里
 # 对同一个游戏重复启动客户端。
 _MONTHLY_CHECKED: set = set()
 
 
-def _run_pending_monthly_flow(controller, app_key: str) -> Optional[Tuple[str, bool]]:
+def _run_pending_monthly_flow(
+    controller, app_key: str, *, _override=None
+) -> Optional[Tuple[str, bool]]:
     """该游戏本月还没买月商店时补跑一次，返回 (报告行, 是否成功)。
 
     已买过、或该游戏没有月商店流程时返回 None（只读一次 task_meta，零成本）。
     刻意排在该游戏的日常任务之后：日常脚本退出时游戏已关，月度流程自己
     启动客户端，不抢窗口；月初第一次批次多一次启动，当月其余日子不触发。
+
+    `_override=(flow_key, label, runners)` 供 `_run_extra_monthly_flows` 复用同一套
+    enabled / 维护 / 月度标记检查去跑「附加的独立月流程」；不传时行为与旧版一致。
     """
-    entry = _MONTHLY_FLOW_BY_APP.get(app_key)
-    if entry is None or controller.stop_current_task:
+    if controller.stop_current_task:
         return None
-    flow_key, label = entry
+    if _override is None:
+        entry = _MONTHLY_FLOW_BY_APP.get(app_key)
+        if entry is None:
+            return None
+        flow_key, label = entry
+        runners = _MONTHLY_RUNNERS
+    else:
+        flow_key, label, runners = _override
     # 2026-11-04：某游戏的每月事项交给外部脚本（如崩铁交给三月七）时，
     # flow_configs 里把该流程设 enabled=false。这里提前跳过：否则 run_flow
     # 会返回「流程已禁用」，被 _append_monthly_report 当成失败写一行 ❌，
@@ -183,7 +209,7 @@ def _run_pending_monthly_flow(controller, app_key: str) -> Optional[Tuple[str, b
         return None
 
     controller.logger.info("[%s] 本月还没买，随日常自动补跑一次", label)
-    runner = _MONTHLY_RUNNERS.get(flow_key)
+    runner = runners.get(flow_key)
     if runner is None:
         controller.logger.warning("[%s] 没有对应的执行入口（flow_key=%s），跳过", label, flow_key)
         return None
@@ -195,16 +221,8 @@ def _run_pending_monthly_flow(controller, app_key: str) -> Optional[Tuple[str, b
     return (f"{label:20} {'✅' if ok else '❌'} {msg}", ok)
 
 
-def _append_monthly_report(
-    controller, app_key: str, report: List[str], warnings: List[str]
-) -> None:
-    """跑月商店并把结果写进批次报告/警告（供 run_task_batch 的两条出口复用）。"""
-    # 记下"本批次已检查过这个游戏的月商店"，收尾补漏时不再重复查。
-    _MONTHLY_CHECKED.add(app_key)
-    monthly = _run_pending_monthly_flow(controller, app_key)
-    if monthly is None:
-        return
-    line, ok = monthly
+def _emit_monthly_line(controller, one, report: List[str], warnings: List[str]) -> None:
+    line, ok = one
     # 2026-11-04：结果行同步进 runner 日志——以前只有邮件日报里有，
     # 11-03 崩铁 0/5 那种事日志里全程无痕，只能靠用户看邮件才发现。
     log_fn = controller.logger.info if ok else controller.logger.warning
@@ -212,6 +230,40 @@ def _append_monthly_report(
     report.append(line)
     if not ok:
         warnings.append(line)
+
+
+def _run_extra_monthly_flows(
+    controller, app_key: str, report: List[str], warnings: List[str]
+) -> None:
+    """跑该游戏附加的独立月流程（2026-11-06：绝区零后勤商店）。
+
+    每条附加流程走自己的 `monthly_flow:<KEY>` 标记与 runner；主流程失败、
+    已完成、被禁用都不会阻断这里，反之亦然。`_MONTHLY_CHECKED` 仍按 app 记，
+    收尾补漏不会重复触发。
+    """
+    for flow_key, label in _EXTRA_MONTHLY_FLOWS.get(app_key, ()):
+        if controller.stop_current_task:
+            return
+        one = _run_pending_monthly_flow(
+            controller, app_key,
+            _override=(flow_key, label, _EXTRA_MONTHLY_RUNNERS),
+        )
+        if one is not None:
+            _emit_monthly_line(controller, one, report, warnings)
+
+
+def _append_monthly_report(
+    controller, app_key: str, report: List[str], warnings: List[str]
+) -> None:
+    """跑月商店并把结果写进批次报告/警告（供 run_task_batch 的两条出口复用）。"""
+    # 记下"本批次已检查过这个游戏的月商店"，收尾补漏时不再重复查。
+    _MONTHLY_CHECKED.add(app_key)
+    monthly = _run_pending_monthly_flow(controller, app_key)
+    if monthly is not None:
+        _emit_monthly_line(controller, monthly, report, warnings)
+    # 主流程本月已完成（monthly is None）或失败时，附加的独立月流程照样要跑。
+    # 旧版这里直接 return，正是「一个失败另一个连跑都跑不到」的调度侧原因之一。
+    _run_extra_monthly_flows(controller, app_key, report, warnings)
 
 
 def _sweep_pending_monthly_flows(

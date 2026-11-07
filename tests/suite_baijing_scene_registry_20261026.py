@@ -48,6 +48,8 @@ TASK_BTN_XY = (1540, 890)
 ACTIVITY_XY = (585, 356)
 TEA_ROW_XY = (1200, 400)
 TEA_ENTRY_XY = (1695, 896)     # 休息室右下「午后茶憩」立牌卡（比例换算值）
+CLAIM_XY = (630, 762)          # 定巡之礼弹窗「可领取」（2026-11-06 09:15 实拍帧 OCR 位置）
+EVENT_CLOSE_XY = (1752, 258)   # 定巡之礼右上 X（比例 0.913,0.239 换算值）
 
 
 def check(name, cond, detail=""):
@@ -77,10 +79,14 @@ def _near(a, b, tol=16):
 class Screen:
     """界面状态机：lounge / focus / confirm / overlay / tea_summary / main / panel / blank。"""
 
-    def __init__(self, state="lounge", leave_works=True, panel_marker_too=False):
+    def __init__(self, state="lounge", leave_works=True, panel_marker_too=False,
+                 switch_after=0, next_state="main"):
         self.state = state
         self.leave_works = leave_works
         self.panel_marker_too = panel_marker_too
+        self.switch_after = switch_after      # ocr_calls 达到后切 next_state（模拟加载完成）
+        self.next_state = next_state
+        self.claimed = False
         self.clicks = []
         self.ratios = []
         self.esc = 0
@@ -119,6 +125,14 @@ class Screen:
         elif self.state == "event_dialog":
             # 2026-10-30 10:35 取证帧：定巡之礼活动弹窗，右上角 X
             data = {"定巡之礼": (500, 200)}
+        elif self.state == "event_claim":
+            # 2026-11-06 09:15 取证帧：定巡之礼弹窗，第 2 天「可领取」
+            data = {"定巡之礼": (500, 200)}
+            if not self.claimed:
+                data["可领取"] = CLAIM_XY
+        elif self.state == "loading":
+            # 2026-10-31～11-06 五次取证帧：加载页 = logo + 轮换提示 + 进度
+            data = {"ASHECHOES": (960, 540)}
         elif self.state == "tea_room":
             # 2026-10-27 10:22 取证帧：房间常驻陈设（飞镖/棒球）+ 话题名 + 左上返回
             data = {"茶憩纪念函": (900, 800), "飞镖": (1725, 573), "棒球": (1719, 419), "返回": BACK_XY}
@@ -139,6 +153,8 @@ class Screen:
 
     def ocr(self, logger, hwnd=None, region=None):
         self.ocr_calls += 1
+        if self.switch_after and self.ocr_calls >= self.switch_after and self.state == "loading":
+            self.state = self.next_state
         return [
             {"text": t, "confidence": 0.75, "center": xy, "box": (xy[0], xy[1], xy[0], xy[1])}
             for t, xy in self._texts().items()
@@ -167,7 +183,12 @@ class Screen:
             self.state = "main"
         elif self.state == "memory_list" and _near((x, y), BACK_XY):
             self.state = "panel"
-        elif self.state == "event_dialog" and _near((x, y), (1752, 258)):
+        elif self.state == "event_dialog" and _near((x, y), EVENT_CLOSE_XY):
+            self.state = "main"
+        elif self.state == "event_claim" and _near((x, y), CLAIM_XY):
+            # 领取后该天变已领（真实弹窗里「可领取」会消失），弹窗本体仍在
+            self.claimed = True
+        elif self.state == "event_claim" and _near((x, y), EVENT_CLOSE_XY):
             self.state = "main"
         elif self.state == "tea_room" and _near((x, y), BACK_XY):
             # 与休息室同一套离开交互：返回 → 确认框
@@ -327,6 +348,51 @@ def test_new_scenes_20261027():
     check("event_dialog 零 ESC", scr.esc == 0, scr.esc)
 
 
+# ── 4.6 2026-11-07：加载过场 + 定巡之礼先领后关 ───────────────────
+def test_loading_and_claim_20261107():
+    print("[4.6] 加载过场只等待 / 定巡之礼先领「可领取」再点 X")
+    # 加载过场：等待特征消失后交回下一轮识别，全程零点击零 ESC
+    scr = Screen(state="loading", switch_after=3)
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="t-loading"))
+    check("loading 加载完成 → 状态 main", state == "main", state)
+    check("loading 做过等待动作", acted is True, acted)
+    check("loading 零点击（点了也无效）", scr.clicks == [], scr.clicks)
+    check("loading 零 ESC", scr.esc == 0, scr.esc)
+
+    # 游戏真卡死：等待有上限，返回 False 落证据交回兜底，不无限等
+    scr = Screen(state="loading")
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="t-loading-stuck"))
+    check("loading 卡死 → scene:加载过场", state == "scene:加载过场", state)
+    check("loading 卡死未做有效动作", acted is False, acted)
+    check("loading 卡死零点击", scr.clicks == [], scr.clicks)
+    check("loading 卡死落了证据",
+          any("反复退出失败" in d for _, d in scr.failures), scr.failures)
+
+    # 定巡之礼弹窗：先点「可领取」，弹窗还在再点右上 X（顺序锁定）
+    scr = Screen(state="event_claim")
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="t-event-claim"))
+    check("event_claim → 状态 main", state == "main", state)
+    check("event_claim 点击序列 = 先领取后关闭",
+          scr.clicks == [CLAIM_XY, EVENT_CLOSE_XY], scr.clicks)
+    check("event_claim 零 ESC", scr.esc == 0, scr.esc)
+
+    # 真实取证帧（11-06 #197 的原图）两个特征都必须能 OCR 出来
+    ref = PROJECT_ROOT / "data" / "artifacts" / "ref_baijing_dingxun_dialog_20261107.jpg"
+    check("定巡之礼取证帧已存档为长期参考图", ref.is_file(), ref)
+    if ref.is_file():
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+        except ImportError:
+            print("  SKIP RapidOCR 未安装，跳过真图断言")
+            return
+        result, _ = RapidOCR()(str(ref))
+        texts = {str(t): float(c) for _, t, c in (result or [])}
+        ding = max((c for t, c in texts.items() if "定巡之礼" in t), default=0.0)
+        claim = max((c for t, c in texts.items() if "可领取" in t), default=0.0)
+        check("真图 OCR 出「定巡之礼」(≥0.55)", ding >= 0.55, ding)
+        check("真图 OCR 出「可领取」(≥0.5)", claim >= 0.5, claim)
+
+
 # ── 5. 一轮只截一次屏 ─────────────────────────────────────────────
 def test_single_ocr_per_round():
     print("[5] 一轮恢复只截一次屏（旧实现每个判定各截一次）")
@@ -366,9 +432,9 @@ def test_stuck_scene_evidence():
 # ── 8. 登记表顺序 ─────────────────────────────────────────────────
 def test_rule_order():
     print("[8] 登记表顺序：面板特征优先，绝不在任务面板上点「返回」")
-    check("规则顺序", [r["name"] for r in bd.SCENE_RULES] == ["过场遮罩", "计划等级提升", "定巡之礼", "茶憩摘要",
-                                                              "关注特写", "休息室", "烙痕详情", "烙痕列表",
-                                                              "茶憩房间", "有猫零售"],
+    check("规则顺序", [r["name"] for r in bd.SCENE_RULES] == ["加载过场", "过场遮罩", "计划等级提升", "定巡之礼",
+                                                              "茶憩摘要", "关注特写", "休息室", "烙痕详情",
+                                                              "烙痕列表", "茶憩房间", "有猫零售"],
           [r["name"] for r in bd.SCENE_RULES])
     check("休息室特征不含「午后茶憩」（任务行也有这四个字）",
           "午后茶憩" not in bd.REST_ROOM_MARKERS, bd.REST_ROOM_MARKERS)
@@ -438,6 +504,7 @@ def test_cleanup():
 def main():
     test_single_scenes()
     test_new_scenes_20261027()
+    test_loading_and_claim_20261107()
     test_single_ocr_per_round()
     test_unknown_scene_evidence()
     test_stuck_scene_evidence()

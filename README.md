@@ -37,7 +37,23 @@
 
 - Windows 10/11 操作系统（大量使用 Win32 API）
 - Python 3.10+
-- Tesseract OCR 5.x（项目已内置在 `tools/tesseract/`）
+- 主 OCR：**RapidOCR**（`rapidocr-onnxruntime` + `onnxruntime-gpu`）；所有按文字定位点击都走它，建议 NVIDIA 显卡 / CUDA，无 CUDA 会退回 CPU 且明显变慢
+- Tesseract：**Python 包 `pytesseract` 由 `setup_deps.bat` 自动安装（必装）**；`tesseract.exe` + `chi_sim` 中文包**可选**，仓库不含二进制（见下节）。仅当 RapidOCR 返回空或异常时才尝试它；GUI 的「XM Seer 测试」独立工具是唯一硬依赖 `tesseract.exe` 的入口。
+
+### 克隆后仓库里没有什么
+
+`.gitignore` 把「只在作者本机存在」的大文件和个人数据排除了，clone 后这些路径**是空的**：
+
+| 路径 | 体积 | 影响 | 怎么补 |
+| --- | --- | --- | --- |
+| `tools/tesseract/` | ~251 MB | 仅 OCR 兜底；主 OCR RapidOCR 不装也能跑，Python 包 `pytesseract` 已由 `setup_deps.bat` 装好 | 安装 Tesseract 5.x 并加入 `PATH`，或把官方安装目录拷到 `tools/tesseract/` |
+| `tools/flet/` | ~216 MB | 旧版 Flet 回退界面 | 不用旧界面可忽略 |
+| `data/artifacts/ref_*.png` | 若干 | 文档里「见 `ref_xxx.png`」都是本机截图，仓库未收录 | 看代码里的窗口比例常量与注释即可，点击坐标不依赖这些图 |
+| `app_config.json`、`flow_configs.json` | — | 每台机器的本地配置 | **首次运行自动从 `.example.json` 复制**，无需手动创建 |
+
+随仓库迁移的是 `assets/templates/`（图像模板）、`requirements.lock` 和 `*.example.json`。
+文档里的 `1919x1079` 是**定标来源标注**（当时截图的窗口尺寸），不是运行时分辨率要求；
+所有点击坐标都按窗口比例换算。
 
 ## 快速开始
 
@@ -49,7 +65,10 @@ cd game_auto
 # 2. 以普通权限安装依赖（uv + requirements.lock 精确复现；不要用管理员运行）
 setup_deps.bat
 
-# 3. 启动（启动时只检查依赖，缺包会提示运行 setup_deps.bat；随后进入配置向导）
+# 3. 先自检：不提权、不启动游戏、不写个人配置，能立刻看到环境是否装好
+.venv\Scripts\python.exe -m pytest tests -q
+
+# 4. 启动（会弹 UAC；启动时只检查依赖，缺包会提示运行 setup_deps.bat；随后进入配置向导）
 ```
 
 | 入口 | 说明 |
@@ -61,6 +80,10 @@ setup_deps.bat
 | `scripts\start\10_OPEN_PROJECT_HOME.bat` | 直接打开项目目录 |
 
 `scripts\start\` 只是用户入口壳，实际启动逻辑在 `scripts\launchers\`（自动提权 + `python -m game_auto...` 包模式启动）。
+
+> 所有 GUI / CLI 入口都是 `*_ADMIN.bat`：**需要管理员权限**（Win32 点击与按键要过 UIPI），
+> 第一次双击会弹 UAC。第 3 步的自检不需要提权，也不需要任何游戏或账号配置；
+> 想先确认「依赖装好没有」，跑它就够了。
 
 ## 项目结构
 
@@ -87,7 +110,7 @@ game_auto/
 ├── scripts/        # 启动脚本
 │   ├── start/            # 用户双击入口（.bat）
 │   └── launchers/        # 内部提权与包模式启动脚本（自动把 src/ 加进 PYTHONPATH）
-├── tools/          # 内置工具（Tesseract OCR、QML 布局 smoke 测试等）
+├── tools/          # 工具脚本（入库）；Tesseract / Flet 等大二进制本机另放，不入库
 ├── app_config.json      # 用户覆盖配置与执行顺序（不入库）
 └── flow_configs.json    # 图像模板流程定义（XM / CJ / NTE；本地文件，不入库）
 ```
@@ -154,7 +177,7 @@ set PYTHONPATH=%CD%\src
 - `flet` — 旧 GUI 框架，保留作回退
 - `psutil` — 进程管理；`pywin32` — Windows API 与 DPAPI 密码加密
 - `pyautogui` / `opencv-python` / `Pillow` — 屏幕自动化与图像模板匹配
-- `pytesseract` — OCR 文字识别；`rapidocr-onnxruntime` + `onnxruntime-gpu` — 主 OCR 引擎（必须 GPU 版，CPU 版会静默降级）
+- `pytesseract` — 可选 OCR 兜底的 Python 绑定（必装，但不需要对应的 exe）；`rapidocr-onnxruntime` + `onnxruntime-gpu` — **主 OCR 引擎**（必须 GPU 版，CPU 版会静默降级）
 - `windows-capture` — 窗口截屏；`numpy` — 图像处理
 - `genshin` — 米哈游协议（签到、便笺、stoken 换取）
 - `browser-cookie3` — 浏览器 Cookie 提取；`qrcode` — 扫码登录二维码

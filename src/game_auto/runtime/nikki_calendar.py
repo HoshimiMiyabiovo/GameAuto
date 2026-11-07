@@ -102,6 +102,14 @@ PAIR_CLICK_DX_RATIO = 0.03
 PAIR_CLICK_DY_RATIO = -2.2
 PAIR_FALLBACK_POINT = (0.28, 0.53)
 
+# 搭配赛页左列「晶石兑换」也是「圆形图标在上、文字在下」，文字本身不是按钮。
+# 2026-11-06 实机：文字中心 (149,774) 及左右/上下各偏移都点不动，点上移 42px 的
+# (149,732) 一次就进兑换页（随后共鸣水晶×3 / 启示水晶×3 全部买满）。文字框高约
+# 38px → 上移 1.1 个框高。偏移按 OCR 文字框高度算（换分辨率自适应），box 缺失时
+# 退窗高比例 42/1080。与 `_pair_click_point` 同一口径，别再写死像素。
+EXCHANGE_ICON_DY_BOX_RATIO = -1.1
+EXCHANGE_ICON_DY_WINDOW_RATIO = -0.039
+
 # 商品名 → 本月限购的相对位置（实测：名中心上方 0.18 窗高、右移 0.026 窗宽）
 LIMIT_DX = 0.026
 LIMIT_BAND_DX = 0.10
@@ -116,12 +124,26 @@ SHOP_MENU_ITEM = "美鸭梨优选"
 RESONANCE_ENTRY = "共鸣商店"
 RESONANCE_TABS = ("澎湃浪花兑换", "静谧水滴兑换")
 RESONANCE_TAB_TARGET = "静谧水滴兑换"
-# 静谧水滴页专属商品（澎湃页没有），用来强校验页签，避免买错货币
-SERENE_MARKERS = ("万象星实", "璨光棱镜", "流辉棱镜", "虹彩棱镜")
+# 两个页签的**商品指纹**（2026-11-06 用户提出，对齐绝区零/崩铁/原神的
+# tab_content_markers + forbidden_texts 双向闸）。两页都卖「启示水晶/共鸣水晶/
+# 无敌碎星闪粉」，只是单价不同（澎湃 20 / 静谧 40），**这三个不能当指纹**；
+# 必须靠各自独占的商品。参考图 ref_nikki_resonance_{surge,serene}_20261101.png。
+# 静谧页独占（澎湃页没有），用来**正向确认**已切到静谧水滴兑换。
+SERENE_MARKERS = ("万象星实", "璨光棱镜", "流辉棱镜", "虹彩棱镜",
+                  "噗灵", "纯真丝线", "闪亮泡泡")
+# 澎湃页独占（静谧页没有），用来**反向排除**；命中即说明还在澎湃浪花兑换，
+# 绝不能按 40 静谧水滴的口径去点购买，否则花错货币。
+SURGE_MARKERS = ("慢慢恢复花露", "精萃慢慢恢复花露", "缓速花露",
+                 "眩晕花露", "日光果", "星光果", "盛宴毛毡")
 SHOP_MENU_REGION = (0.00, 0.15, 0.22, 0.95)
 RESONANCE_TAB_REGION = (0.22, 0.07, 0.78, 0.18)
 SHOP_GRID_REGION = (0.15, 0.14, 0.92, 0.95)
-SHOP_MENU_SCROLL_ANCHOR = (0.11, 0.55)
+# 左列滚动（2026-11-06 实机）：滚轮逐格、拖左列滚动条**完全无效**——
+# 20:26 十三轮滚轮、20:51 三次拖条，左列 OCR 恒定「越冬之约…美鸭梨优选」。
+# 必须按住左键**从下往上一次大位移**拖动；分成多小步时 UE5 只认第一个位移，
+# 后面全被吞（22:19 分 30 小步时拖 3 次才滚到底，22:22 一次大位移就够）。
+SHOP_MENU_DRAG = (0.08, 0.88, 0.23)  # x / y起点 / y终点，窗口比例
+SHOP_MENU_DRAG_TIMES = 3             # 最多拖 3 次，每次复扫 OCR
 
 NAME_MIN_CONF = 0.45
 FUZZY_MIN_RATIO = 0.85
@@ -953,6 +975,36 @@ def _pair_click_point(pair: Dict, rect) -> Tuple[int, int]:
     )
 
 
+def _exchange_entry_point(entry: Dict, rect) -> Tuple[int, int]:
+    """「晶石兑换」入口真正可点的坐标：文字正上方的圆形图标。
+
+    与 `_pair_click_point` 同理：左列是图标在上、文字在下，点文字中心无反应。
+    偏移优先按 OCR 文字框高度（随分辨率缩放），box 取不到时退窗高比例。
+    `entry["center"]` 是屏幕绝对坐标，返回值也保持屏幕绝对坐标。
+    """
+    cx, cy = entry["center"]
+    box = entry.get("box")
+    if box:
+        try:
+            _x1, y1, _x2, y2 = (int(v) for v in box)
+            box_h = max(1, y2 - y1)
+            return (int(cx), int(cy + box_h * EXCHANGE_ICON_DY_BOX_RATIO))
+        except (TypeError, ValueError):
+            pass
+    _left, _top, _width, height = rect
+    return (int(cx), int(cy + height * EXCHANGE_ICON_DY_WINDOW_RATIO))
+
+
+def _resonance_entry_point(entry: Dict, rect) -> Tuple[int, int]:
+    """左列「共鸣商店」与「晶石兑换」同构：圆形图标在上、文字在下，点文字无效。
+
+    11-06 22:22 实机：文字中心 (202,915) 点下去页面纹丝不动；上移约 1.1 个
+    文字框高到 (202,870) 一次进入共鸣商店页（澎湃/静谧两页签出现）。
+    两处共用同一套相对偏移，换分辨率自适应。
+    """
+    return _exchange_entry_point(entry, rect)
+
+
 def _claim_pair_rewards(logger: logging.Logger, hwnd: int, stop_check=None) -> Tuple[int, str]:
     """奇想日历 → 奇迹之冠 → 搭配赛 → 有「领取奖励」就点掉并收尾奖励页。"""
     if _stop(stop_check):
@@ -1157,8 +1209,12 @@ def _exchange_crystals(logger: logging.Logger, hwnd: int, stop_check=None) -> st
     if not entry:
         _record_failure(logger, "晶石兑换-入口", "搭配赛页未找到左侧「晶石兑换」", hwnd, items)
         return "未找到「晶石兑换」入口"
-    _click(entry["center"])
-    logger.info("[无限暖暖·晶石兑换] 点击左侧「晶石兑换」@ %s", entry["center"])
+    point = _exchange_entry_point(entry, rect)
+    _click(point)
+    logger.info(
+        "[无限暖暖·晶石兑换] 点击左侧「晶石兑换」圆形图标 @ %s（文字中心 %s 上方）",
+        point, entry["center"],
+    )
     time.sleep(1.2)
     page = _wait_for(logger, hwnd, _is_exchange_page, timeout=8.0, stop_check=stop_check)
     if not page:
@@ -1182,18 +1238,59 @@ def _has_serene_markers(items: List[Dict]) -> bool:
     return bool(_markers_present(items, SERENE_MARKERS, 0.5))
 
 
-def _scroll_at(logger: logging.Logger, hwnd: int, point, clicks: int) -> None:
+def _page_fingerprint(items: List[Dict]):
+    """返回 (静谧页独占商品命中集合, 澎湃页独占商品命中集合)。"""
+    return (_markers_present(items, SERENE_MARKERS, 0.5),
+            _markers_present(items, SURGE_MARKERS, 0.5))
+
+
+def _serene_page_guard(items: List[Dict]) -> bool:
+    """**双向闸**：静谧页独占商品必须出现，澎湃页独占商品必须一个都不出现。
+
+    只看 `_has_serene_markers` 不够——切页动画中间帧可能同时残留两页商品，
+    且两页都有同名的「启示水晶/共鸣水晶/无敌碎星闪粉」。保守起见两者都命中时
+    判 False（宁可不买，也不能花错货币）。对齐 `monthly_exchange` 的
+    `tab_content_markers` + `forbidden_texts` 口径。
+    """
+    serene, surge = _page_fingerprint(items)
+    return bool(serene) and not surge
+
+
+def _drag_menu_up(logger: logging.Logger, hwnd: int, rect, times: int = 1) -> None:
+    """商城左列**从下往上一次大位移拖动**，把底部常规分类推上来。
+
+    滚轮（`pyautogui.scroll`）和拖滚动条对这个 UE5 列表都无效（11-06 实机）。
+    `mouseDown` 后只发**一个** `moveTo` 到终点：分 30 小步时游戏只响应第一个
+    位移，其余全被吞，效率极低。`finally` 保证异常时也松开左键。
+    """
     import pyautogui
 
     from .foreground_flow_runner import FailSafeAborted
 
-    try:
-        pyautogui.scroll(int(clicks), x=int(point[0]), y=int(point[1]))
-        logger.debug("[无限暖暖·共鸣商店] 滚轮 %s @ %s", clicks, point)
-    except pyautogui.FailSafeException as exc:
-        raise FailSafeAborted(
-            "PyAutoGUI 紧急停止已触发：鼠标位于屏幕左上角 (0,0)。"
-        ) from exc
+    left, top, width, height = rect
+    fx, fy0, fy1 = SHOP_MENU_DRAG
+    x = left + int(width * fx)
+    y0 = top + int(height * fy0)
+    y1 = top + int(height * fy1)
+    _focus(hwnd)
+    for _ in range(max(1, int(times))):
+        try:
+            pyautogui.moveTo(x, y0)
+            time.sleep(0.2)
+            pyautogui.mouseDown()
+            try:
+                time.sleep(0.15)
+                pyautogui.moveTo(x, y1)
+                time.sleep(0.3)
+            finally:
+                pyautogui.mouseUp()
+        except pyautogui.FailSafeException as exc:
+            raise FailSafeAborted(
+                "PyAutoGUI 紧急停止已触发：鼠标位于屏幕左上角 (0,0)。"
+            ) from exc
+        time.sleep(0.6)
+    logger.info("[无限暖暖·共鸣商店] 左列上拖 %s 次 @ x=%s y %s→%s",
+                times, x, y0, y1)
 
 
 def _open_shop(logger: logging.Logger, hwnd: int, stop_check=None) -> bool:
@@ -1221,49 +1318,51 @@ def _open_shop(logger: logging.Logger, hwnd: int, stop_check=None) -> bool:
 
 
 def _find_resonance_entry(logger: logging.Logger, hwnd: int, stop_check=None) -> Optional[Dict]:
-    """左列滚动找「共鸣商店」：当前屏 → 向下滚 → 向上滚，每滚一次都复扫。"""
+    """左列**从下往上一次大位移拖动**找「共鸣商店」，每拖一次复扫 OCR。
+
+    旧实现用滚轮向下/向上各 10 次（`_scroll_at`），11-06 实机证明对 UE5 这个
+    列表完全无效：三轮共 13 次滚轮，左列 OCR 始终是「越冬之约…美鸭梨优选」。
+    11-01 留存图 `ref_nikki_shop_menu_scrolled_20261101.png` 显示滚动后左列从
+    「美鸭梨优选」开始、共鸣商店在倒数第二项 —— 它就在底下，拖出来即可。
+    """
     rect = _window_rect(hwnd)
     if not rect:
         return None
     region = _abs_region(rect, SHOP_MENU_REGION)
-    items = _ocr_full(logger, hwnd)
-    entry = _pick(items, (RESONANCE_ENTRY,), min_conf=0.5, region=region)
-    if entry:
-        return entry
-    anchor_item = _pick(items, (SHOP_MENU_ITEM,), min_conf=0.45, region=region)
-    anchor = (
-        tuple(anchor_item["center"])
-        if anchor_item
-        else (
-            rect[0] + int(rect[2] * SHOP_MENU_SCROLL_ANCHOR[0]),
-            rect[1] + int(rect[3] * SHOP_MENU_SCROLL_ANCHOR[1]),
-        )
-    )
-    _focus(hwnd)
-    for direction in (-1, 1):
-        for _ in range(10):
-            if _stop(stop_check):
-                return None
-            _scroll_at(logger, hwnd, anchor, direction * 2)
-            time.sleep(0.45)
-            items = _ocr_full(logger, hwnd)
-            entry = _pick(items, (RESONANCE_ENTRY,), min_conf=0.5, region=region)
-            if entry:
-                logger.info("[无限暖暖·共鸣商店] 滚动后找到「共鸣商店」@ %s", entry["center"])
-                return entry
-            anchor_item = _pick(items, (SHOP_MENU_ITEM,), min_conf=0.45, region=region)
-            if anchor_item:
-                anchor = tuple(anchor_item["center"])
+    for attempt in range(SHOP_MENU_DRAG_TIMES + 1):
+        if _stop(stop_check):
+            return None
+        items = _ocr_full(logger, hwnd)
+        entry = _pick(items, (RESONANCE_ENTRY,), min_conf=0.5, region=region)
+        if entry:
+            logger.info("[无限暖暖·共鸣商店] 左列找到「共鸣商店」@ %s（上拖 %s 次）",
+                        entry["center"], attempt)
+            return entry
+        if attempt == SHOP_MENU_DRAG_TIMES:
+            break
+        _drag_menu_up(logger, hwnd, rect)
     return None
 
 
 def _select_serene_tab(logger: logging.Logger, hwnd: int, stop_check=None) -> bool:
-    """必须切到「静谧水滴兑换」：用专属商品（万象星实/棱镜）确认，而不是只看页签名。"""
+    """必须切到「静谧水滴兑换」：用**双向商品指纹**确认，而不是只看页签名。
+
+    两页都有同名的启示/共鸣水晶与无敌碎星闪粉，只是货币不同；因此除了要求
+    静谧页独占商品（万象星实/棱镜/噗灵等）出现，还要求澎湃页独占商品
+    （日光果/星光果/花露等）一个都不出现。切页动画的中间帧两页内容可能
+    同时残留，此时判 False，宁可重试也不买。
+    """
     if _stop(stop_check):
         return False
-    if _has_serene_markers(_ocr_full(logger, hwnd)):
-        logger.info("[无限暖暖·共鸣商店] 已在「静谧水滴兑换」")
+    first = _ocr_full(logger, hwnd)
+    if _serene_page_guard(first):
+        logger.info("[无限暖暖·共鸣商店] 已在「静谧水滴兑换」：%s",
+                    sorted(_page_fingerprint(first)[0]))
         return True
+    surge = _page_fingerprint(first)[1]
+    if surge:
+        logger.warning("[无限暖暖·共鸣商店] 当前仍是「澎湃浪花兑换」（命中 %s），"
+                       "该页水晶单价 20 不是静谧水滴 40，禁止购买", sorted(surge))
     rect = _window_rect(hwnd)
     if not rect:
         return False
@@ -1279,10 +1378,14 @@ def _select_serene_tab(logger: logging.Logger, hwnd: int, stop_check=None) -> bo
         _click(tab["center"])
         logger.info("[无限暖暖·共鸣商店] 点击「静谧水滴兑换」@ %s", tab["center"])
         time.sleep(1.2)
-        page = _wait_for(logger, hwnd, _has_serene_markers, timeout=5.0, stop_check=stop_check)
+        page = _wait_for(logger, hwnd, _serene_page_guard, timeout=5.0, stop_check=stop_check)
         if page:
-            logger.info("[无限暖暖·共鸣商店] 已确认静谧水滴页（万象星实等专属商品出现）")
+            logger.info("[无限暖暖·共鸣商店] 已确认静谧水滴页：静谧独占=%s，澎湃独占=无",
+                        sorted(_page_fingerprint(page)[0]))
             return True
+    last = _ocr_full(logger, hwnd)
+    logger.error("[无限暖暖·共鸣商店] 点击后仍未切到静谧水滴页：静谧独占=%s 澎湃独占=%s",
+                 sorted(_page_fingerprint(last)[0]), sorted(_page_fingerprint(last)[1]))
     _record_failure(logger, "共鸣商店-页签", "点击后仍未切到「静谧水滴兑换」", hwnd)
     return False
 
@@ -1307,8 +1410,11 @@ def _run_resonance_shop(logger: logging.Logger, hwnd: int, stop_check=None) -> s
     if not entry:
         _record_failure(logger, "共鸣商店-入口", "左列滚动后未找到「共鸣商店」", hwnd)
         return "未找到「共鸣商店」入口"
-    _click(entry["center"])
-    logger.info("[无限暖暖·共鸣商店] 点击「共鸣商店」@ %s", entry["center"])
+    rect = _window_rect(hwnd)
+    point = _resonance_entry_point(entry, rect) if rect else tuple(entry["center"])
+    _click(point)
+    logger.info("[无限暖暖·共鸣商店] 点击「共鸣商店」圆形图标 @ %s（文字中心 %s 上方）",
+                point, entry["center"])
     time.sleep(1.2)
     page = _wait_for(logger, hwnd, _is_resonance_page, timeout=8.0, stop_check=stop_check)
     if not page:
@@ -1316,6 +1422,19 @@ def _run_resonance_shop(logger: logging.Logger, hwnd: int, stop_check=None) -> s
         return "未进入共鸣商店"
     if not _select_serene_tab(logger, hwnd, stop_check=stop_check):
         return "未确认「静谧水滴兑换」页签，未购买"
+    # 二次复核（对齐绝区零/原神 forbidden_texts）：切页成功到点第一件商品之间
+    # 可能还有切页动画、浮层或上一屏残留，再取一次 OCR 走同一双向闸。
+    recheck = _ocr_full(logger, hwnd)
+    serene, surge = _page_fingerprint(recheck)
+    if not _serene_page_guard(recheck):
+        logger.error("[无限暖暖·共鸣商店] 购买前货币复核未通过：静谧独占=%s 澎湃独占=%s，"
+                     "拒绝购买", sorted(serene), sorted(surge))
+        _record_failure(logger, "共鸣商店-货币复核",
+                        f"购买前页签复核未通过：静谧独占={sorted(serene)} "
+                        f"澎湃独占={sorted(surge)}", hwnd, recheck)
+        return "购买前货币复核未通过（未购买）"
+    logger.info("[无限暖暖·共鸣商店] 购买前货币复核通过：静谧独占=%s",
+                sorted(serene))
     return _buy_plan_items(
         logger, hwnd, plan, stop_check, SHOP_GRID_REGION, RESONANCE_META_KEY, "共鸣商店"
     )

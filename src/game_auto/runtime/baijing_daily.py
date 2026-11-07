@@ -253,8 +253,18 @@ LEVEL_UP_MARKERS = ("计划等级提升",)
 MEMORY_LIST_MARKERS = ("前往技能列表", "只看红点", "排序与筛选")
 # 定巡之礼活动弹窗：2026-10-30 10:35 取证（流程漂进活动页认不出）。
 # 没有「返回」，右上角有红色 X；坐标按 1919x1079 截图换算。
+# 2026-11-06 09:15 再取证（flow_failures #197，恢复途中加载完弹出的同款弹窗）：
+# 第 2 天「可领取」@(630,762) conf 0.75，直接 X 等于丢奖——2026-11-07 用户拍板
+# 「遇到就给他领了呗」：先领再关。
 EVENT_DIALOG_MARKERS = ("定巡之礼",)
 EVENT_DIALOG_CLOSE = (0.913, 0.239)
+EVENT_DIALOG_CLAIM_MARKERS = ("可领取",)   # 只在规则命中定巡之礼后查找，不会误伤其它页面
+# 加载过场（10-31/11-01/11-03/11-04/11-06 五次「未匹配任何已知场景」失败全是它，
+# #120/#129/#153/#163/#197）：白荆拉丁 logo「ASHECHOES」五帧全部在场；提示文字
+# 每日轮换（刻印属性/漫巡中/真实伤害…）、进度 99%/%86 不稳，都不能当特征。
+# 只等待不点击——加载中点哪都无效，等特征消失把真页面交回下一轮识别。
+LOADING_SCREEN_MARKERS = ("ASHECHOES",)
+LOADING_WAIT_TIMEOUT_SEC = 60.0
 # 茶憩 3D 房间：任务流程用「茶憩纪念函」当进场特征，但 10-27 10:22 的当帧
 # OCR 只认出房间常驻陈设（飞镖/棒球），纪念函没进识别结果——登记表用并集兜底，
 # 任意命中即判茶憩房间（话题名"古典余温"每日轮换，不能当特征）。
@@ -1686,13 +1696,62 @@ def _scene_exit_memory_list(logger: logging.Logger, hwnd, results, stop_check=No
     return _exit_via_top_left_back(logger, hwnd, results, "烙痕列表")
 
 
+def _scene_exit_loading(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
+    """加载过场：只等待不点击（点了也无效），轮询到特征消失（加载完）为止。
+
+    以前加载页会烧光恢复轮次被判 unknown（10-31～11-06 五次失败实锤），加载
+    完才弹出的真页面（如定巡之礼弹窗）从来没轮到被处理。等待有 60s 上限，
+    游戏真卡死时返回 False 交回兜底落证据，不会无限等。
+    """
+    deadline = time.time() + LOADING_WAIT_TIMEOUT_SEC
+    while time.time() < deadline:
+        if _stopped(stop_check):
+            return False
+        time.sleep(1.0)
+        if _pick_result(
+            logger, hwnd, _scene_results(logger, hwnd),
+            LOADING_SCREEN_MARKERS, min_conf=0.5,
+        ) is None:
+            logger.info("[白荆回廊·日常] 场景退出·加载过场：加载完成，交回下一轮识别")
+            return True
+    logger.warning(
+        f"[白荆回廊·日常] 场景退出·加载过场：等待 {LOADING_WAIT_TIMEOUT_SEC:.0f}s 仍在加载，交回兜底"
+    )
+    return False
+
+
 def _scene_exit_event_dialog(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """定巡之礼等活动弹窗：点右上角 X 关闭（没有「返回」按钮）。"""
+    """定巡之礼等活动弹窗：先领「可领取」的签到奖励，再点右上角 X 关闭。
+
+    2026-11-06 09:15 实拍帧第 2 天「可领取」，直接 X 等于丢奖（2026-11-07
+    用户拍板「遇到就给他领了呗」）。领取后弹窗状态会变（可能出获得奖励遮罩）
+    ——当帧里弹窗标记已不在时不盲点 X，交回下一轮恢复识别（遮罩/弹窗各有
+    登记规则接力）。
+    """
     hit = _pick_result(logger, hwnd, results, EVENT_DIALOG_MARKERS, min_conf=0.55)
     if not hit:
         return False
-    _click_ratio(logger, hwnd, EVENT_DIALOG_CLOSE, "定巡之礼右上关闭")
-    logger.info(f"[白荆回廊·日常] 场景退出·定巡之礼：关闭弹窗（命中 {hit['text']!r}）")
+    claimed = 0
+    for _ in range(3):
+        claim = _pick_result(logger, hwnd, results, EVENT_DIALOG_CLAIM_MARKERS, min_conf=0.5)
+        if not claim:
+            break
+        _pyautogui_click_guarded(*claim["center"])
+        claimed += 1
+        logger.info(
+            f"[白荆回廊·日常] 场景退出·定巡之礼：领取「{claim.get('text')}」@ {claim['center']}"
+        )
+        time.sleep(1.5)
+        results = _scene_results(logger, hwnd)  # 领取后弹窗状态会变，必须重识别
+    if _pick_result(logger, hwnd, results, EVENT_DIALOG_MARKERS, min_conf=0.55):
+        _click_ratio(logger, hwnd, EVENT_DIALOG_CLOSE, "定巡之礼右上关闭")
+        logger.info(
+            f"[白荆回廊·日常] 场景退出·定巡之礼：关闭弹窗（命中 {hit['text']!r}，领取 {claimed} 项）"
+        )
+    else:
+        logger.info(
+            f"[白荆回廊·日常] 场景退出·定巡之礼：领取 {claimed} 项后弹窗已不在，交回下一轮识别"
+        )
     time.sleep(1.2)
     return True
 
@@ -1734,6 +1793,8 @@ def _scene_exit_cat_retail(logger: logging.Logger, hwnd, results, stop_check=Non
 # 新增界面只要加一行（特征必须挑该界面独占文字，原因见 REST_ROOM_MARKERS 注释），
 # 并在 artifacts/test_baijing_scene_registry_20261026.py 补一条用例锁住顺序。
 SCENE_RULES = (
+    # 加载过场排最前：加载中点哪都无效，先等它过去，别让真页面在 unknown 里被放弃
+    {"name": "加载过场", "markers": LOADING_SCREEN_MARKERS, "min_conf": 0.5, "exit": _scene_exit_loading},
     {"name": "过场遮罩", "markers": ("点击屏幕继续",), "min_conf": 0.5, "exit": _scene_exit_overlay},
     {"name": "计划等级提升", "markers": LEVEL_UP_MARKERS, "min_conf": 0.55,
      "exact_only": True, "exit": _scene_exit_level_up},

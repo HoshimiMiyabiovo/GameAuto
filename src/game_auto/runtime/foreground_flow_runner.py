@@ -3,8 +3,10 @@ import glob
 import json
 import logging
 import os
+import re
 import subprocess
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import psutil
@@ -14,13 +16,14 @@ import win32api
 import win32con
 import win32process
 from PIL import Image
-from ..settings.paths import BASE_DIR, ensure_flow_config_path
+from ..settings.paths import BASE_DIR, CACHE_DIR, ensure_flow_config_path
 
-try:
-    import pytesseract
-    HAS_OCR = True
-except ImportError:
-    HAS_OCR = False
+# OCR 可用性由 `ocr_click_tester._ocr_scan` 内部判定：RapidOCR 是主引擎，
+# 只有它返回空/异常时才尝试可选的 Tesseract 兜底。这里**不要**按
+# `pytesseract` 包是否存在做门控 —— 2026-11-07 复核发现旧代码用
+# `HAS_OCR = bool(pytesseract)` 卡住整个文字定位函数，可下游
+# `ocr_find_any_text` 走的是 RapidOCR，等于没装这个 Python 包就把主 OCR
+# 一起关掉了（正常安装时 pytesseract 是必装包，所以从未暴露）。
 
 
 Rect = Tuple[int, int, int, int]
@@ -1051,7 +1054,7 @@ def _locate_template_in_window(
     return None
 
 
-def _ocr_locate_in_window(
+def _ocr_locate_labeled_in_window(
     logger: logging.Logger,
     hwnd: Optional[int],
     target_text: Any,
@@ -1064,16 +1067,12 @@ def _ocr_locate_in_window(
     ambiguous_action: str = "warn",
     debug_tag: Optional[str] = None,
     save_debug: bool = False,
-) -> Optional[Tuple[int, int]]:
+) -> Optional[Tuple[str, Tuple[int, int]]]:
     """
-    使用OCR在窗口中定位目标文字（备选方案）。
-    返回窗口局部坐标或None。
-    search_region: 屏幕坐标的局部搜索区域 (left, top, width, height)，限制OCR搜索范围
-    match_mode / anchor / near: 结构化匹配配置（精确>前缀>子串 + 锚点几何）
+    使用OCR在窗口中定位目标文字，并返回命中的候选词（_ocr_locate_in_window 的带标签版）。
+    返回 (命中的候选词, 窗口局部坐标) 或 None。
+    单次截图+单次 OCR 同时匹配全部候选（dismiss_texts 与目标文字共用一次扫描）。
     """
-    if not HAS_OCR:
-        return None
-
     target_candidates = _normalize_target_text_candidates(target_text)
     if not target_candidates:
         return None
@@ -1114,8 +1113,9 @@ def _ocr_locate_in_window(
         if not result:
             return None
         center = result["center"]
+        matched = str(result.get("matched_target") or target_candidates[0])
         if not hwnd:
-            return center
+            return (matched, center)
         rect = _window_rect(hwnd)
         if not rect:
             # 目标窗口当前不可用（最小化/已关闭，rect 是 -32000 占位值或空）：
@@ -1123,10 +1123,47 @@ def _ocr_locate_in_window(
             # 返回 None 让上层按"未匹配"重试（步骤会重新 focus/还原窗口）。
             return None
         l, t, _, _ = rect
-        return (center[0] - l, center[1] - t)
+        return (matched, (center[0] - l, center[1] - t))
     except Exception as e:
         logger.debug(f"OCR定位失败: {str(e)}")
     return None
+
+
+def _ocr_locate_in_window(
+    logger: logging.Logger,
+    hwnd: Optional[int],
+    target_text: Any,
+    min_confidence: float = 0.5,
+    search_region: Optional[Tuple[int, int, int, int]] = None,
+    exclude_texts: Optional[List[str]] = None,
+    match_mode: Optional[str] = None,
+    anchor: Any = None,
+    near: Optional[Dict] = None,
+    ambiguous_action: str = "warn",
+    debug_tag: Optional[str] = None,
+    save_debug: bool = False,
+) -> Optional[Tuple[int, int]]:
+    """
+    使用OCR在窗口中定位目标文字（备选方案）。
+    返回窗口局部坐标或None。
+    search_region: 屏幕坐标的局部搜索区域 (left, top, width, height)，限制OCR搜索范围
+    match_mode / anchor / near: 结构化匹配配置（精确>前缀>子串 + 锚点几何）
+    """
+    hit = _ocr_locate_labeled_in_window(
+        logger,
+        hwnd,
+        target_text,
+        min_confidence=min_confidence,
+        search_region=search_region,
+        exclude_texts=exclude_texts,
+        match_mode=match_mode,
+        anchor=anchor,
+        near=near,
+        ambiguous_action=ambiguous_action,
+        debug_tag=debug_tag,
+        save_debug=save_debug,
+    )
+    return hit[1] if hit else None
 
 
 def _locate_with_ocr_fallback(
@@ -1145,26 +1182,35 @@ def _locate_with_ocr_fallback(
     ambiguous_action: str = "warn",
     debug_tag: Optional[str] = None,
     save_debug: bool = False,
+    dismiss_texts: Optional[List[str]] = None,
 ) -> Tuple[Optional[Tuple[int, int]], str]:
     """
     模板匹配+OCR联合定位。
-    返回：(窗口局部坐标, 方法: "template" | "ocr" | None)
+    返回：(窗口局部坐标, 方法: "template" | "ocr" | "ocr_dismiss" | None)
     local_region: 屏幕坐标的局部搜索区域，限制OCR搜索范围防止页面其他内容干扰
     match_mode / anchor / near: 结构化匹配配置（精确>前缀>子串 + 锚点几何）
+    dismiss_texts: 等待途中需要点掉的弹窗文字（如绝区零月卡「今日到账」）。
+        与目标文字共用同一次 OCR 扫描；命中弹窗文字时返回方法 "ocr_dismiss"，
+        由调用方点击后继续等待，不算步骤命中。
+        弹窗词排在目标词前面：弹窗在场时必然先处理弹窗。
     """
     target_candidates = _resolve_target_text_candidates(template_path, target_text)
     target_label = _display_target_text(target_candidates, os.path.basename(template_path or ""))
+
+    dismiss_candidates = _normalize_target_text_candidates(dismiss_texts)
 
     center = _locate_template_in_window(hwnd, template_path, scales, confidences)
     if center:
         logger.info(f"[{target_label}] 模板匹配成功 @ {center}")
         return center, "template"
 
-    if enable_ocr and target_candidates:
-        center = _ocr_locate_in_window(
+    if enable_ocr and (target_candidates or dismiss_candidates):
+        # 弹窗词优先：OCR 先扫弹窗再扫目标，同一次扫描内完成
+        ocr_candidates = list(dismiss_candidates) + list(target_candidates)
+        hit = _ocr_locate_labeled_in_window(
             logger,
             hwnd,
-            target_candidates,
+            ocr_candidates,
             search_region=local_region,
             exclude_texts=exclude_texts,
             match_mode=match_mode,
@@ -1174,7 +1220,13 @@ def _locate_with_ocr_fallback(
             debug_tag=debug_tag,
             save_debug=save_debug,
         )
-        if center:
+        if hit:
+            matched, center = hit
+            if matched in dismiss_candidates:
+                logger.info(
+                    f"[{target_label}] OCR检测到弹窗「{matched}」 @ {center}（等待途中点掉）"
+                )
+                return center, "ocr_dismiss"
             logger.info(f"[{target_label}] OCR匹配成功 @ {center}")
             return center, "ocr"
 
@@ -1819,6 +1871,7 @@ _BUILTIN_ACTIONS = (
     "qoder_verify_claim",
     "wool_dismiss_update",
     "wool_verify_log",
+    "script_checklist_sync",
 )
 
 
@@ -2025,6 +2078,20 @@ def _dispatch_step_action(
             hwnd = game_hwnd
             pid = game_pid or pid
         logger.info(f"[{flow_key}] 步骤{step_no}进入主界面成功: {gi_msg}")
+    elif action == "script_checklist_sync":
+        # 脚本任务清单同步：点标签页 → 滚动扫描 → 勾选新出现条目（XM/CJ）
+        from .script_checklist import sync_checklist
+
+        ok, msg = sync_checklist(
+            logger=logger,
+            flow_key=flow_key,
+            step=step,
+            hwnd=hwnd,
+            stop_check=stop_check,
+        )
+        if not ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({msg})", hwnd, pid
+        logger.info(f"[{flow_key}] 步骤{step_no}清单同步完成: {msg}")
     else:
         return False, f"[{flow_key}] 未知动作: {action}", hwnd, pid
     return True, "", hwnd, pid
@@ -2154,6 +2221,157 @@ def _resolve_start_guard(
     return start_index, skip_indices
 
 
+# ── 第三方脚本版本跟踪（XM/CJ 这类 exe 名带版本的流程）────────────────────────
+# XM Seer脱机日常 ver 2.6.21 / 重聚脱机巅峰【2.8.7】：脚本频繁更新且老版本会被
+# 服务端拒用。启动时解析版本并记录到 data/cache/flow_script_versions.json，
+# 版本变化（更新后首跑）打显式日志，日报/排障一眼可见。
+_SCRIPT_VERSION_PATTERNS = (
+    re.compile(r"【([0-9]+(?:\.[0-9]+){1,3})】"),
+    re.compile(r"\bver\s*[:：]?\s*([0-9]+(?:\.[0-9]+){1,3})", re.IGNORECASE),
+)
+_SCRIPT_VERSION_STATE = CACHE_DIR / "flow_script_versions.json"
+
+
+def _detect_script_version(text: str) -> str:
+    """从脚本 exe 路径/窗口标题解析版本号；解析不到返回空串。"""
+    for pattern in _SCRIPT_VERSION_PATTERNS:
+        m = pattern.search(text or "")
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _log_script_version(flow_key: str, exe_path: str, logger: logging.Logger) -> None:
+    """启动时记录脚本版本；与上次相比有变化时打更新首跑提示。"""
+    version = _detect_script_version(exe_path)
+    if not version:
+        return
+    prev = ""
+    state: Dict[str, Any] = {}
+    try:
+        state = json.loads(_SCRIPT_VERSION_STATE.read_text(encoding="utf-8"))
+        prev = str(state.get(flow_key) or "")
+    except FileNotFoundError:
+        pass
+    except Exception as exc:  # noqa: BLE001 - 状态文件损坏只影响提示，不影响流程
+        logger.debug(f"[{flow_key}] 读取脚本版本状态失败: {exc}")
+    if prev and prev != version:
+        logger.info(
+            f"[{flow_key}] 脚本版本变化: {prev} -> {version}"
+            f"（更新后首跑；更新提示由前置「检查更新」步骤自动点掉）"
+        )
+    else:
+        logger.info(f"[{flow_key}] 脚本版本: {version}")
+    if prev != version:
+        try:
+            state[flow_key] = version
+            _SCRIPT_VERSION_STATE.parent.mkdir(parents=True, exist_ok=True)
+            _SCRIPT_VERSION_STATE.write_text(
+                json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 - 同上，展示性状态，失败不影响流程
+            logger.debug(f"[{flow_key}] 写脚本版本状态失败: {exc}")
+
+
+def _script_ver_tuple(version: str) -> Tuple[int, ...]:
+    """XM 系脚本版本按位比较：末段一位数补零成两位（2.6.5 → 2.6.50）。
+
+    作者口径（用户 2026-11-07 说明）：2.6.5 实际是 2.6.50，小修 bug 出
+    2.6.51，大改动加功能才进 2.6.6。直接按数值比 5 < 41 会把新版本判旧；
+    末段补零后 50 > 41，与实测更新序列（2.6.11→2.6.2→2.6.21→2.6.41→2.6.5）
+    完全单调。解析失败返回空元组。
+    """
+    parts: List[int] = []
+    segs = version.split(".")
+    for idx, seg in enumerate(segs):
+        try:
+            num = int(seg)
+        except ValueError:
+            return tuple()
+        if idx == len(segs) - 1 and len(seg) == 1:
+            num *= 10
+        parts.append(num)
+    return tuple(parts)
+
+
+def _find_newer_script_exe(exe_path: str, *, since_ts: float = 0.0) -> str:
+    """在同目录找「同名基础名、更新版本」的脚本 exe；没有返回空串。
+
+    CJ/XM 的更新机制是下载新版本 exe 到同目录（新旧并存，如
+    重聚脱机巅峰【2.8.7】.exe + 【2.8.8】.exe）。版本按位比较（末段补零，
+    见 _script_ver_tuple）；exe 名解析不出版本时退回 mtime（更新点击之后
+    新落地的算新版本）。目录里还有 HoYo.Gacha.exe 等无关程序，必须按
+    基础名过滤。
+    """
+    path = Path(exe_path)
+    base = re.sub(r"【[^】]*】|\bver\s*.*$", "", path.stem, flags=re.IGNORECASE).strip()
+    if not base:
+        return ""
+    current_ver = _detect_script_version(exe_path)
+    current_tuple = _script_ver_tuple(current_ver) if current_ver else None
+    best, best_key = "", None
+    try:
+        for cand in path.parent.glob("*.exe"):
+            if os.path.abspath(cand) == os.path.abspath(exe_path):
+                continue
+            if not cand.name.startswith(base):
+                continue
+            cand_ver = _detect_script_version(cand.name)
+            cand_tuple = _script_ver_tuple(cand_ver) if cand_ver else None
+            if current_tuple and cand_tuple:
+                # 版本可比较：严格更大才算新
+                if cand_tuple > current_tuple and (best_key is None or cand_tuple > best_key):
+                    best, best_key = str(cand), cand_tuple
+            elif since_ts > 0:
+                # 任一侧解析不出版本 → 退回 mtime 锚点
+                try:
+                    m = cand.stat().st_mtime
+                except OSError:
+                    continue
+                if m >= since_ts and (best_key is None or m > best_key):
+                    best, best_key = str(cand), m
+    except OSError as exc:
+        logging.getLogger("GameAutomation").debug(f"扫描脚本目录失败: {exc}")
+        return ""
+    return best
+
+
+def _wait_script_update_exe(
+    exe_path: str,
+    *,
+    since_ts: float,
+    timeout_sec: int,
+    stop_check: Optional[Callable[[], bool]],
+    logger: logging.Logger,
+    flow_key: str,
+) -> str:
+    """轮询等待更新下载的新版本 exe 落地；超时/停止返回空串。"""
+    deadline = time.time() + max(30, timeout_sec)
+    while time.time() < deadline:
+        if _stop_requested(stop_check):
+            return ""
+        newer = _find_newer_script_exe(exe_path, since_ts=since_ts)
+        if newer:
+            return newer
+        time.sleep(5)
+    logger.info(f"[{flow_key}] 等待新版本 exe 超时（{timeout_sec}s）")
+    return ""
+
+
+def _delete_old_script_exe(
+    old_exe_path: str, *, new_exe_path: str, logger: logging.Logger, flow_key: str
+) -> None:
+    """更新换血后删除旧版本 exe（用户口径：同目录新旧并存，删旧用新）。"""
+    if not old_exe_path or os.path.abspath(old_exe_path) == os.path.abspath(new_exe_path):
+        return
+    try:
+        os.remove(old_exe_path)
+        logger.info(f"[{flow_key}] 已删除旧版本脚本: {old_exe_path}")
+    except FileNotFoundError:
+        pass
+    except Exception as exc:  # noqa: BLE001 - 旧文件可能被占用/权限不足，删除失败不影响流程
+        logger.warning(f"[{flow_key}] 删除旧版本脚本失败（不影响使用）: {exc}")
+
+
 def run_flow(
     logger: logging.Logger,
     flow_key: str,
@@ -2214,6 +2432,7 @@ def run_flow(
         if not pid:
             return False, f"[{flow_key}] 启动失败"
         logger.info(f"[{flow_key}] 已启动: {exe_path} PID={pid}")
+    _log_script_version(flow_key, exe_path, logger)
 
     def _abort_for_stop() -> Tuple[bool, str]:
         """启动阶段收到停止请求：按既有 close_on_exit 规则收尾，避免残留进程。"""
@@ -2294,11 +2513,15 @@ def run_flow(
         cfg, flow_key, hwnd, scales, confidences, len(steps), logger
     )
 
-    # 判断是否启用OCR备选（XM流程默认启用，CJ流程不启用）
-    enable_ocr = cfg.get("enable_ocr_fallback", flow_key == "XM")
+    # OCR 备选开关只由流程配置决定（enable_ocr_fallback，未配置即关闭），
+    # 执行器不再按 flow_key 硬编码默认值——新增流程的默认行为由
+    # flow_configs.example.json 声明，执行器保持无偏见的插件式转发。
+    enable_ocr = cfg.get("enable_ocr_fallback", False)
 
     step_attempts: Dict[int, int] = {}
     step_local_region: Dict[int, Optional[Tuple[int, int, int, int]]] = {}
+    steps_hit: set = set()  # 本轮已成功命中的步骤名（供 self_update_swap 等联动步骤判断）
+    steps_hit_ts: Dict[str, float] = {}  # 命中时刻（换血以「更新点击时刻」为 mtime 锚点）
     i = start_index
     flow_ok = False
     try:
@@ -2316,6 +2539,9 @@ def run_flow(
             process_name = step.get("process_name", "")
             target_texts = _resolve_target_text_candidates(template, step.get("target_text", name), fallback_text=name)
             step_exclude_texts = _normalize_target_text_candidates(step.get("ocr_exclude_texts"))
+            # 等待途中需要点掉的弹窗文字（如绝区零月卡「今日到账」）：与目标文字共用
+            # 同一次 OCR 扫描，命中就点掉再继续等，不算步骤命中也不消耗重试次数
+            step_dismiss_texts = _normalize_target_text_candidates(step.get("dismiss_texts"))
             step_ocr_match_mode = step.get("ocr_match_mode", step.get("match_mode"))
             if step_ocr_match_mode is None:
                 step_ocr_match_mode = flow_ocr_match_mode
@@ -2342,6 +2568,70 @@ def run_flow(
             optional_if_missing = bool(step.get("optional_if_missing", False))
             confirm_templates = step.get("confirm_templates", [])
             confirm_timeout = int(step.get("confirm_timeout_sec", 8))
+
+            # ── 脚本自更新换血（CJ/XM 专用语义）────────────────────────────
+            # 前置「检查更新」点了更新提示后，脚本把新版本 exe 下载到同目录
+            # （新旧并存）；本分支等新 exe 落地 → 关旧进程 → 启动新 exe →
+            # 删旧文件，并把流程的 pid/hwnd/exe_path 切到新版本上继续。
+            if action == "self_update_swap":
+                require_hit = str(step.get("require_step_hit") or "")
+                if require_hit and require_hit not in steps_hit:
+                    # 检查更新本轮没点过任何提示（已是最新版）→ 不等新 exe，直接过。
+                    # 本循环是手动索引制：跳过必须 i += 1 再 continue，否则死循环。
+                    logger.info(
+                        f"[{flow_key}] 本轮未点过更新提示（{require_hit} 未命中），跳过更新换血"
+                    )
+                    i += 1
+                    continue
+                new_exe = _wait_script_update_exe(
+                    exe_path,
+                    since_ts=steps_hit_ts.get(require_hit, time.time() - 90),
+                    timeout_sec=int(step.get("update_timeout_sec", 180)),
+                    stop_check=stop_check,
+                    logger=logger,
+                    flow_key=flow_key,
+                )
+                if not new_exe:
+                    if optional_if_missing:
+                        logger.info(f"[{flow_key}] 未检测到新版本脚本，跳过更新换血")
+                        i += 1
+                        continue
+                    return False, f"[{flow_key}] 更新换血失败: 等待新版本 exe 超时"
+                old_exe = exe_path
+                logger.info(f"[{flow_key}] 检测到新版本脚本: {new_exe}，关闭旧进程并换血")
+                if close_on_exit or close_on_fail:
+                    close_flow_processes(logger, flow_key, pid, window_process_names)
+                launch_ts = time.time()
+                new_pid = _launch_maybe_elevated(logger, new_exe)
+                if not new_pid:
+                    return False, f"[{flow_key}] 更新换血失败: 新版本启动失败 {new_exe}"
+                exe_path = new_exe
+                pid = new_pid
+                if not _sleep_interruptible(int(cfg.get("startup_wait_sec", 10)), stop_check):
+                    return _abort_for_stop()
+                hwnd, window_pid = _wait_window_for_flow(
+                    pid,
+                    timeout=45,
+                    title_keywords=window_title_keywords,
+                    process_names=window_process_names,
+                    launched_after=launch_ts,
+                    logger=logger,
+                    stop_check=stop_check,
+                )
+                if not hwnd:
+                    return False, f"[{flow_key}] 更新换血失败: 未找到新版本窗口"
+                if window_pid and window_pid != pid:
+                    pid = window_pid
+                block_reason = _uipi_block_reason(pid)
+                if block_reason:
+                    return False, f"[{flow_key}] 更新换血失败: {block_reason}"
+                _log_script_version(flow_key, new_exe, logger)
+                _delete_old_script_exe(
+                    old_exe, new_exe_path=new_exe, logger=logger, flow_key=flow_key
+                )
+                step_local_region.clear()
+                i += 1
+                continue
 
             refreshed_hwnd = _refresh_flow_window(
                 pid,
@@ -2524,7 +2814,28 @@ def run_flow(
                             ambiguous_action=step_ocr_ambiguous,
                             debug_tag=step_ocr_debug_tag,
                             save_debug=step_ocr_debug,
+                            dismiss_texts=step_dismiss_texts or None,
                         )
+                    if center and match_method == "ocr_dismiss":
+                        # 等待途中出现弹窗（如绝区零月卡「今日到账」）：点掉后继续等
+                        # 目标，不算步骤命中（center 复位，同一超时窗口内继续轮询）。
+                        # 必须前台短按住点击：绝区零只吃前台真实点击（2026-11-04 实机）。
+                        raw_dismiss_hold = step.get("click_hold_sec", cfg.get("click_hold_sec", None))
+                        try:
+                            dismiss_hold = (
+                                None if raw_dismiss_hold is None else max(0.0, float(raw_dismiss_hold))
+                            )
+                        except (TypeError, ValueError):
+                            dismiss_hold = None
+                        _click_window_local(hwnd, center[0], center[1], clicks=1,
+                                            background=False, hold_sec=dismiss_hold)
+                        logger.info(
+                            f"[{flow_key}] 步骤{step_no}「{name}」已点击弹窗 "
+                            f"({center[0]}, {center[1]}) [方式: ocr_dismiss]，继续等待"
+                        )
+                        center = None
+                        match_method = None
+                        time.sleep(1.5)  # 等弹窗关闭动画，避免下一轮 OCR 还扫到残影重复点
                     if center:
                         break
                 time.sleep(search_interval)
@@ -2576,6 +2887,8 @@ def run_flow(
                 center=center,
                 process_name=process_name,
             )
+            steps_hit.add(name)
+            steps_hit_ts[name] = time.time()
 
             # 找到元素后，计算局部搜索区域（模板200%大小），用于后续确认和重试
             if center and template and search_scope != "screen":

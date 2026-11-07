@@ -19,7 +19,7 @@ set "HAS_UV=0"
 where uv >nul 2>&1
 if not errorlevel 1 set "HAS_UV=1"
 
-echo [1/4] 准备虚拟环境...
+echo [1/5] 准备虚拟环境...
 if not exist "%PY%" (
     if "%HAS_UV%"=="1" (
         uv venv .venv --python 3.13
@@ -36,7 +36,7 @@ if not exist requirements.lock (
     goto :fail
 )
 
-echo [2/4] 安装运行时依赖（requirements.lock，--no-deps 精确回放）...
+echo [2/5] 安装运行时依赖（requirements.lock，--no-deps 精确回放）...
 if "%HAS_UV%"=="1" (
     uv pip install --python "%PY%" --no-deps -r requirements.lock --index-url %MIRROR%
 ) else (
@@ -44,22 +44,37 @@ if "%HAS_UV%"=="1" (
 )
 if errorlevel 1 goto :fail
 
-echo [3/4] 校验 ONNX Runtime provider...
+echo [3/5] 校验 ONNX Runtime provider...
 "%PY%" -c "import onnxruntime as o; p=o.get_available_providers(); print('providers:', p); raise SystemExit(0 if 'CUDAExecutionProvider' in p else 2)"
 if errorlevel 2 (
     echo [警告] 未检测到 CUDAExecutionProvider，RapidOCR 会退回 CPU。
     echo        请确认装的是 onnxruntime-gpu，且没有被 CPU 版 onnxruntime 覆盖。
 )
 
-echo [4/4] 安装开发工具（pytest / ruff）...
+echo [4/5] 安装开发工具（pytest / ruff）...
 if "%HAS_UV%"=="1" (
     uv pip install --python "%PY%" -r requirements-dev.txt --index-url %MIRROR%
 ) else (
     "%PY%" -m pip install -r requirements-dev.txt -i %MIRROR%
 )
 
+echo [5/5] 检查可选 OCR 兜底（Tesseract；仓库不含二进制）...
+set "TESS_OK=0"
+if exist "tools\tesseract\tesseract.exe" set "TESS_OK=1"
+where tesseract >nul 2>&1
+if not errorlevel 1 set "TESS_OK=1"
+if "%TESS_OK%"=="1" (
+    echo       OK: 已检测到 Tesseract
+) else (
+    echo       [提示] 未检测到 tesseract.exe。主 OCR（RapidOCR）不受影响，
+    echo              Python 包 pytesseract 已随依赖装好，缺的是可选的 exe，
+    echo              仅影响 OCR 兜底。需要时安装 Tesseract 5.x 并加入 PATH，
+    echo              或把官方安装目录拷到 tools\tesseract\。
+)
+
 echo.
-echo 依赖安装完成。之后用 00_START_HERE_GUI_ADMIN.bat 启动 GUI。
+echo 依赖安装完成。先跑自检：.venv\Scripts\python.exe -m pytest tests -q
+echo 之后用 00_START_HERE_GUI_ADMIN.bat 启动 GUI（会弹 UAC）。
 pause
 exit /b 0
 

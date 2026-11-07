@@ -55,13 +55,18 @@ check("ZZZ_MONTHLY 可加载", cfg is not None)
 check("流程仍启用", bool(cfg and cfg.get("enabled")) is True)
 
 steps = (cfg or {}).get("steps", [])
+# 2026-11-06：信号残响与后勤商店拆成两条独立月流程（各自 monthly_flow:<KEY>）。
+# 这里把两条拼回原来的 s0..s6 视角，后面的逐步骤断言全部保留。
+log_cfg = _load_flow_config("ZZZ_LOGISTICS_MONTHLY")
+log_steps = (log_cfg or {}).get("steps", [])
 check(
-    "步骤数为 7（进入游戏/等主界面/信号残响兑换/打开菜单/后勤商店/等商店/采购）",
-    len(steps) == 7, f"实际 {len(steps)}",
+    "两条独立月流程：主流程 3 步 + 后勤流程 6 步",
+    len(steps) == 3 and len(log_steps) == 6, f"实际 {len(steps)} + {len(log_steps)}",
 )
 
-if len(steps) == 7:
-    s0, s1, s2, s3, s4, s5, s6 = steps
+if len(steps) == 3 and len(log_steps) == 6:
+    s0, s1, s2 = steps
+    s3, s4, s5, s6 = log_steps[2], log_steps[3], log_steps[4], log_steps[5]
     check("步骤1 仍为 点击进入游戏(click_template)", s0.get("action") == "click_template" and s0.get("name") == "点击进入游戏")
     # 2026-11-03：点击无反应时不再傻等——后台 PostMessage 首发、失败后切前台，
     # 用「点击进入游戏」文字消失做校验，单次 30s×2，进入阶段整体 4~5 分钟内失败。

@@ -274,7 +274,10 @@ def _ensure_tesseract_cmd(logger: logging.Logger) -> bool:
         tessdata_dir = os.path.join(os.path.dirname(t_bin), "tessdata")
         os.environ["TESSDATA_PREFIX"] = tessdata_dir
         return True
-    logger.error("未检测到 tesseract.exe，请安装 Tesseract OCR 并加入 PATH")
+    # 可选兜底：主引擎是 RapidOCR，缺 tesseract.exe 不是故障。
+    # 这个函数会在每次 RapidOCR 返回空时被调用，打 ERROR 会刷屏，
+    # 也会被误读成「OCR 挂了」（2026-11-07 更正）。
+    logger.debug("[OCR] 可选 Tesseract 兜底不可用，主引擎 RapidOCR 不受影响")
     return False
 
 
@@ -1421,6 +1424,9 @@ def run_xm_seer_test(logger: logging.Logger, exe_path: str) -> bool:
         logger.error("缺少 pytesseract，请先安装: pip install pytesseract")
         return False
     if not _ensure_tesseract_cmd(logger):
+        # 全项目唯一硬依赖 Tesseract 的入口（UI 的独立测试按钮），
+        # 在这里单独报错；主流程 OCR 仍走 RapidOCR，不受影响。
+        logger.error("[XM Seer 测试] 该独立测试工具需要 tesseract.exe；主流程 OCR 用 RapidOCR")
         return False
 
     logger.info(f"以管理员模式启动测试程序: {exe_path}")

@@ -141,7 +141,10 @@ def _check_tesseract_capability(report: DependencyCheckReport):
     local_tesseract = str(TESSERACT_EXE)
     tesseract_bin = local_tesseract if os.path.exists(local_tesseract) else shutil.which("tesseract")
     if tesseract_bin is None:
-        report.add_warning("未检测到 tesseract.exe，OCR识别点击功能可能不可用")
+        # 2026-11-07：主 OCR 是 RapidOCR，Tesseract 只在它返回空/异常时兜底。
+        # 旧文案把缺 exe 说成整个 OCR 功能不可用，是错的：干净机器上一启动
+        # 就打 WARNING 会把人吓住；可选依赖缺失只记 info，不算依赖检查失败。
+        report.add_info("未检测到 tesseract.exe：可选 OCR 兜底不可用，主 OCR RapidOCR 不受影响")
         return
     report.add_info(f"Tesseract: {tesseract_bin}")
     try:
@@ -161,7 +164,7 @@ def _check_tesseract_capability(report: DependencyCheckReport):
             return
         _TESS_LANGS_CACHE[tesseract_bin] = (mtime, has_chi_sim)
     if not has_chi_sim:
-        report.add_warning("Tesseract 未检测到 chi_sim 中文语言包，中文识别准确率会很低")
+        report.add_info("Tesseract 未装 chi_sim 中文包：仅影响可选兜底，主 OCR RapidOCR 不受影响")
 
 
 def _check_external_paths(report: DependencyCheckReport):
@@ -179,7 +182,7 @@ def _check_runtime_environment(report: DependencyCheckReport):
 
 
 def run_full_dependency_check(logger: logging.Logger) -> DependencyCheckReport:
-    """检查 Python 包 / Tesseract / 外部程序路径 / 运行环境。
+    """检查 Python 包 / 可选 Tesseract 二进制 / 外部程序路径 / 运行环境。
 
     只做检查，不安装：缺失包记录到 report.missing_packages 与 errors，
     调用方（GUI/CLI）据此提示用户以普通权限运行 setup_deps.bat。

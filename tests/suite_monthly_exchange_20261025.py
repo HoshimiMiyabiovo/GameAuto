@@ -533,10 +533,17 @@ print()
 print("== 用例13：配置静态 ==")
 zzz_cfg = _load_flow_config("ZZZ_MONTHLY")
 zzz_names = [s.get("name") for s in zzz_cfg["steps"]]
+# 2026-11-06：后勤商店拆到独立的 ZZZ_LOGISTICS_MONTHLY，两条各自月度标记
+log_cfg = _load_flow_config("ZZZ_LOGISTICS_MONTHLY")
+log_names = [s.get("name") for s in (log_cfg or {}).get("steps", [])]
 zzz = load_step("ZZZ_MONTHLY", "信号残响每月兑换")
-check("绝区零步骤顺序：等主界面 → 信号残响 → 打开功能菜单",
+check("绝区零主流程：等主界面 → 信号残响（且为末步）",
       zzz_names.index("信号残响每月兑换") == zzz_names.index("等待进入主界面") + 1
-      and zzz_names.index("打开功能菜单") == zzz_names.index("信号残响每月兑换") + 1, f"{zzz_names}")
+      and zzz_names[-1] == "信号残响每月兑换", f"{zzz_names}")
+check("后勤商店独立流程：等主界面 → 打开功能菜单 → … → 采购",
+      "打开功能菜单" in log_names
+      and log_names.index("打开功能菜单") == log_names.index("等待进入主界面") + 1
+      and log_names[-1] == "后勤商店采购", f"{log_names}")
 check("绝区零 action=monthly_exchange", zzz.get("action") == "monthly_exchange", zzz.get("action"))
 check("绝区零清单：加密母带×5 + 原装母带×5",
       [(i.get("name"), i.get("count")) for i in (zzz.get("items") or [])]

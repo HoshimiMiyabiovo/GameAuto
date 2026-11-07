@@ -162,6 +162,7 @@ class Harness:
         self.clicks = []
         self.keys = []
         self.scrolls = []
+        self.drags = []
         self.marked_keys = []
         self.failures = []
         self.closed = 0
@@ -314,7 +315,10 @@ class Harness:
                 self.state = "stage_claim" if self.claim != "none" else "stage"
         elif s == "stage_claim" and _points_near((x, y), (961, 752)):
             self.state = "stage_claim" if self.claim == "forever" else "reward"
-        elif s == "stage" and _points_near((x, y), (150, 775)):
+        elif s == "stage" and _points_near((x, y), (150, 749)):
+            # 2026-11-06 实机：左列「晶石兑换」是**圆形图标在上、文字在下**，
+            # 点文字中心 (150,775) 无反应；真正入口是文字上方约 1.1 个框高的
+            # 图标（实机 (149,732)，本桩框高 24 → (150,749)）。
             self.state = "exchange"
         elif s == "exchange":
             if _points_near((x, y), (425, 381)):
@@ -327,7 +331,9 @@ class Harness:
             self.state = f"reward_crystal:{name}"
         elif s.startswith("reward_crystal:") and _points_near((x, y), (959, 884)):
             self.state = "exchange"
-        elif s == "shop_scrolled" and _points_near((x, y), (202, 849)):
+        elif s == "shop_scrolled" and _points_near((x, y), (202, 823)):
+            # 11-06 实机：左列「共鸣商店」文字 (202,915) 点不动，热区是文字
+            # 上方约 1.1 个框高的圆形图标；本桩框高 24 → (202,823)。
             self.state = "resonance_surge"
         elif s in ("resonance_surge", "resonance_serene") and _points_near((x, y), (959, 127)):
             if not self.fail_serene:
@@ -362,9 +368,10 @@ class Harness:
         elif key.lower() == "h" and not self.fail_shop:
             self.state = "shop"
 
-    def scroll_at(self, logger, hwnd, point, clicks):
-        self.scrolls.append((int(point[0]), int(point[1]), int(clicks)))
-        if self.state == "shop" and clicks < 0 and not self.fail_scroll:
+    def drag_menu_up(self, logger, hwnd, rect, times=1):
+        """上拖左列：一次大位移即把「共鸣商店」推出来（滚轮在 UE5 无效）。"""
+        self.drags.append(int(times))
+        if self.state == "shop" and not self.fail_scroll:
             self.state = "shop_scrolled"
 
     def press_esc(self):
@@ -429,7 +436,7 @@ def _run_flow(h: Harness, stop_check=None, plan=None, with_resonance=False):
         "_monthly_done",
         "_mark_monthly_done",
         "_record_failure",
-        "_scroll_at",
+        "_drag_menu_up",
         "_close_game_for_whimbox_restart",
         "_record_key_no_response",
         "time",
@@ -464,7 +471,7 @@ def _run_flow(h: Harness, stop_check=None, plan=None, with_resonance=False):
         nc._record_failure = lambda logger, step, message, hwnd, ocr_results=None: h.failures.append(
             (step, message)
         )
-        nc._scroll_at = h.scroll_at
+        nc._drag_menu_up = h.drag_menu_up
         nc._close_game_for_whimbox_restart = lambda logger: h.close_game()
         nc._record_key_no_response = lambda *a, **k: None
         nc.time = FakeTime()
@@ -730,7 +737,7 @@ def test_full_flow():
     h = Harness(monthly_done=True)
     ok, msg = _run_flow(h)
     check("本月已兑换 → 跳过兑换", "本月晶石兑换已完成" in msg, msg)
-    check("跳过时不点晶石兑换入口", not any(_points_near(c, (150, 775)) for c in h.clicks), h.clicks)
+    check("跳过时不点晶石兑换图标", not any(_points_near(c, (150, 749)) for c in h.clicks), h.clicks)
     check("跳过时仍先领奖", "领奖 1 次" in msg, msg)
 
     h = Harness(already=True)
@@ -776,7 +783,7 @@ def test_resonance_flow():
     ok, msg = _run_flow(h, plan=empty_crystal, with_resonance=True)
     check("流程返回继续", ok is True, msg)
     check("按 H 打开商城", "h" in [k.lower() for k in h.keys], h.keys)
-    check("滚动后找到并进入共鸣商店", bool(h.scrolls) and "已兑换 10 件" in msg, (h.scrolls, msg))
+    check("上拖后找到并进入共鸣商店", bool(h.drags) and "已兑换 10 件" in msg, (h.drags, msg))
     check("两张抽卡道具各买满 5 个",
           h.shop_limits == {"启示水晶": 0, "共鸣水晶": 0}, h.shop_limits)
     check("共鸣商店写了月度标记", nc.RESONANCE_META_KEY in h.marked_keys, h.marked_keys)
@@ -796,7 +803,8 @@ def test_resonance_flow():
     h = Harness(fail_scroll=True)
     ok, msg = _run_flow(h, plan=empty_crystal, with_resonance=True)
     check("滚动找不到 → 未找到入口", "未找到「共鸣商店」入口" in msg, msg)
-    check("滚动有界（≤20 次）", 0 < len(h.scrolls) <= 20, len(h.scrolls))
+    check("上拖有界（≤%s 次）" % nc.SHOP_MENU_DRAG_TIMES,
+          0 < len(h.drags) <= nc.SHOP_MENU_DRAG_TIMES, len(h.drags))
 
     h = Harness(monthly_done=True)
     ok, msg = _run_flow(h, plan=empty_crystal, with_resonance=True)

@@ -209,6 +209,11 @@ def test_batch_wiring():
 
 def test_sweep_runs_monthly_for_apps_not_in_batch():
     print("[7b] 收尾补漏：当天没进批次的游戏也要补跑月商店")
+    # 2026-11-06：绝区零新增的「附加独立月流程」由
+    # suite_zzz_monthly_split_20261106.py 单独验证；这里只测四个游戏的主月流程
+    # 收尾补漏，先清空附加映射，保持本用例原本的 4 行报告语义。
+    extra_patcher = patch.dict(tbr._EXTRA_MONTHLY_FLOWS, {}, clear=True)
+    extra_patcher.start()
     ran = []
 
     def _fake_runner(label):
@@ -257,6 +262,7 @@ def test_sweep_runs_monthly_for_apps_not_in_batch():
     finally:
         tbr._MONTHLY_CHECKED.clear()
         tbr._MONTHLY_CHECKED.update(saved)
+        extra_patcher.stop()
 
 
 def test_monthly_meta_key_shared():

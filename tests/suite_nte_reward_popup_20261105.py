@@ -122,12 +122,15 @@ def test_close_and_config():
     check("close_process_on_finish=true", a["NTE_MONTHLY"]["close_process_on_finish"] is True)
     # 非月度流程（XM/MINIMAX/WORKBUDDY/TRAE/QODER）本来就是 true，不是本次改动；
     # 只检查其它「月度」流程没被一起打开。
+    # 2026-11-06 例外：绝区零两条月流程拆分后都显式设 close_process_on_finish=true，
+    # 目的是各自启动/关闭、避免上一条失败把游戏停在商城页影响下一条。
+    zzz_split = ("ZZZ_MONTHLY", "ZZZ_LOGISTICS_MONTHLY")
     others = [
         k for k, v in a.items()
-        if k.endswith("_MONTHLY") and k != "NTE_MONTHLY"
+        if k.endswith("_MONTHLY") and k != "NTE_MONTHLY" and k not in zzz_split
         and isinstance(v, dict) and v.get("close_process_on_finish") is True
     ]
-    check("其它月度流程收尾配置未被改动", others == [], others)
+    check("其它月度流程收尾配置未被改动（ZZZ 拆分例外）", others == [], others)
 
 
 def test_evidence():

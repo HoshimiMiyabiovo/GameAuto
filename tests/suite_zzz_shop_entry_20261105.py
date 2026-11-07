@@ -3,8 +3,13 @@
 实机逐项对比（双方提权、UIPI 无阻碍、前台窗口确认为游戏）：
   pyautogui.press/keyDown 的 ESC、F3 全部无效；
   win32api.keybd_event(vk, MapVirtualKey(vk)) 按住 0.15s 立刻开页面。
-路径：主世界 → 扫描码 ESC 两次 → 主菜单 → 24HOUR 图标 (1376,970)
-      → 商城 → 信源清单 (183,573) → 信号残响。
+路径：主世界 → 扫描码 ESC 两次 → 主菜单 → 24HOUR 图标 → 商城
+      → 信源清单 (183,573) → 信号残响。
+
+2026-11-06 实机更正：11-05 记的 24HOUR 命中点 (1376,970) 偏右 28px，实际点到
+「丽都城募」。11-06 完整买到加密母带×3 + 原装母带×5 的命中点是 (1348,950)
+@1920x1080 → 窗口比例 [0.7021, 0.8796]，两份 flow_configs 同步改。**比例按窗口
+rect 换算，换分辨率 / 开 NVIDIA DSR 内部渲染倍率都不受影响**。
 
 跑法：.venv\\Scripts\\python.exe tests\\suite_zzz_shop_entry_20261105.py
 """
@@ -74,7 +79,7 @@ def test_shop_entry_priority():
             mock.patch.object(me, "_locate_ocr") as ocr, \
             mock.patch.object(me, "_frac_point") as frac:
         got = me._find_shop_entry(mock.MagicMock(), 1, tpl, "商城",
-                                  [1.0], [0.8], 1, None, point_frac=[0.7167, 0.8981])
+                                  [1.0], [0.8], 1, None, point_frac=[0.7021, 0.8796])
     check("模板命中即返回，不用 OCR/兜底",
           got == (100, 200) and not ocr.called and not frac.called, got)
 
@@ -82,15 +87,15 @@ def test_shop_entry_priority():
             mock.patch.object(me, "_locate_ocr", return_value=(300, 400)), \
             mock.patch.object(me, "_frac_point") as frac:
         got = me._find_shop_entry(mock.MagicMock(), 1, tpl, "商城",
-                                  [1.0], [0.8], 1, None, point_frac=[0.7167, 0.8981])
+                                  [1.0], [0.8], 1, None, point_frac=[0.7021, 0.8796])
     check("OCR 次之且不用兜底", got == (300, 400) and not frac.called, got)
 
     with mock.patch.object(me, "_locate", return_value=None), \
             mock.patch.object(me, "_locate_ocr", return_value=None), \
-            mock.patch.object(me, "_frac_point", return_value=(1376, 970)) as frac:
+            mock.patch.object(me, "_frac_point", return_value=(1348, 950)) as frac:
         got = me._find_shop_entry(mock.MagicMock(), 1, tpl, "商城",
-                                  [1.0], [0.8], 1, None, point_frac=[0.7167, 0.8981])
-    check("模板/OCR 全失效才用兜底", got == (1376, 970) and frac.called, got)
+                                  [1.0], [0.8], 1, None, point_frac=[0.7021, 0.8796])
+    check("模板/OCR 全失效才用兜底", got == (1348, 950) and frac.called, got)
     check("兜底走 _frac_point（窗口局部坐标，与其它判据同系）", frac.called)
 
     with mock.patch.object(me, "_locate", return_value=None), \
@@ -116,10 +121,10 @@ def test_esc_gate_and_config():
     step = a["ZZZ_MONTHLY"]["steps"][2]
     check("步骤3 是信号残响每月兑换", step["name"] == "信号残响每月兑换")
     frac = step.get("shop_entry_point_frac")
-    check("兜底坐标已配置", frac == [0.7167, 0.8981], frac)
+    check("兜底坐标已配置（11-06 实机更正）", frac == [0.7021, 0.8796], frac)
     if frac:
-        check("比例对应实机 1920x1080 命中点 (1376,970)",
-              abs(frac[0] * 1920 - 1376) < 3 and abs(frac[1] * 1080 - 970) < 3,
+        check("比例对应实机 1920x1080 命中点 (1348,950)",
+              abs(frac[0] * 1920 - 1348) < 3 and abs(frac[1] * 1080 - 950) < 3,
               (frac[0] * 1920, frac[1] * 1080))
     check("其它流程未被写入该键",
           not any("shop_entry_point_frac" in s

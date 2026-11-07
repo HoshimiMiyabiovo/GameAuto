@@ -214,6 +214,16 @@ def run_zzz_monthly_background(logger: logging.Logger) -> Tuple[bool, str]:
     return _run_monthly_flow(logger, "ZZZ_MONTHLY", "绝区零每月")
 
 
+def run_zzz_logistics_monthly_background(logger: logging.Logger) -> Tuple[bool, str]:
+    """绝区零后勤商店：与「信号残响」互相独立的第二条月流程。
+
+    2026-11-06 用户拍板：两个商店都是每月刷新，不该串在一条 run_flow 里共用
+    一个 `monthly_flow:ZZZ_MONTHLY` 标记 —— 信号残响失败会直接 return False，
+    后勤商店连跑都跑不到。拆开后各自一个标记、各自成败、各自重试。
+    """
+    return _run_monthly_flow(logger, "ZZZ_LOGISTICS_MONTHLY", "绝区零后勤商店")
+
+
 def run_nte_monthly_background(logger: logging.Logger) -> Tuple[bool, str]:
     return _run_monthly_flow(logger, "NTE_MONTHLY", "异环每月")
 
