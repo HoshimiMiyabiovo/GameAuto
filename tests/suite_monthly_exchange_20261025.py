@@ -663,9 +663,14 @@ def _ocr_texts(img_path):
     import numpy as np
     from PIL import Image
 
-    from game_auto.runtime.ocr_click_tester import _get_rapidocr_engine
+    from game_auto.runtime import ocr_click_tester as oc
 
-    rows, _ = _get_rapidocr_engine()(np.asarray(Image.open(img_path).convert("RGB")))
+    # 2026-11-07 OCR 引擎统一 onnxocr v6，旧 `_get_rapidocr_engine` 已下线。
+    getter = getattr(oc, "_get_onnxocr_engine", None)
+    engine = getter() if getter else None
+    if engine is None:
+        return []
+    rows, _ = engine(np.asarray(Image.open(img_path).convert("RGB")))
     return [str(t) for _box, t, c in rows or [] if float(c) >= 0.45]
 
 

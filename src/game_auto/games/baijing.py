@@ -43,6 +43,7 @@ def build_empty_daily():
             {"task_key": "daily", "task_name": "日常任务", "status": "pending", "message": "待执行", "current": None, "total": None},
             {"task_key": "verify", "task_name": "验证", "status": "pending", "message": "待验证截图", "current": None, "total": None, "verify_image": None, "verify_image_url": None, "extra": {}},
             {"task_key": "weekly", "task_name": "每周商店购买", "status": "pending", "message": "待周常（每周一次）", "current": None, "total": None},
+            {"task_key": "fitting_weekly", "task_name": "拟合回归（每周）", "status": "pending", "message": "待每周活动（外勤→拟合回归→挂机→领奖）", "current": None, "total": None},
             {"task_key": "monthly", "task_name": "每月有猫兑换", "status": "pending", "message": "待月度（每月一次，购买清单待定）", "current": None, "total": None},
         ],
         "errors": [],

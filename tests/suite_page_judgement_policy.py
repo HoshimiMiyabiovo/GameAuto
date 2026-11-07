@@ -43,6 +43,17 @@ REGISTRY = {
     ("qoder_claim.py", "_ensure_visible"): "动作函数（聚焦/置前，非页面判定）",
     ("hsr_resin_craft.py", "detail_visible"): "双证据：商品名 + 「获得途径/消耗品」",
     ("hsr_resin_craft.py", "synth_visible"): "合成页专属词「本月还可合成 / 所需材料」",
+    # 2026-11-07 白荆「拟合回归」每周活动：8 张实机截图矩阵见
+    # tests/suite_baijing_fitting_20261107.py。「拟合回归」在外勤页/活动页都出现，
+    # 故意不作为任何一页的判据；每页 ≥2 专属标记或标题+内容双证据。
+    ("baijing_fitting.py", "_is_main_page"): "主界面底栏专属标记 ≥3 AND 右侧「外勤」入口",
+    ("baijing_fitting.py", "_is_field_page"): "「外勤作战中心」专属标题 AND 左列/节点链 ≥2",
+    ("baijing_fitting.py", "_is_activity_page"): "「拟合开始」按钮 AND「本周累积波次」正文双证据",
+    ("baijing_fitting.py", "_is_team_page"): "「作战开始」AND 编队专属标记 ≥2（自动编队/载入队列/队伍）",
+    ("baijing_fitting.py", "_is_deploy_page"): "「开始战斗」AND 刻印提供的激励/深度等级 ≥1",
+    ("baijing_fitting.py", "_is_battle_page"): "「当前波次」AND 战术终端/后备队/暂停 ≥1",
+    ("baijing_fitting.py", "_is_result_page"): "「作战完成」AND「达成波次」双证据",
+    ("baijing_fitting.py", "_is_reward_page"): "「新物品已存入」AND「点击屏幕继续」双证据（后者单独会在别的过场出现）",
 }
 
 FAILURES = []

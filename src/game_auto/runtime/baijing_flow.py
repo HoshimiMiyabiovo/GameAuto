@@ -1441,6 +1441,68 @@ def _maybe_run_weekly(logger: logging.Logger, hwnd: Optional[int], stop_check=No
         return f"  🛒 白荆回廊每周商店购买: ❌ 异常: {e}"
 
 
+def _maybe_run_fitting_weekly(
+    logger: logging.Logger, hwnd: Optional[int], stop_check=None
+) -> Optional[str]:
+    """「拟合回归」每周活动（2026-11-07 提权实机探索后落地）。
+
+    与俱乐部商店**各自独立门控**：商店失败/本周已买过都不影响拟合回归，反之亦然。
+    不另建 flow_configs 独立流程——白荆是 post_launch_ingame_flow=baijing 的内置
+    模板流程，启动器/加载过场/进主界面都有专门逻辑，独立 run_flow 要重做整套并
+    多启动一次客户端。挂在这里复用已到主界面的窗口，仍遵守「一个刷新周期一条
+    独立门控」。
+
+    周口径用 weekly_flow_week_key()（ISO 周、整体后移 4 小时，对齐其它每周流程），
+    meta 键 weekly_flow:BAIJING_FITTING。失败不写标记，下次批次按游戏内
+    「本周累积波次 N/50」自动补打剩余场次，天然幂等。
+    """
+    try:
+        from ..storage.workflow_db import WorkflowDB
+        from .background_template_runner import weekly_flow_meta_key, weekly_flow_week_key
+
+        db = WorkflowDB(str(WORKFLOW_DB_PATH))
+        week_key = weekly_flow_week_key()
+        meta_key = weekly_flow_meta_key("BAIJING_FITTING")
+        if db.get_task_meta(meta_key) == week_key:
+            _record_baijing_task(
+                logger, "fitting_weekly", "拟合回归（每周）", "already", "本周已完成",
+                extra={"week": week_key},
+            )
+            return None
+
+        from .baijing_fitting import run_fitting_regression
+
+        game_hwnd = _ensure_baijing_window_valid(logger, hwnd) or _resolve_baijing_window(logger)
+        if not game_hwnd:
+            _record_baijing_task(
+                logger, "fitting_weekly", "拟合回归（每周）", "failed", "找不到游戏窗口",
+                extra={"week": week_key},
+            )
+            return "  🎯 白荆回廊拟合回归: ❌ 找不到游戏窗口（下次运行重试）"
+
+        result = run_fitting_regression(logger, game_hwnd, stop_check=stop_check)
+        ok = bool(result.get("ok"))
+        detail = str(result.get("detail") or "无结果")
+        if ok:
+            try:
+                db.set_task_meta(meta_key, week_key)
+            except Exception as e:
+                logger.warning(f"[白荆回廊] 写入拟合回归周标记失败: {e}")
+        _record_baijing_task(
+            logger, "fitting_weekly", "拟合回归（每周）",
+            "success" if ok else "failed", detail,
+            extra={"week": week_key, "runs": result.get("runs"), "claimed": result.get("claimed")},
+        )
+        logger.info(f"[白荆回廊] 拟合回归{'执行成功，本周不再重复' if ok else '执行失败，下次重试'}: {detail}")
+        return f"  🎯 白荆回廊拟合回归: {'✅' if ok else '❌'} {detail}"
+    except Exception as e:
+        logger.warning(f"[白荆回廊] 拟合回归阶段异常: {e}", exc_info=True)
+        _record_baijing_task(
+            logger, "fitting_weekly", "拟合回归（每周）", "failed", f"异常: {e}",
+        )
+        return f"  🎯 白荆回廊拟合回归: ❌ 异常: {e}"
+
+
 def _maybe_run_monthly(logger: logging.Logger, hwnd: Optional[int], stop_check=None) -> Optional[str]:
     """每月执行一次：有猫零售「有猫兑换」按清单购买（2026-10-25 新增）。
 
@@ -1660,6 +1722,15 @@ def run_baijing_full_flow(config: dict, logger: logging.Logger, controller=None)
                 logger.info(weekly_line)
         except Exception as e:
             logger.warning(f"[白荆回廊] 周常阶段异常: {e}")
+
+        # 4.5) 拟合回归（每周，2026-11-07 实机落地）：独立周标记，
+        #      与上面俱乐部商店互不影响；内部按「本周累积波次」自行决定打 0~2 场。
+        try:
+            fitting_line = _maybe_run_fitting_weekly(logger, hwnd, stop_check=stop_check)
+            if fitting_line:
+                logger.info(fitting_line)
+        except Exception as e:
+            logger.warning(f"[白荆回廊] 拟合回归阶段异常: {e}")
 
         if stop_check and stop_check():
             _close_baijing_game(logger)

@@ -103,11 +103,14 @@ def _rows(engine, path):
 
 def main():
     from game_auto.runtime import nikki_calendar as nc
-    from game_auto.runtime.ocr_click_tester import _get_rapidocr_engine
+    from game_auto.runtime import ocr_click_tester as oc
 
-    engine = _get_rapidocr_engine()
+    # 2026-11-07 引擎换成 onnxocr PP-OCRv6（老 RapidOCR v3~v5 已下线），
+    # 旧 import `_get_rapidocr_engine` 会让整套矩阵直接 ImportError。
+    getter = getattr(oc, "_get_onnxocr_engine", None)
+    engine = getter() if getter else None
     if not engine:
-        print("SKIP RapidOCR 不可用")
+        print("SKIP onnxocr v6 引擎不可用")
         return 0
 
     checks = {
