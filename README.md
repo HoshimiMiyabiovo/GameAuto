@@ -13,7 +13,6 @@
 | 明日方舟：终末地 (Arknights: Endfield) | ok-ef | 森空岛签到 + 协议终端/森空岛官方数据 |
 | 异环 (Neverness to Everness) | ok-nte + 前置流程 | 塔吉多（BBS + 游戏） |
 | 无限暖暖 (Infinity Nikki) | whimbox (OneDragon) | — |
-| 归龙潮 | 内置模板流程（`runtime/guilongchao_flow.py`） | — |
 | 白荆回廊 | 内置模板流程（`runtime/baijing_flow.py`） | — |
 
 另有两款传统游戏的图像模板自动化：赛尔号脱机（XM）、重聚脱机（CJ），可作为独立虚拟任务插入执行顺序。
@@ -30,7 +29,7 @@
 - **自动编排**：按配置顺序依次启动游戏及对应脚本，自动聚焦游戏窗口；任务顺序可在 GUI 里 ↑/↓ 调整并持久化
 - **日志监控**：实时监控脚本日志，检测报错或卡死，支持自动重试
 - **抽卡分析**：米哈游系 UIGF 格式、终末地 JSON（含 token 同步抓取）、鸣潮 Excel / ADB 抓取、无限暖暖共鸣目录等多种数据源，数据统一落 SQLite
-- **前置流程**：支持异环、归龙潮、白荆回廊等需要先启动启动器再点"开始游戏"的图像模板流程
+- **前置流程**：支持异环、白荆回廊等需要先启动启动器再点"开始游戏"的图像模板流程
 - **邮件通知**：运行结束可发每日报告邮件，邮箱密码经 Windows DPAPI 加密落盘
 
 ## 环境要求
@@ -127,7 +126,7 @@ set PYTHONPATH=%CD%\src
 - `automation_controller.py`：核心编排器
 - `task_batch_runner.py`：CLI / GUI 共用任务批处理层
 - `foreground_flow_runner.py`：图像模板 / OCR 流程执行器
-- `guilongchao_flow.py`、`baijing_flow.py`：归龙潮、白荆回廊游戏内流程
+- `baijing_flow.py`：白荆回廊游戏内流程（四件套：进游戏/日常/验证/周常）
 - `process_supervisor.py`、`window_detector.py`：进程与窗口检测
 - `bettergi_log_monitor.py`、`ok_ww_log_monitor.py`、`whimbox_log_monitor.py`：运行期日志监控
 - `ocr_click_tester.py`：OCR / 点击辅助工具

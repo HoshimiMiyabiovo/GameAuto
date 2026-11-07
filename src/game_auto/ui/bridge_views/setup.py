@@ -215,7 +215,7 @@ class SetupWizardView:
 
             if field == "launcher":
                 # 同时写 apps 顶层覆盖与 _discovery 缓存：
-                # 顶层覆盖保证 defaults 里有写死路径的游戏（白荆回廊/归龙潮）
+                # 顶层覆盖保证 defaults 里有写死路径的游戏（白荆回廊）
                 # 在 GUI 修改后也能生效；清空时两者同空，回落 defaults。
                 app_cfg["launcher"] = value
                 discovery["launcher"] = value
