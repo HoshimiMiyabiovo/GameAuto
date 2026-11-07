@@ -52,6 +52,19 @@ PROFILE = GameProfile(
                 "launcher_params": ["--chain", "1"],
                 "script_process_name": "OneDragon ScriptChainer Runner.exe",
             },
+            # 2026-11-07：跳过 ScriptChainer 中间壳，直拉 OneDragon 原生 CLI
+            # 一条龙（-o 运行、-c 跑完关游戏；见 OneDragon exe_launcher.py）。
+            # launcher 留空与 ScriptChainer 同构——路径由 script_tool_installer
+            # 安装后双写，或 GUI 路径配置页手填；本机实例已在 app_config.json
+            # 填 D:\down\ZZZ\ZenlessZoneZero-OneDragon\OneDragon-Launcher.exe。
+            {
+                "name": "OneDragonDirect",
+                "display_name": "OneDragon 一条龙（直连）",
+                "type": "normal",
+                "launcher": "",
+                "launcher_params": ["-o", "-c"],
+                "script_process_name": "pythonw.exe",
+            },
         ],
         "game": {"process_name": "ZenlessZoneZero.exe"},
         "timeouts": {"launch": 300, "monitor": 3600},
