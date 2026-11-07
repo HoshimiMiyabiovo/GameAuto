@@ -51,6 +51,20 @@ def apply_runtime_config(config: Optional[Dict] = None) -> Dict:
             cfg_apps[app_key] = copy.deepcopy(app_cfg)
         if app_key not in cfg_order:
             cfg_order.append(app_key)
+    # 补入新游戏后，再补每个应用 launcher_options 里新增的选项（2026-11-07
+    # OneDragonDirect 教训）：_merge_defaults 对 list 是整体覆盖，旧配置文件
+    # 里已有的 launcher_options 会整体替换模板的新列表，导致模板新增的选项
+    # 在老配置上「左右脑不一致」（GUI 下拉看不到）。按 name 合并：模板有、
+    # 配置无的补进去；配置已有的原样保留（用户填过的路径不丢）。
+    for app_key, app_cfg in DEFAULT_APPS.items():
+        tmpl_opts = app_cfg.get("launcher_options")
+        if not tmpl_opts:
+            continue
+        cfg_opts = cfg_apps.setdefault(app_key, {}).setdefault("launcher_options", [])
+        cfg_names = {o.get("name") for o in cfg_opts if isinstance(o, dict)}
+        for tmpl_opt in tmpl_opts:
+            if isinstance(tmpl_opt, dict) and tmpl_opt.get("name") not in cfg_names:
+                cfg_opts.append(copy.deepcopy(tmpl_opt))
     app_order, apps = merge_launch_apps(cfg_order, cfg_apps)
     # 已下线任务：彻底移除归龙潮，避免旧配置残留仍显示
     apps.pop("GuiLongChao", None)

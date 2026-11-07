@@ -96,6 +96,46 @@ def test_local_config_order_matches_template():
         check("本机 Direct 已填 launcher 路径", bool(d.get("launcher")), d.get("launcher"))
 
 
+def test_apply_runtime_config_backfills_new_options():
+    print("[5] apply_runtime_config 给旧配置补新 launcher_options 项")
+    # _merge_defaults 对 list 整体覆盖：旧配置只有 2 项时模板新增的 Direct 会丢。
+    # apply_runtime_config 的按 name 合并必须把它补回来，且不碰用户已填路径。
+    import copy
+
+    from game_auto.games.zzz import PROFILE
+    from game_auto.settings import manager as cm
+
+    old_cfg = copy.deepcopy(cm._default_config())
+    old_cfg["apps"]["ZenlessZoneZero"]["launcher_options"] = [
+        {"name": "OneDragonBat", "launcher": r"E:\bat.exe", "launcher_params": []},
+        {"name": "OneDragonScriptChainer", "launcher": r"E:\chain.exe",
+         "launcher_params": ["--chain", "1"]},
+    ]
+    runtime = cm._merge_defaults(cm._default_config(), old_cfg)
+    merged_names = [o["name"] for o in runtime["apps"]["ZenlessZoneZero"]["launcher_options"]]
+    check("裸 _merge_defaults 会丢 Direct（复现盲区）",
+          "OneDragonDirect" not in merged_names, merged_names)
+
+    # 走 apply_runtime_config 的补项路径（与 settings/__init__.py 同逻辑）
+    cfg_apps = runtime["apps"]
+    from game_auto.settings import defaults as _d
+    for app_key, app_cfg in _d.DEFAULT_APPS.items():
+        tmpl_opts = app_cfg.get("launcher_options")
+        if not tmpl_opts:
+            continue
+        cfg_opts = cfg_apps.setdefault(app_key, {}).setdefault("launcher_options", [])
+        cfg_names = {o.get("name") for o in cfg_opts if isinstance(o, dict)}
+        for tmpl_opt in tmpl_opts:
+            if isinstance(tmpl_opt, dict) and tmpl_opt.get("name") not in cfg_names:
+                cfg_opts.append(copy.deepcopy(tmpl_opt))
+    final = [o["name"] for o in cfg_apps["ZenlessZoneZero"]["launcher_options"]]
+    check("补项后 Direct 回来", "OneDragonDirect" in final, final)
+    check("旧路径保留（Bat/Chainer 不被模板空 launcher 覆盖）",
+          cfg_apps["ZenlessZoneZero"]["launcher_options"][0]["launcher"] == r"E:\bat.exe"
+          and cfg_apps["ZenlessZoneZero"]["launcher_options"][1]["launcher"] == r"E:\chain.exe")
+    check("不重复补（项数=模板项数）", len(final) == len(PROFILE.default_app["launcher_options"]), final)
+
+
 def main():
     test_template_has_direct_option()
     test_pythonw_is_wrapper()
