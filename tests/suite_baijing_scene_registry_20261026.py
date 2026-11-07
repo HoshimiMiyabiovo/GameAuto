@@ -50,6 +50,7 @@ TEA_ROW_XY = (1200, 400)
 TEA_ENTRY_XY = (1695, 896)     # 休息室右下「午后茶憩」立牌卡（比例换算值）
 CLAIM_XY = (630, 762)          # 定巡之礼弹窗「可领取」（2026-11-06 09:15 实拍帧 OCR 位置）
 EVENT_CLOSE_XY = (1752, 258)   # 定巡之礼右上 X（比例 0.913,0.239 换算值）
+ANNOUNCE_BLANK_XY = (192, 540)  # 活动公告点空白关闭（比例 0.10,0.50 换算值）
 
 
 def check(name, cond, detail=""):
@@ -133,6 +134,10 @@ class Screen:
         elif self.state == "loading":
             # 2026-10-31～11-06 五次取证帧：加载页 = logo + 轮换提示 + 进度
             data = {"ASHECHOES": (960, 540)}
+        elif self.state == "event_announce":
+            # 2026-11-04 09:13 取证帧：活动公告横幅（生死轮回×叶脉联结计划），
+            # 关闭提示/勾选在横幅下部（960 图 ×2 换算到 1920 屏幕坐标）
+            data = {"点击空白区域关闭": (962, 866), "本期不再显示": (1514, 864)}
         elif self.state == "tea_room":
             # 2026-10-27 10:22 取证帧：房间常驻陈设（飞镖/棒球）+ 话题名 + 左上返回
             data = {"茶憩纪念函": (900, 800), "飞镖": (1725, 573), "棒球": (1719, 419), "返回": BACK_XY}
@@ -189,6 +194,9 @@ class Screen:
             # 领取后该天变已领（真实弹窗里「可领取」会消失），弹窗本体仍在
             self.claimed = True
         elif self.state == "event_claim" and _near((x, y), EVENT_CLOSE_XY):
+            self.state = "main"
+        elif self.state == "event_announce" and _near((x, y), ANNOUNCE_BLANK_XY):
+            # 公告是模态的「点击空白区域关闭」，点空白即关
             self.state = "main"
         elif self.state == "tea_room" and _near((x, y), BACK_XY):
             # 与休息室同一套离开交互：返回 → 确认框
@@ -393,6 +401,36 @@ def test_loading_and_claim_20261107():
         check("真图 OCR 出「可领取」(≥0.5)", claim >= 0.5, claim)
 
 
+# ── 4.7 2026-11-07：活动公告横幅点空白关闭 ────────────────────────
+def test_event_announce_20261107():
+    print("[4.7] 活动公告：点空白关闭（用户拍板「他只是个活动公告」）")
+    scr = Screen(state="event_announce")
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="t-announce"))
+    check("event_announce → 状态 main", state == "main", state)
+    check("点的是左边缘空白而非横幅本体",
+          any(_near(c, ANNOUNCE_BLANK_XY) for c in scr.clicks), scr.clicks)
+    check("零 ESC", scr.esc == 0, scr.esc)
+    check("特征不含「叶脉联结计划」（叶脉页同名，防误点领奖页）",
+          all("叶脉联结计划" not in m for m in bd.EVENT_ANNOUNCE_MARKERS),
+          bd.EVENT_ANNOUNCE_MARKERS)
+
+    # 真实取证帧（11-04 #163 原图）两个特征都必须能 OCR 出来
+    ref = PROJECT_ROOT / "data" / "artifacts" / "ref_baijing_loading_event_banner_20261104.jpg"
+    check("公告取证帧已存档为长期参考图", ref.is_file(), ref)
+    if ref.is_file():
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+        except ImportError:
+            print("  SKIP RapidOCR 未安装，跳过真图断言")
+            return
+        result, _ = RapidOCR()(str(ref))
+        texts = {str(t): float(c) for _, t, c in (result or [])}
+        hint = max((c for t, c in texts.items() if "点击空白区域关闭" in t), default=0.0)
+        once = max((c for t, c in texts.items() if "本期不再显示" in t), default=0.0)
+        check("真图 OCR 出「点击空白区域关闭」(≥0.55)", hint >= 0.55, hint)
+        check("真图 OCR 出「本期不再显示」(≥0.55)", once >= 0.55, once)
+
+
 # ── 5. 一轮只截一次屏 ─────────────────────────────────────────────
 def test_single_ocr_per_round():
     print("[5] 一轮恢复只截一次屏（旧实现每个判定各截一次）")
@@ -432,9 +470,9 @@ def test_stuck_scene_evidence():
 # ── 8. 登记表顺序 ─────────────────────────────────────────────────
 def test_rule_order():
     print("[8] 登记表顺序：面板特征优先，绝不在任务面板上点「返回」")
-    check("规则顺序", [r["name"] for r in bd.SCENE_RULES] == ["加载过场", "过场遮罩", "计划等级提升", "定巡之礼",
-                                                              "茶憩摘要", "关注特写", "休息室", "烙痕详情",
-                                                              "烙痕列表", "茶憩房间", "有猫零售"],
+    check("规则顺序", [r["name"] for r in bd.SCENE_RULES] == ["加载过场", "活动公告", "过场遮罩", "计划等级提升",
+                                                              "定巡之礼", "茶憩摘要", "关注特写", "休息室",
+                                                              "烙痕详情", "烙痕列表", "茶憩房间", "有猫零售"],
           [r["name"] for r in bd.SCENE_RULES])
     check("休息室特征不含「午后茶憩」（任务行也有这四个字）",
           "午后茶憩" not in bd.REST_ROOM_MARKERS, bd.REST_ROOM_MARKERS)
@@ -505,6 +543,7 @@ def main():
     test_single_scenes()
     test_new_scenes_20261027()
     test_loading_and_claim_20261107()
+    test_event_announce_20261107()
     test_single_ocr_per_round()
     test_unknown_scene_evidence()
     test_stuck_scene_evidence()

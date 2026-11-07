@@ -92,7 +92,8 @@ if len(steps) == 3 and len(log_steps) == 6:
         "步骤3 为 信号残响每月兑换(monthly_exchange)",
         s2.get("action") == "monthly_exchange" and s2.get("name") == "信号残响每月兑换",
     )
-    check("步骤4 为 打开功能菜单(click_template 主菜单按钮)", s3.get("action") == "click_template" and s3.get("name") == "打开功能菜单")
+    # 2026-11-07：···按钮模板点击开不出主菜单（#209），换成扫描码 ESC
+    check("步骤3 为 打开功能菜单(press_key 扫描码 esc)", s3.get("action") == "press_key" and s3.get("key") == "esc")
     check("步骤5 为 点击后勤商店(click_template)", s4.get("action") == "click_template" and s4.get("name") == "点击后勤商店")
     check("步骤6 为 等待商店界面(wait_template)", s5.get("action") == "wait_template" and s5.get("name") == "等待商店界面")
     check("步骤7 为 后勤商店采购(zzz_shop_buy)", s6.get("action") == "zzz_shop_buy" and s6.get("name") == "后勤商店采购")

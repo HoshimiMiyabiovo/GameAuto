@@ -44,6 +44,7 @@ from .zzz_monthly_shop import (
     ITEM_MISSING,
     NO_POPUP,
     NOT_FULL,
+    PURCHASE_UNVERIFIED,
     REWARD_POPUP_STUCK,
     STOPPED,
     _buy_once,
@@ -975,6 +976,7 @@ def _buy_items(
     confidences,
     stop_check: Optional[Callable[[], bool]],
     scroll_search: bool = True,
+    step: Optional[Dict] = None,
 ) -> Tuple[bool, List[str]]:
     """按清单逐项兑换。返回 (是否全部成功, 每项摘要)。
 
@@ -1021,11 +1023,14 @@ def _buy_items(
         bought = 0
         reason = ""
         for _ in range(count):
+            # step 只在调用方传了配置时才透传：旧回归套件直接打桩 `_buy_once`
+            # 且签名不含新参数，无条件传 keyword 会把它们全部打挂。
+            buy_kwargs = {"label": label, "scroll_finder": scroll_finder}
+            if step is not None:
+                buy_kwargs["step"] = step
             result = _buy_once(
                 logger, hwnd, item, confirm_template,
-                scales, confidences, stop_check,
-                label=label,
-                scroll_finder=scroll_finder,
+                scales, confidences, stop_check, **buy_kwargs,
             )
             if result == BOUGHT:
                 bought += 1
@@ -1056,6 +1061,9 @@ def _buy_items(
                 break
             if result == REWARD_POPUP_STUCK:
                 reason = "「获得物品」浮层未关闭，无法继续采购"
+                break
+            if result == PURCHASE_UNVERIFIED:
+                reason = "点完确认但限购/库存数字未变，疑似假成功"
                 break
 
         if bought >= count:
@@ -1187,6 +1195,7 @@ def buy_monthly_exchange(
     buy_ok, summaries = _buy_items(
         logger, hwnd, items, confirm_template, label, scales, confidences, stop_check,
         scroll_search=bool(step.get("item_scroll_search", True)),
+        step=step,
     )
     if not buy_ok and any("用户停止" in s for s in summaries):
         return False, "用户停止 | " + "，".join(summaries)

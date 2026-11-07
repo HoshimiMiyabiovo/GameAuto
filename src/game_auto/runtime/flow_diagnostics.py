@@ -25,11 +25,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..settings.paths import FLOW_FAILURE_DIR, FLOW_FAILURE_KEEP_DAYS, WORKFLOW_DB_PATH
 
-# 截图压缩参数（与白荆回廊验证图一致：宽 960 + JPEG q72，单张约 40~80KB）
-EVIDENCE_MAX_WIDTH = 960
+# 截图压缩参数（2026-11-07 从 960 提到 1920 原生分辨率：960 半幅会把小字面板
+# 压到 5px，人眼都看不清，事后放大复核全靠原生细节；单张全屏 JPEG 约 150~300KB，
+# flow_failures 本就 14 天滚动清理，空间可承受。窗口取证的窗口矩形常小于全屏，
+# 不受此上限影响）
+EVIDENCE_MAX_WIDTH = 1920
 EVIDENCE_JPEG_QUALITY = 72
-# 默认抓取的 OCR 文本条数（够看出"当时屏幕上有什么"，又不至于把 JSON 撑爆）
-DEFAULT_OCR_SAMPLE = 15
+# 取证标注的 OCR 条数上限（2026-11-07 从 15 提到 200：RapidOCR 按阅读顺序
+# 从上到下返回，[:15] 会把中下部内容整块截掉——XM 取证只标出顶部条带、
+# 中下部"看起来全没识别"，实际是截断假象。200 张标注图依旧轻量）
+DEFAULT_OCR_SAMPLE = 200
 # 文件名里的非法字符
 _UNSAFE_CHARS = re.compile(r"[^0-9A-Za-z\u4e00-\u9fff._-]+")
 

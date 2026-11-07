@@ -36,6 +36,16 @@
 - **铁律 2：日志污染硬拦截，不只告警**。`_check_log_contamination(logger, results) -> List[Dict]` 现在**返回剔除后的结果**：命中 `_LOG_SIGNATURE_PATTERNS` 的 OCR 条目一律剔除、禁止参与匹配。阈值策略：≥2 条才节流告警（防噪音）；**任何 1 条命中即剔除**（防漏网）。目标文字都是界面标签（进入脱机/登录/开始），不含日志特征模式，剔除不会误杀目标。
 - 回归测试：`artifacts/test_ocr_guard_20261017.py`（7 个用例：干净零误剔 / 污染剔除 / 单条也剔 / 死窗口不抓屏 / 还原成功后继续 / 显式 region 优先）。改这块代码后必须跑。
 - 模板匹配路径 `_locate_template_in_window` 本来就是 `rect=None → return None`，没有全屏洞，别改出洞来。
+### OCR 引擎：onnxocr v6 单档（2026-11-07 晚定稿）
+
+**背景**：XM「等待数据加载完毕」的目标字打在脚本右下 10px 小日志面板（灰字+花纹水印），老引擎全窗扫描必漏——检测器对大图降采样（limit_side_len 736）+ 密集 UI 小框竞争；用户提供原生截图实测，紧裁剪勉强能读但字符级噪声大。
+
+- **单档架构**（`runtime/ocr_click_tester.py`）：唯一引擎 `_get_onnxocr_engine()` = onnxocr PP-OCRv6（CUDA）。RapidOCR（v3 mobile）与 v4 server / v5 onnxocr 已于 2026-11-07 全部删除——基准实测 v3 全窗漏检、v4 慢（窗口 1019ms）、v5 det box_thresh=0.6 漏检；v6 全窗命中且最快（窗口 239ms / panel 15ms，相似度 1.00）。Tesseract 仅作可选兜底。
+- **步骤 opt-in**：`"ocr_precision": true` 步骤走高精度链（`_locate_with_ocr_fallback` → `ocr_find_any_text` 透传 `engine=`）；失败取证同步骤也用高精度引擎。引擎不可用时 `_get_onnxocr_engine` 返回 None，上层按未匹配重试。
+- **CUDA 依赖**：onnxruntime-gpu + NVIDIA 运行库 pip 轮子（cublas/cudnn9/cufft/curand/cusolver/cusparse/cuda-runtime/nvjitlink，共约 2.5GB DLL）。`_ensure_nvidia_cuda_dlls(force=True)` 把 site-packages/nvidia/*/bin 加进 DLL 搜索路径 + PATH（必须在 session 创建前；CUDA EP 缺 DLL 会**静默回退 CPU**）。全局 env 门控 `GAMEAUTO_OCR_CUDA=1`。
+- **显存错峰**：v6 走 CUDA EP 单进程常驻 ~730MB（nvidia-smi 实测）。GUI 常驻但 OCR 只在批次任务时用，`run_task_batch` 收尾调 `_release_onnxocr_engine()` 卸载引擎（断引用 + gc），与 ok-ww（鸣潮）/ok-ef 等独立 GPU 进程错峰；下次批次首次 OCR 自动重建（冷启动 ~450ms）。实测释放回落 ~81%、残留 ~137MB（onnxruntime CUDA 显存池固有，Python 侧无法完全消除，要 100% 归还需子进程隔离）。
+- **基准**（`tools/bench_ocr_engines.py`，RTX 5070，XM 窗口 901×610，预热后 best of 3）：v6 窗口 239ms 命中（整行 1.00）、panel 15ms。结果 `data/artifacts/ocr_bench_20261107.json`。
+- 回归：`tests/suite_onnxocr_precision_20261107.py`（vendored 无 one_dragon 残留 / v6 命中与格式 / CUDA EP / 工厂单档 / runner 接线）；`suite_step_ocr_region_20261107.py` 锁 v6 端到端命中与区域换算。
 ### OCR 结构化匹配：不要靠堆排除词 (2026-10-31)
 
 **背景**：MiniMax 步骤4 目标「签到得」按旧逻辑（目标顺序 + OCR 顺序，先命中先返回）子串命中卡片宣传语「连续签到得更多积分」，点在文案中间，接口日志里根本没有 `signin/claim`。当天先加了 `ocr_exclude_texts`，但每遇到一句宣传语就要加一个排除词，不可持续。
@@ -161,7 +171,7 @@
   1. **永不抛异常** —— 调用点都在失败分支里，诊断自己炸了必须被吞掉（连 logger 抛异常也不能
      把已写库的 id 吞掉）；
   2. **不重复识别** —— 调用方已有当帧 OCR 结果时务必传 `ocr_results` 复用，一次失败重试动辄
-     几秒，别为了记录再跑一遍 RapidOCR；
+     几秒，别为了记录再跑一遍 OCR；
   3. **窗口不可用不退化全屏** —— 传了 hwnd 但 `GetWindowRect` 失败就直接不存图，否则会把用户
      桌面截图存进证据目录（与 `ocr_click_tester` 的全屏 OCR 防护同源教训）。
 - **出报告**：`tools/flow_failure_report.py`（`--days 7 --top 20 --verbose --json --purge 30

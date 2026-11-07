@@ -1232,4 +1232,14 @@ def run_task_batch(
     # 放在统一重试之后，避免和重试里的日常抢窗口。
     _sweep_pending_monthly_flows(controller, report, warnings)
 
+    # 批次结束卸载 OCR 引擎归还显存：与 ok-ww（鸣潮）/ok-ef 等独立 GPU 进程
+    # 错峰，避免两个 CUDA 进程叠加撞显存墙。下次批次首次 OCR 自动重建。
+    try:
+        from .ocr_click_tester import _release_onnxocr_engine
+
+        if _release_onnxocr_engine:
+            _release_onnxocr_engine(controller.logger)
+    except Exception as exc:
+        controller.logger.debug(f"[批次收尾] OCR 引擎释放异常（不影响结果）: {exc}")
+
     return TaskBatchResult(report=report, warnings=warnings, startup_lines=startup_lines)

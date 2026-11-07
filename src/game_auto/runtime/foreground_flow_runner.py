@@ -18,7 +18,7 @@ import win32process
 from PIL import Image
 from ..settings.paths import BASE_DIR, CACHE_DIR, ensure_flow_config_path
 
-# OCR 可用性由 `ocr_click_tester._ocr_scan` 内部判定：RapidOCR 是主引擎，
+# OCR 可用性由 `ocr_click_tester._ocr_scan` 内部判定：onnxocr v6 是主引擎，
 # 只有它返回空/异常时才尝试可选的 Tesseract 兜底。这里**不要**按
 # `pytesseract` 包是否存在做门控 —— 2026-11-07 复核发现旧代码用
 # `HAS_OCR = bool(pytesseract)` 卡住整个文字定位函数，可下游
@@ -843,8 +843,23 @@ def _focus_window(hwnd: int):
 _SCANCODE_VK_ALIASES = {
     "esc": 27, "escape": 27, "enter": 13, "return": 13, "tab": 9,
     "space": 32, "backspace": 8,
+    # 修饰键：恶名狩猎闪避键 = shift（2026-11-07 恶名狩猎换扫描码时补，
+    # 否则 press_key_scancode("shift") 直接 ValueError）
+    "shift": win32con.VK_SHIFT, "ctrl": win32con.VK_CONTROL, "alt": win32con.VK_MENU,
     **{f"f{i}": 111 + i for i in range(1, 13)},  # VK_F1=112 ... VK_F12=123
 }
+
+
+def _scancode_vk(key: str) -> int:
+    """按键名 → 虚拟键码（press_key_scancode 与需要 down/up 原语的调用方共用）。"""
+    k = str(key).strip().lower()
+    vk = _SCANCODE_VK_ALIASES.get(k)
+    if vk is None and len(k) == 1 and k.isalnum():
+        vk = ord(k.upper())
+    if vk is None:
+        raise ValueError(f"无法把按键 {key!r} 映射成虚拟键码")
+    return vk
+
 
 # 游戏内按键的按住时长：瞬时虚拟键事件会被 Unity/UE 一帧漏掉。
 SCANCODE_KEY_HOLD_SEC = 0.15
@@ -862,12 +877,7 @@ def press_key_scancode(key: str, hold_sec: float = SCANCODE_KEY_HOLD_SEC) -> Non
     `nikki_calendar._open_calendar` 的尝试顺序与顶栏连读图标坐标。
     finally 保证异常时也松开键。
     """
-    k = str(key).strip().lower()
-    vk = _SCANCODE_VK_ALIASES.get(k)
-    if vk is None and len(k) == 1 and k.isalnum():
-        vk = ord(k.upper())
-    if vk is None:
-        raise ValueError(f"无法把按键 {key!r} 映射成虚拟键码")
+    vk = _scancode_vk(key)
     scan = win32api.MapVirtualKey(vk, 0)
     try:
         win32api.keybd_event(vk, scan, 0, 0)
@@ -1067,11 +1077,13 @@ def _ocr_locate_labeled_in_window(
     ambiguous_action: str = "warn",
     debug_tag: Optional[str] = None,
     save_debug: bool = False,
+    engine: Optional[object] = None,
 ) -> Optional[Tuple[str, Tuple[int, int]]]:
     """
     使用OCR在窗口中定位目标文字，并返回命中的候选词（_ocr_locate_in_window 的带标签版）。
     返回 (命中的候选词, 窗口局部坐标) 或 None。
     单次截图+单次 OCR 同时匹配全部候选（dismiss_texts 与目标文字共用一次扫描）。
+    engine: 指定推理引擎（None 用默认 onnxocr v6；高精度步骤同引擎）。
     """
     target_candidates = _normalize_target_text_candidates(target_text)
     if not target_candidates:
@@ -1095,6 +1107,7 @@ def _ocr_locate_labeled_in_window(
                 ambiguous_action=ambiguous_action,
                 debug_tag=debug_tag,
                 save_debug=save_debug,
+                engine=engine,
             )
         else:
             result = ocr_find_any_text(
@@ -1109,6 +1122,7 @@ def _ocr_locate_labeled_in_window(
                 ambiguous_action=ambiguous_action,
                 debug_tag=debug_tag,
                 save_debug=save_debug,
+                engine=engine,
             )
         if not result:
             return None
@@ -1142,12 +1156,14 @@ def _ocr_locate_in_window(
     ambiguous_action: str = "warn",
     debug_tag: Optional[str] = None,
     save_debug: bool = False,
+    engine: Optional[object] = None,
 ) -> Optional[Tuple[int, int]]:
     """
     使用OCR在窗口中定位目标文字（备选方案）。
     返回窗口局部坐标或None。
     search_region: 屏幕坐标的局部搜索区域 (left, top, width, height)，限制OCR搜索范围
     match_mode / anchor / near: 结构化匹配配置（精确>前缀>子串 + 锚点几何）
+    engine: 指定推理引擎（None 用默认 onnxocr v6）。
     """
     hit = _ocr_locate_labeled_in_window(
         logger,
@@ -1162,6 +1178,7 @@ def _ocr_locate_in_window(
         ambiguous_action=ambiguous_action,
         debug_tag=debug_tag,
         save_debug=save_debug,
+        engine=engine,
     )
     return hit[1] if hit else None
 
@@ -1183,6 +1200,7 @@ def _locate_with_ocr_fallback(
     debug_tag: Optional[str] = None,
     save_debug: bool = False,
     dismiss_texts: Optional[List[str]] = None,
+    engine: Optional[object] = None,
 ) -> Tuple[Optional[Tuple[int, int]], str]:
     """
     模板匹配+OCR联合定位。
@@ -1193,6 +1211,7 @@ def _locate_with_ocr_fallback(
         与目标文字共用同一次 OCR 扫描；命中弹窗文字时返回方法 "ocr_dismiss"，
         由调用方点击后继续等待，不算步骤命中。
         弹窗词排在目标词前面：弹窗在场时必然先处理弹窗。
+    engine: 指定推理引擎（None 用默认 onnxocr v6；高精度步骤同引擎）。
     """
     target_candidates = _resolve_target_text_candidates(template_path, target_text)
     target_label = _display_target_text(target_candidates, os.path.basename(template_path or ""))
@@ -1219,6 +1238,7 @@ def _locate_with_ocr_fallback(
             ambiguous_action=ambiguous_action,
             debug_tag=debug_tag,
             save_debug=save_debug,
+            engine=engine,
         )
         if hit:
             matched, center = hit
@@ -1447,6 +1467,28 @@ def _check_element_exists(
     )
     exists = center is not None
     return exists, method
+
+
+def _step_ocr_region(frac, rect) -> Optional[Tuple[int, int, int, int]]:
+    """窗口相对比例 [x0,y0,x1,y1] → 屏幕绝对 (left, top, width, height)。
+
+    每轮用当前窗口矩形实时换算：窗口移动/换屏自动跟随；窗口尺寸变化时按比例
+    缩放（对固定布局的应用如 XM 脚本窗口是稳定的）。算不出返回 None（回退全窗扫描）。
+    """
+    try:
+        fx0, fy0, fx1, fy1 = (float(v) for v in frac)
+    except (TypeError, ValueError):
+        return None
+    if not rect or len(rect) != 4:
+        return None
+    l, t, w, h = rect
+    if w <= 0 or h <= 0:
+        return None
+    x0, y0 = l + fx0 * w, t + fy0 * h
+    return (
+        int(x0), int(y0),
+        max(1, int((fx1 - fx0) * w)), max(1, int((fy1 - fy0) * h)),
+    )
 
 
 def _calc_local_search_region(
@@ -1872,6 +1914,7 @@ _BUILTIN_ACTIONS = (
     "wool_dismiss_update",
     "wool_verify_log",
     "script_checklist_sync",
+    "press_key",
 )
 
 
@@ -2092,6 +2135,48 @@ def _dispatch_step_action(
         if not ok:
             return False, f"[{flow_key}] 步骤失败: {name} ({msg})", hwnd, pid
         logger.info(f"[{flow_key}] 步骤{step_no}清单同步完成: {msg}")
+    elif action == "press_key":
+        # 通用扫描码按键（2026-11-07）：绝区零游戏内 UI 只吃 keybd_event+扫描码
+        # （11-05 实机）；模板点右下···按钮开不出主菜单、pyautogui F2 全被吞
+        # （12:09/12:15 两轮实录）。verify_texts 可选：按下后等任一文字出现才算
+        # 成功，没见就重按（最多 max_attempts 轮）。
+        key = str(step.get("key") or "escape")
+        presses = max(1, int(step.get("presses", 1)))
+        interval = float(step.get("press_interval_sec", 1.2))
+        verify_texts = _normalize_target_text_candidates(step.get("verify_texts"))
+        verify_timeout = float(step.get("verify_timeout_sec", 6))
+        attempts = max(1, int(step.get("max_attempts", 3)))
+        _focus_window(hwnd)
+        for attempt in range(1, attempts + 1):
+            for i in range(presses):
+                press_key_scancode(key)
+                if i < presses - 1:
+                    time.sleep(interval)
+            logger.info(
+                f"[{flow_key}] 步骤{step_no}已按 {key} ×{presses}（扫描码，第 {attempt} 次）"
+            )
+            if not verify_texts:
+                return True, f"已按 {key} ×{presses}", hwnd, pid
+            deadline = time.time() + verify_timeout
+            verified = False
+            while time.time() < deadline:
+                if _stop_requested(stop_check):
+                    return False, f"[{flow_key}] 用户已请求停止", hwnd, pid
+                if _ocr_locate_in_window(logger, hwnd, verify_texts):
+                    logger.info(f"[{flow_key}] 步骤{step_no}按键生效（OCR 见 {verify_texts}）")
+                    verified = True
+                    break
+                time.sleep(1.0)
+            if verified:
+                return True, f"已按 {key}，页面特征已出现", hwnd, pid
+            logger.warning(
+                f"[{flow_key}] 步骤{step_no}按 {key} 后 {verify_timeout:.0f}s "
+                f"未见 {verify_texts}，重按"
+            )
+        return False, (
+            f"[{flow_key}] 步骤失败: {name} "
+            f"(按 {key} ×{attempts} 轮后未见 {verify_texts})"
+        ), hwnd, pid
     else:
         return False, f"[{flow_key}] 未知动作: {action}", hwnd, pid
     return True, "", hwnd, pid
@@ -2122,8 +2207,15 @@ def _collect_failure_evidence(
     """
     ocr_results = None
     try:
-        from .ocr_click_tester import ocr_window_content
-        results = ocr_window_content(logger, hwnd=hwnd)
+        from .ocr_click_tester import ocr_window_content, _get_precision_engine
+        # ocr_precision 步骤的失败取证也用高精度引擎（记录更完整的当帧文字）
+        prec_engine = None
+        if step.get("ocr_precision"):
+            try:
+                prec_engine = _get_precision_engine(logger)
+            except Exception as exc:
+                logger.debug(f"[{flow_key}] 取证高精度引擎获取失败: {exc}")
+        results = ocr_window_content(logger, hwnd=hwnd, engine=prec_engine)
         if results:
             logger.warning(f"[{flow_key}] 步骤失败时屏幕文字:")
             for r in results[:10]:
@@ -2551,6 +2643,9 @@ def run_flow(
             step_ocr_ambiguous = str(step.get("ocr_ambiguous", "warn") or "warn").strip().lower()
             step_ocr_debug = bool(step.get("ocr_debug_snapshot", flow_ocr_debug))
             step_ocr_debug_tag = f"{flow_key}_s{step_no}_{name}"
+            # 步骤级 OCR 搜索区域（窗口相对 [x0,y0,x1,y1]）：小字特征（如 XM 脚本
+            # 的 10px 日志面板）在全窗扫描时会被检测器漏掉，紧裁剪一次命中
+            step_ocr_region_frac = step.get("ocr_region_frac")
             target_text = target_texts[0] if target_texts else str(name)
             target_label = _display_target_text(target_texts, target_text)
             step_enable_ocr = bool(step.get("enable_ocr_fallback", enable_ocr or _template_has_ocr_memory(template)))
@@ -2798,6 +2893,23 @@ def run_flow(
                                 logger.info(f"[{target_label}] 全屏OCR匹配成功 @ {center}")
                                 match_method = "ocr_screen"
                     else:
+                        # 步骤级 OCR 区域（窗口相对，实时换算）：紧裁剪让小字特征
+                        # 不被全窗检测漏掉（XM 日志面板 10px 字全窗扫必丢）
+                        configured_region = None
+                        if step_ocr_region_frac:
+                            configured_region = _step_ocr_region(
+                                step_ocr_region_frac, _window_rect(hwnd)
+                            )
+                        # 高精度引擎（onnxocr v6，GPU）：步骤显式 opt-in
+                        step_engine = None
+                        if step.get("ocr_precision"):
+                            try:
+                                from .ocr_click_tester import (
+                                    _get_precision_engine,
+                                )
+                                step_engine = _get_precision_engine(logger)
+                            except Exception as exc:
+                                logger.debug(f"[{flow_key}] 高精度引擎获取失败: {exc}")
                         center, match_method = _locate_with_ocr_fallback(
                             logger=logger,
                             hwnd=hwnd,
@@ -2806,7 +2918,7 @@ def run_flow(
                             scales=scales,
                             confidences=confidences,
                             enable_ocr=step_enable_ocr,
-                            local_region=local_region,
+                            local_region=configured_region or local_region,
                             exclude_texts=step_exclude_texts,
                             match_mode=step_ocr_match_mode,
                             anchor=step_ocr_anchor,
@@ -2815,6 +2927,7 @@ def run_flow(
                             debug_tag=step_ocr_debug_tag,
                             save_debug=step_ocr_debug,
                             dismiss_texts=step_dismiss_texts or None,
+                            engine=step_engine,
                         )
                     if center and match_method == "ocr_dismiss":
                         # 等待途中出现弹窗（如绝区零月卡「今日到账」）：点掉后继续等

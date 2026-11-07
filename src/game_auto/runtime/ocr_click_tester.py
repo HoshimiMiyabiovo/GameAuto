@@ -2,6 +2,7 @@ import os
 import re
 import time
 import math
+import gc
 import ctypes
 import ctypes.wintypes
 import logging
@@ -21,7 +22,10 @@ def _guarded_click(*args, **kwargs):
 
 from PIL import ImageOps, ImageEnhance, ImageDraw, Image, ImageFont
 import numpy as np
-from ..settings.paths import OCR_DEBUG_DIR, TEMPLATES_DIR, TESSDATA_DIR, TESSERACT_EXE, WORKFLOW_DB_PATH as PROJECT_WORKFLOW_DB_PATH
+from ..settings.paths import (
+    BASE_DIR, OCR_DEBUG_DIR, TEMPLATES_DIR, TESSDATA_DIR, TESSERACT_EXE,
+    WORKFLOW_DB_PATH as PROJECT_WORKFLOW_DB_PATH,
+)
 
 _LOGGER = logging.getLogger("GameAutomation")
 
@@ -31,8 +35,8 @@ _USE_CUDA_OCR = os.environ.get("GAMEAUTO_OCR_CUDA", "0") == "1"
 
 # ── 让 onnxruntime-gpu 能加载 CUDA/cuDNN 运行时（来自 nvidia-* pip wheels）──
 # CUDA 默认关闭时直接跳过：不污染 PATH/DLL 目录，避免意外载入 2G+ 的 toolkit。
-def _ensure_nvidia_cuda_dlls():
-    if not _USE_CUDA_OCR:
+def _ensure_nvidia_cuda_dlls(force: bool = False):
+    if not _USE_CUDA_OCR and not force:
         return
     """nvidia-cuda-runtime/cublas/cudnn 等 pip 包把 DLL 放在
     site-packages/nvidia/<pkg>/{bin,lib}。onnxruntime-gpu 需要这些 DLL 在进程
@@ -177,78 +181,81 @@ except ImportError:
     pytesseract = None
 
 try:
-    from rapidocr_onnxruntime import RapidOCR
     import onnxruntime as _ort
-    _rapidocr_engine = None
+    from onnxocr.onnx_paddleocr import ONNXPaddleOcr  # noqa: F401  探测用
+
+    _onnxocr_engine = None
+    _precision_engine = None
+    _precision_engine_resolved = False
     _tesseract_error_logged = False  # 避免重复记录Tesseract错误
 
-    def _patch_rapidocr_gpu_providers():
-        """运行时给 RapidOCR 的 ONNX session 注入 EP 列表。
+    def _get_onnxocr_engine(logger: logging.Logger = None):
+        """唯一 OCR 引擎：onnxocr PP-OCRv6（CUDA）。模型缺失/初始化失败返回 None。
 
-        默认 DirectML → CPU（不碰 CUDA，省 2G+ 内存映射）。
-        仅 GAMEAUTO_OCR_CUDA=1 时才把 CUDA 放首位。
-        RapidOCR 原生的 ``OrtInferSession`` 只认 CUDA/CPU，根本不注册
-        DirectML（DmlExecutionProvider）。本函数 patch 其 EP 列表，使装有
-        onnxruntime-directml 的环境也能走 GPU。仅在首次构造引擎时 patch 一次。
+        2026-11-07 实测（tools/bench_ocr_engines.py）：v6 全窗命中 XM 面板小字
+        面板小字（窗口 663ms/次，panel 120ms），v3 mobile 全窗漏检、v4 server
+        慢、v5 det box_thresh=0.6 漏检——老版本与 RapidOCR 全部下线，只留 v6。
         """
-        from rapidocr_onnxruntime.utils import (
-            OrtInferSession, SessionOptions, GraphOptimizationLevel,
-            get_available_providers, InferenceSession,
-        )
-        if getattr(OrtInferSession, "_gpu_provider_patched", False):
-            return
+        global _onnxocr_engine
+        if _onnxocr_engine is not None:
+            return _onnxocr_engine
+        lg = logger or logging.getLogger("GameAutomation")
+        try:
+            from .onnxocr_precision import build_onnxocr_engine
 
-        def _gpu_init(self, config):
-            sess_opt = SessionOptions()
-            sess_opt.log_severity_level = 4
-            sess_opt.enable_cpu_mem_arena = False
-            sess_opt.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
-            cpu_ep = "CPUExecutionProvider"
-            cpu_opts = {"arena_extend_strategy": "kSameAsRequested"}
-            cuda_ep = "CUDAExecutionProvider"
-            cuda_opts = {
-                "device_id": 0,
-                "arena_extend_strategy": "kSameAsRequested",
-                "cudnn_conv_algo_search": "HEURISTIC",
-                "do_copy_in_default_stream": True,
-            }
-            dml_ep = "DmlExecutionProvider"
-            avail = get_available_providers()
-            # 默认跳过 CUDA（省内存）；显式开启才放首位
-            ep_list = []
-            if _USE_CUDA_OCR and cuda_ep in avail:
-                ep_list.append((cuda_ep, cuda_opts))
-            if dml_ep in avail:
-                ep_list.append((dml_ep, {}))
-            ep_list.append((cpu_ep, cpu_opts))
-            self._verify_model(config["model_path"])
-            self.session = InferenceSession(
-                config["model_path"], sess_options=sess_opt, providers=ep_list)
-
-        OrtInferSession.__init__ = _gpu_init
-        OrtInferSession._gpu_provider_patched = True
-
-    def _get_rapidocr_engine(logger: logging.Logger = None) -> object:
-        global _rapidocr_engine
-        if _rapidocr_engine is None:
-            try:
-                _patch_rapidocr_gpu_providers()
-                eng = RapidOCR()
-                _rapidocr_engine = eng
-                lg = logger or logging.getLogger("GameAutomation")
-                avail = _ort.get_available_providers()
-                lg.info(f"[OCR] RapidOCR 已加载，可用 EP={avail}（CUDA={'开' if _USE_CUDA_OCR else '关(GAMEAUTO_OCR_CUDA=1 开启)'}，按 DirectML→CPU 选择）")
-                # 打印实际生效 EP（取识别模型 session）
-                try:
-                    lg.info(f"[OCR] 生效 EP={eng.text_recognizer.session.session.get_providers()}")
-                except Exception as exc:
-                    lg.debug("[OCR] 读取生效 EP 失败: %s", exc)
-            except Exception as e:
-                logging.getLogger("GameAutomation").warning(f"RapidOCR 初始化失败: {e}")
+            eng = build_onnxocr_engine("v6", logger=lg)
+            if eng is None:
+                lg.warning("[OCR] onnxocr v6 引擎不可用（模型缺失或初始化失败），OCR 将返回空结果")
                 return None
-        return _rapidocr_engine
+            _onnxocr_engine = eng
+            lg.info(f"[OCR] 引擎已加载: onnxocr v6，EP={eng.providers()}")
+            return _onnxocr_engine
+        except Exception as exc:
+            lg.warning(f"[OCR] onnxocr v6 引擎初始化失败: {exc}")
+            return None
+
+    def _release_onnxocr_engine(logger: logging.Logger = None) -> bool:
+        """卸载 v6 引擎，尽量归还显存（与 ok-ww/ok-ef 的 GPU 进程错峰）。
+
+        背景：v6 走 CUDA EP 时单进程常驻 ~733MB 显存（2026-11-07 nvidia-smi
+        实测 2853→3586MB）。GUI 常驻但 OCR 只在批次任务时用，任务结束不释放
+        会让 ok-ww（鸣潮）等独立 GPU 进程与本项目叠加撞显存墙。下次批次首次
+        OCR 时 _get_onnxocr_engine 自动重建（冷启动 ~450ms，可接受）。
+
+        注意：onnxruntime 的 InferenceSession 无 close() API，CUDA EP 的显存
+        池默认不还给 OS——Python 侧只能断引用 + gc，实际归还量取决于驱动，
+        常有几百 MB 残留。要完全归还只能走子进程隔离（见 docs/conventions）。
+
+        返回 True 表示确实释放了引擎；引擎本就不在则返回 False。
+        """
+        global _onnxocr_engine
+        if _onnxocr_engine is None:
+            return False
+        lg = logger or logging.getLogger("GameAutomation")
+        try:
+            # 整棵引擎对象一次性断引用（det/rec/cls session 都被 _ocr 持有）
+            _onnxocr_engine._ocr = None
+        except Exception as exc:
+            lg.debug(f"[OCR] 释放 onnxocr 引擎断引用异常: {exc}")
+        _onnxocr_engine = None
+        gc.collect()
+        lg.info("[OCR] v6 引擎已卸载，显存尽量归还 GPU（下次任务首次 OCR 自动重建）")
+        return True
+
+    def _get_precision_engine(logger: logging.Logger = None):
+        """高精度引擎统一入口：现在只有 v6 单档（老版本已删）。"""
+        return _get_onnxocr_engine(logger)
 except ImportError:
-    _get_rapidocr_engine = None
+    _get_onnxocr_engine = None
+    _release_onnxocr_engine = None
+    _get_precision_engine = None
+
+    def _get_precision_engine(logger: logging.Logger = None):
+        return None
+
+    def _release_onnxocr_engine(logger: logging.Logger = None) -> bool:
+        return False
+
     _tesseract_error_logged = False
 
 LOCAL_TESSERACT_EXE = str(TESSERACT_EXE)
@@ -275,9 +282,9 @@ def _ensure_tesseract_cmd(logger: logging.Logger) -> bool:
         os.environ["TESSDATA_PREFIX"] = tessdata_dir
         return True
     # 可选兜底：主引擎是 RapidOCR，缺 tesseract.exe 不是故障。
-    # 这个函数会在每次 RapidOCR 返回空时被调用，打 ERROR 会刷屏，
+    # 这个函数会在每次 OCR 返回空时被调用，打 ERROR 会刷屏，
     # 也会被误读成「OCR 挂了」（2026-11-07 更正）。
-    logger.debug("[OCR] 可选 Tesseract 兜底不可用，主引擎 RapidOCR 不受影响")
+    logger.debug("[OCR] 可选 Tesseract 兜底不可用，主引擎 onnxocr v6 不受影响")
     return False
 
 
@@ -1148,10 +1155,10 @@ def _find_text_center(target_text: str, region: Optional[Tuple[int, int, int, in
     screenshot = grab_screen(region=region) if region else grab_screen()
     target = _normalize_text(target_text)
 
-    # 优先使用 RapidOCR（中文识别准确率更高）
-    if _get_rapidocr_engine:
+    # 优先使用 onnxocr v6（中文识别准确率更高）
+    if _get_onnxocr_engine:
         try:
-            ocr_engine = _get_rapidocr_engine()
+            ocr_engine = _get_onnxocr_engine()
             if ocr_engine:
                 result, elapse = ocr_engine(np.asarray(screenshot))
                 if result:
@@ -1170,7 +1177,7 @@ def _find_text_center(target_text: str, region: Optional[Tuple[int, int, int, in
                                 center_y += region[1]
                             return center_x, center_y
         except Exception as e:
-            logging.getLogger("GameAutomation").debug(f"RapidOCR识别失败，回退到Tesseract: {str(e)}")
+            logging.getLogger("GameAutomation").debug(f"OCR识别失败，回退到Tesseract: {str(e)}")
 
     # 备选：使用 Tesseract OCR
     if pytesseract is None:
@@ -1327,22 +1334,22 @@ def _click_text_with_retry(
         logger.warning(f"已保存失败截图: {debug_file}")
         # 额外输出 OCR 框选叠加图，便于定位识别偏差
         try:
-            # 优先输出 RapidOCR 的调试信息
-            if _get_rapidocr_engine:
-                ocr_engine = _get_rapidocr_engine()
+            # 优先输出 onnxocr v6 的调试信息
+            if _get_onnxocr_engine:
+                ocr_engine = _get_onnxocr_engine()
                 if ocr_engine:
-                    rapid_result, _ = ocr_engine(np.asarray(shot))
-                    if rapid_result:
+                    ocr_result, _ = ocr_engine(np.asarray(shot))
+                    if ocr_result:
                         overlay = shot.copy()
                         draw = ImageDraw.Draw(overlay)
-                        for box, text, confidence in rapid_result:
+                        for box, text, confidence in ocr_result:
                             x1 = min(p[0] for p in box)
                             y1 = min(p[1] for p in box)
                             x2 = max(p[0] for p in box)
                             y2 = max(p[1] for p in box)
                             draw.rectangle((x1, y1, x2, y2), outline="blue", width=2)
                             draw.text((x1, max(0, y1 - 12)), f"{text}({confidence:.2f})", fill="cyan")
-                        overlay_path = os.path.join(debug_dir, f"rapidocr_overlay_{_normalize_text(text)}_{int(time.time())}.png")
+                        overlay_path = os.path.join(debug_dir, f"ocr_overlay_{_normalize_text(text)}_{int(time.time())}.png")
                         overlay.save(overlay_path)
 
             # 同时输出 Tesseract 的调试信息作为对比
@@ -1467,8 +1474,11 @@ def _ocr_scan(
     logger: logging.Logger,
     hwnd: Optional[int] = None,
     region: Optional[Tuple[int, int, int, int]] = None,
+    engine: Optional[object] = None,
 ) -> Tuple[List[Dict], Optional[Image.Image], Optional[Tuple[int, int, int, int]]]:
     """执行一次 OCR，返回 (识别结果, 实际截图, 实际识别区域)。
+
+    engine: 指定推理引擎（如 onnxocr v6 高精度引擎）；None 用默认引擎。
 
     box 是截图局部坐标，center 已换算成屏幕绝对坐标；截图供结构化匹配的
     标注图使用。其余防护逻辑与旧 ocr_window_content 完全一致：
@@ -1548,16 +1558,15 @@ def _ocr_scan(
     except Exception as exc:
         logger.debug("[OCR防护] 坐标系自检失败: %s", exc)
 
-    # 使用 RapidOCR
-    if _get_rapidocr_engine:
+    # 使用 onnxocr v6（唯一引擎；老 RapidOCR v3/v4/v5 已删）
+    if _get_onnxocr_engine:
         try:
-            ocr_engine = _get_rapidocr_engine()
+            ocr_engine = engine if engine is not None else _get_onnxocr_engine()
             if ocr_engine:
                 result, elapse = ocr_engine(np.asarray(screenshot))
                 if result:
                     for box, text, confidence in result:
-                        # rapidocr_onnxruntime 1.2.x 的 score 是字符串，必须转 float，
-                        # 否则下游 `confidence >= min_confidence` 会 str>=float 崩溃
+                        # onnxocr 返回的 score 是 float；防御性转 float 保持兼容
                         try:
                             confidence = float(confidence)
                         except (TypeError, ValueError):
@@ -1576,20 +1585,20 @@ def _ocr_scan(
                             "confidence": confidence,
                             "box": (x1, y1, x2, y2),
                             "center": (center_x, center_y),
-                            "source": "rapidocr"
+                            "source": "onnxocr_v6",
                         })
-                    # 1.2.x 的 elapse 是 [det, cls, rec] 列表，不能直接 :.1f 格式化
+                    # onnxocr elapse 是单值 float；列表形式（老 rapidocr）也兼容
                     if isinstance(elapse, (list, tuple)):
                         elapse_ms = sum(float(e) for e in elapse) * 1000
                     else:
                         elapse_ms = float(elapse or 0) * 1000
-                    logger.debug(f"[RapidOCR] 识别到 {len(results)} 个文本区域，耗时 {elapse_ms:.1f}ms")
+                    logger.debug(f"[onnxocr v6] 识别到 {len(results)} 个文本区域，耗时 {elapse_ms:.1f}ms")
                     if len(results) <= 5:  # 只在数量少时输出详细信息
                         for i, r in enumerate(results):
                             logger.debug(f"  [{i+1}] \"{r['text']}\" ({r['confidence']:.2f}) @ {r['center']}")
                     return _check_log_contamination(logger, results), screenshot, current_region
         except Exception as e:
-            logger.debug(f"RapidOCR识别失败: {str(e)}")
+            logger.debug(f"onnxocr v6 识别失败: {str(e)}")
 
     # 备选：使用 Tesseract
     if pytesseract and _ensure_tesseract_cmd(logger):
@@ -1630,7 +1639,7 @@ def _ocr_scan(
         except Exception as e:
             if not _tesseract_error_logged:  # 只记录一次错误
                 logger.warning(f"Tesseract初始化失败: {str(e)}")
-                logger.warning("后续将仅使用 RapidOCR 进行识别")
+                logger.warning("后续将仅使用 onnxocr v6 进行识别")
                 _tesseract_error_logged = True
 
     return _check_log_contamination(logger, results), screenshot, current_region
@@ -1640,9 +1649,10 @@ def ocr_window_content(
     logger: logging.Logger,
     hwnd: Optional[int] = None,
     region: Optional[Tuple[int, int, int, int]] = None,
+    engine: Optional[object] = None,
 ) -> List[Dict]:
     """对窗口/区域做一次 OCR，只返回识别结果（防护逻辑见 _ocr_scan）。"""
-    results, _screenshot, _region = _ocr_scan(logger, hwnd=hwnd, region=region)
+    results, _screenshot, _region = _ocr_scan(logger, hwnd=hwnd, region=region, engine=engine)
     return results
 
 
@@ -1659,6 +1669,7 @@ def ocr_find_any_text(
     ambiguous_action: str = "warn",
     debug_tag: Optional[str] = None,
     save_debug: bool = False,
+    engine: Optional[object] = None,
 ) -> Optional[Dict]:
     """抄 ok-script match=[...]：单次 OCR 统一过滤多候选，避免每候选截一次屏。
 
@@ -1695,7 +1706,8 @@ def ocr_find_any_text(
         # 配了锚点/几何约束却仍按「先命中先返回」等于没配，自动升级为结构化排序
         mode = "smart"
 
-    results, screenshot, _scan_region = _ocr_scan(logger, hwnd=hwnd, region=region)
+    results, screenshot, _scan_region = _ocr_scan(
+        logger, hwnd=hwnd, region=region, engine=engine)
 
     if mode == "legacy":
         normalized = [_normalize_text(t) for t in candidates]

@@ -197,19 +197,29 @@ TEA_TOPIC_MARKERS = ("选择话题", "结束茶憩")             # 话题菜单�
 TEA_SUMMARY_MARKERS = ("茶憩结束", "点击退出")           # 结束摘要
 TEA_DRINK_TEXTS = ("喝茶", "再来一杯", "请喝茶", "干杯")  # 喝茶交互文字（场景内动态出现）
 # 2026-11-03 实锤：点首个角色卡后画面停在「20 个文字区域」的页面 23 秒（不是茶憩
-# 场景），之后按老逻辑点底部对话框 (0.50,0.92)，反而把页面退回休息室。说明点角色卡
-# 进的是角色详情/邀约页，还需要再点一次明确入口。这里只认语义明确的词，**不碰
-# 「确认」**——同页有「将离开休息室」的确认框，误点会直接退回上一层。
-TEA_INVITE_TEXTS = ("邀请", "开始茶憩", "一同品茶", "邀约")
+# 场景），之后按老逻辑点底部对话框 (0.50,0.92)，反而把页面退回休息室。这里只认
+# 语义明确的词，**不碰「确认」**——同页有「将离开休息室」的确认框，误点会直接
+# 退回上一层。
+# 2026-11-07 13:20 当帧（20261107_132050）修正认识：点角色卡后页面根本不跳页——
+# 当帧就是角色选择页本身（首位角色卡已打勾、今日可邀份额 3/3、底部说明文字
+# 「每名同调者一天仅能邀请一次…」就在这页上），之前认定的"角色详情页"多半就是它。
+# 真正的前进按钮是右下「喝茶」圆钮，把它加进候选（OCR 哪天认出竖排字就直接点）。
+TEA_INVITE_TEXTS = ("喝茶", "邀请", "开始茶憩", "一同品茶", "邀约")
 # 2026-11-04 实锤：角色详情页的说明文字
 # 「每名同调者一天仅能邀请一次，重复邀请请使用通用邀请函」也含「邀请」，
 # 旧逻辑按子串命中后点了这行正文，页面原地不动 → 茶憩永远进不去。
 # 邀请入口只认短按钮名；含这些字样的一律不是按钮。
-TEA_INVITE_EXCLUDE_TEXTS = ("一天仅能邀请一次", "重复邀请", "通用邀请函")
+TEA_INVITE_EXCLUDE_TEXTS = ("一天仅能邀请一次", "重复邀请", "邀请函", "邀约函")
+# 「邀请函」兜住一族道具名：通用邀请函/定向邀请函……11-06 09:13 实锤 legacy 子串
+# 匹配把详情页道具「定向邀请函」(0.82) 当邀请按钮点了（5 个字，≤12 过滤拦不住），
+# 等于没点，之后喝茶轮询在错误页面上盲点漫游。真正的按钮是「邀请/开始茶憩」。
 TEA_INVITE_MAX_CHARS = 12
 # 关键点击位（窗口相对比例，实测 @1919x1079）
 TEA_CONFIRM_OK = (0.623, 0.634)          # 前往确认-确定 (1196,684)
 TEA_FIRST_CHARACTER = (0.412, 0.417)     # 角色选择页首个角色卡 (790,450)
+# 2026-11-07 13:20 当帧（960x540）实测：角色选择页右下「喝茶」圆钮中心。竖排
+# 艺术字，当帧 OCR 15 个文字区域里完全没有它——OCR 候选命中不了，只能按比例兜底。
+TEA_SELECT_DRINK_RATIO = (0.827, 0.800)
 TEA_FIRST_TOPIC = (0.753, 0.360)         # 话题菜单第一个话题 (1445,388)
 TEA_DIALOGUE_CLICK = (0.50, 0.92)        # 对话框区域（点击推进对话）
 TEA_SUMMARY_CLICK = (0.50, 0.60)         # 摘要区域（点击退出）
@@ -259,6 +269,14 @@ MEMORY_LIST_MARKERS = ("前往技能列表", "只看红点", "排序与筛选")
 EVENT_DIALOG_MARKERS = ("定巡之礼",)
 EVENT_DIALOG_CLOSE = (0.913, 0.239)
 EVENT_DIALOG_CLAIM_MARKERS = ("可领取",)   # 只在规则命中定巡之礼后查找，不会误伤其它页面
+# 活动公告横幅（2026-11-04 #163 取证：生死轮回×叶脉联结计划，加载完弹出；
+# 用户 2026-11-07 拍板「他只是个活动公告，点一下就好了」）。特征只取公告独有
+# 的关闭提示/勾选文案——「叶脉联结计划」绝不能当特征：叶脉联结页面上就有这
+# 五个字（10-20 曾实锤误命中），拿它当特征会在领叶脉奖励时误点空白。
+# 公告是模态的「点击空白区域关闭」：点左边缘空白（11-04 帧 x<340/1920 无
+# 任何 UI），不碰横幅本体（正文/「前往获取」点下去会进活动页）。
+EVENT_ANNOUNCE_MARKERS = ("点击空白区域关闭", "本期不再显示")
+EVENT_ANNOUNCE_BLANK = (0.10, 0.50)   # 11-04 帧实测：横幅左界 ≈ x0.18，左边缘是空白
 # 加载过场（10-31/11-01/11-03/11-04/11-06 五次「未匹配任何已知场景」失败全是它，
 # #120/#129/#153/#163/#197）：白荆拉丁 logo「ASHECHOES」五帧全部在场；提示文字
 # 每日轮换（刻印属性/漫巡中/真实伤害…）、进度 99%/%86 不稳，都不能当特征。
@@ -1756,6 +1774,23 @@ def _scene_exit_event_dialog(logger: logging.Logger, hwnd, results, stop_check=N
     return True
 
 
+def _scene_exit_event_announce(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
+    """活动公告横幅：点空白区域关闭（公告自己的提示就是这么写的）。
+
+    2026-11-07 用户拍板「他只是个活动公告，点一下就好了」。特征用公告独有的
+    「点击空白区域关闭/本期不再显示」，绝不用「叶脉联结计划」（叶脉页同名，
+    见 EVENT_ANNOUNCE_MARKERS 注释）。空白点取左边缘 (0.10,0.50)，避开横幅
+    本体（点正文/「前往获取」会进活动页）和主界面顶栏/底栏。
+    """
+    hit = _pick_result(logger, hwnd, results, EVENT_ANNOUNCE_MARKERS, min_conf=0.55)
+    if not hit:
+        return False
+    _click_ratio(logger, hwnd, EVENT_ANNOUNCE_BLANK, "活动公告点空白关闭")
+    logger.info(f"[白荆回廊·日常] 场景退出·活动公告：点空白关闭（命中 {hit['text']!r}）")
+    time.sleep(1.2)
+    return True
+
+
 def _scene_exit_tea_room(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
     """茶憩 3D 房间：左上「返回」→ 退出确认框「确认」（与休息室同一套离开交互）。
 
@@ -1795,6 +1830,8 @@ def _scene_exit_cat_retail(logger: logging.Logger, hwnd, results, stop_check=Non
 SCENE_RULES = (
     # 加载过场排最前：加载中点哪都无效，先等它过去，别让真页面在 unknown 里被放弃
     {"name": "加载过场", "markers": LOADING_SCREEN_MARKERS, "min_conf": 0.5, "exit": _scene_exit_loading},
+    # 活动公告横幅在遮罩前：加载完它经常第一个弹出来挡路（11-04/11-06 两次实录）
+    {"name": "活动公告", "markers": EVENT_ANNOUNCE_MARKERS, "min_conf": 0.55, "exit": _scene_exit_event_announce},
     {"name": "过场遮罩", "markers": ("点击屏幕继续",), "min_conf": 0.5, "exit": _scene_exit_overlay},
     {"name": "计划等级提升", "markers": LEVEL_UP_MARKERS, "min_conf": 0.55,
      "exact_only": True, "exit": _scene_exit_level_up},
@@ -2141,19 +2178,26 @@ def _invite_hit_usable(hit: Optional[Dict]) -> bool:
 
 
 def _nudge_into_tea_scene(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """点完角色卡后补一脚：先快检茶憩场景，没进就找详情页的「邀请/开始茶憩」。
+    """点完角色卡后补一脚：先快检茶憩场景，没进就找「邀请/喝茶」类推进按钮。
 
     2026-11-03 实锤：11:34:24 点了首个角色卡，之后 23 秒画面稳定在 20 个文字
     区域（不是茶憩场景），接着老逻辑点底部对话框 (0.50,0.92) 把页面退回了休息室。
-    也就是说这一下进的是角色详情/邀约页，还差一次「邀请」类点击。
 
     2026-11-04 实锤：这页的说明文字「每名同调者一天仅能邀请一次，重复邀请请
     使用通用邀请函」含「邀请」，旧逻辑把正文当按钮点，页面原地不动。现在只认
-    短按钮名并排除这些说明文字；找不到就什么都不点，交给后面的
-    `_wait_page_markers` 按老逻辑处理，避免盲点把页面退掉。
+    短按钮名并排除这些说明文字。
 
-    返回是否已确认进入场景或已点了邀请入口。
+    2026-11-07 13:20 当帧再修正：点角色卡后页面根本不跳页——当帧就是角色选择页
+    本身（首位角色卡已打勾），真正的前进按钮是右下「喝茶」圆钮。它是竖排艺术字，
+    当帧 OCR 15 个文字区域里完全没有它，OCR 候选基本命不中；所以在确认仍停留
+    角色选择页（TEA_SELECT_MARKERS 在场）时按 TEA_SELECT_DRINK_RATIO 兜底点
+    一下，与休息室「午后茶憩」入口的 OCR 优先/比例兜底同模式。快检不过就什么都不
+    点交给调用方按失败处理，避免在未知页面盲点把页面退掉。
+
+    返回是否已确认进入场景或已点了推进入口（邀请按钮 / 选择页「喝茶」）。
     """
+    # 点角色卡可能直接把镜头切进「关注特写」（2026-10-26 12:50 同款），先退掉再找入口
+    _exit_focus_if_present(logger, hwnd, stop_check=stop_check)
     if _wait_page_markers(logger, hwnd, TEA_SCENE_MARKERS, timeout=8.0, stop_check=stop_check):
         return True
     if _stopped(stop_check):
@@ -2175,10 +2219,62 @@ def _nudge_into_tea_scene(logger: logging.Logger, hwnd, stop_check=None) -> bool
         logger.info(f"[白荆回廊·日常] 角色详情页点击 {hit['text']!r} @ {hit['center']}")
         time.sleep(1.5)
         return True
+    if _wait_page_markers(
+        logger, hwnd, TEA_SELECT_MARKERS, timeout=2.0, stop_check=stop_check
+    ):
+        # 仍停在角色选择页：点卡只是打勾选中，差的是右下「喝茶」确认（13:20 实锤）
+        _click_ratio(logger, hwnd, TEA_SELECT_DRINK_RATIO, "角色选择页右下「喝茶」")
+        time.sleep(1.5)
+        return True
     logger.warning(
-        "[白荆回廊·日常] 点角色卡后未见茶憩场景，也没找到「邀请/开始茶憩」类按钮"
+        "[白荆回廊·日常] 点角色卡后未见茶憩场景，也没找到「邀请/开始茶憩/喝茶」类按钮"
     )
     return False
+
+
+def _exit_focus_if_present(logger: logging.Logger, hwnd, stop_check=None) -> bool:
+    """链路撞见「关注特写」就点右上「退出关注」关掉（2026-11-07 用户指路）。
+
+    茶憩处理器自己的等待/推进循环不查场景登记表；11-06 09:15 实锤：链路停在
+    特写镜头里干等茶憩纪念函直到失败——特写帧上「退出关注」(0.80) 明晃晃挂着
+    没人点。判定口径与登记表「关注特写」规则完全一致（FOCUS_MODE_REGION 限定
+    右上角，防止把别处的同名词当特写）。
+    """
+    hit = _pick_result(
+        logger, hwnd, _scene_results(logger, hwnd),
+        FOCUS_MODE_MARKERS, frac_region=FOCUS_MODE_REGION, min_conf=0.55,
+    )
+    if not hit:
+        return False
+    _pyautogui_click_guarded(*hit["center"])
+    logger.info(f"[白荆回廊·日常] 点「退出关注」退出特写 @ {hit['center']}")
+    time.sleep(1.5)
+    return True
+
+
+def _retry_tea_entry_after_focus(logger: logging.Logger, hwnd, stop_check=None) -> bool:
+    """退出关注特写后按休息室路径重找一次茶憩入口（退出特写只会回到休息室全景）。
+
+    2026-11-06 09:15 链路实锤：休息室 →「午后茶憩」→ 角色卡之后画面进了特写，
+    场景等待/两杯喝茶全部空转。只退特写不重找入口的话，后面照样等不到场景。
+    """
+    entry_hit = _ocr_best_match(logger, ("午后茶憩",), hwnd, min_conf=0.55)
+    if entry_hit:
+        _pyautogui_click_guarded(*entry_hit["center"])
+        logger.info(f"[白荆回廊·日常] 点击休息室「午后茶憩」文字 @ {entry_hit['center']}")
+    else:
+        _click_ratio(logger, hwnd, REST_ROOM_TEA_ENTRY, "休息室「午后茶憩」立牌卡")
+    time.sleep(2.0)
+    if _wait_page_markers(
+        logger, hwnd, TEA_SELECT_MARKERS, timeout=TEA_SELECT_TIMEOUT_SEC, stop_check=stop_check
+    ):
+        _click_ratio(logger, hwnd, TEA_FIRST_CHARACTER, "首个角色卡")
+        if _nudge_into_tea_scene(logger, hwnd, stop_check=stop_check):
+            return True
+    # 点「午后茶憩」后可能直接进场景（无角色选择页）
+    return _wait_page_markers(
+        logger, hwnd, TEA_SCENE_MARKERS, timeout=TEA_SCENE_TIMEOUT_SEC, stop_check=stop_check
+    )
 
 
 def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> bool:
@@ -2252,22 +2348,34 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
         return False
     # 4) 茶憩场景 → 喝茶循环
     if nudge_ok is False:
-        # 点了角色卡，但既没进场景也没找到邀请入口：页面多半停在角色详情页。
-        # 2026-11-03 实锤——这时按老逻辑点底部 (0.50,0.92) 会把页面退回休息室，
-        # 然后两轮「喝茶」轮询全空。这里再给 10s 兜底，还进不去就落证据收工。
+        # 点了角色卡，但既没进场景、也没找到「邀请」入口、也没能在选择页点「喝茶」：
+        # 页面停在登记表之外的地方。2026-11-03 实锤——这时按老逻辑点底部
+        # (0.50,0.92) 会把页面退回休息室，然后两轮「喝茶」轮询全空。这里再给 10s
+        # 兜底，还进不去就落证据收工。
+        # 2026-11-07：特写在场时等不到场景，先退特写并按休息室路径重找一次入口
+        # （2026-11-06 09:15 实锤：特写帧右上「退出关注」(0.80) 没人点，链路干等
+        # 到失败——用户指路「点那个 X 就关掉了」）。
         if not _wait_page_markers(
             logger, hwnd, TEA_SCENE_MARKERS, timeout=10.0, stop_check=stop_check
         ):
-            logger.warning("[白荆回廊·日常] 角色卡点击后仍未进入茶憩场景，跳过盲点推进")
-            _record_step_failure(
-                logger, hwnd, "午后茶憩",
-                "点角色卡后停在角色详情/未知页，未找到「邀请/开始茶憩」入口",
-            )
-            _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-            return False
+            if not (
+                _exit_focus_if_present(logger, hwnd, stop_check=stop_check)
+                and _retry_tea_entry_after_focus(logger, hwnd, stop_check=stop_check)
+            ):
+                logger.warning("[白荆回廊·日常] 角色卡点击后仍未进入茶憩场景，跳过盲点推进")
+                _record_step_failure(
+                    logger, hwnd, "午后茶憩",
+                    "点角色卡后停在未知页，未找到「邀请/开始茶憩/喝茶」推进入口",
+                )
+                _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+                return False
     scene_seen = _wait_page_markers(
         logger, hwnd, TEA_SCENE_MARKERS, timeout=TEA_SCENE_TIMEOUT_SEC, stop_check=stop_check
     )
+    if not scene_seen and _exit_focus_if_present(logger, hwnd, stop_check=stop_check):
+        # 场景等待期间画面在「关注特写」里（11-06 09:15 同款）：退掉特写回休息室
+        # 全景后，重走一遍「午后茶憩 → 角色卡」入口，进不去按原口径失败
+        scene_seen = _retry_tea_entry_after_focus(logger, hwnd, stop_check=stop_check)
     if not scene_seen:
         logger.warning("[白荆回廊·日常] 未检测到茶憩场景（茶憩纪念函）")
     topic_clicked = False
@@ -2297,6 +2405,18 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
             # 摘要已出现 → 不用再喝
             if _ocr_best_match(logger, TEA_SUMMARY_MARKERS, hwnd, min_conf=0.55):
                 break
+            if _exit_focus_if_present(logger, hwnd, stop_check=stop_check):
+                continue    # 特写镜头里不盲点对话框（点了只会乱聚焦/进出特写）
+            # 盲点推进只允许发生在茶憩场景里（2026-11-07 根因收口）：
+            # 场景没确认就只轮询不点——11-03 实锤盲点把角色详情页点回休息室，
+            # 11-06 实锤之后 100 秒在错误页面每 2.5s 盲点一次，12 次失败 10 次
+            # 死在休息室、2 次点中场景里的角色/家具停在「关注特写」
+            in_scene = scene_seen or bool(
+                _ocr_best_match(logger, TEA_SCENE_MARKERS, hwnd, min_conf=0.55)
+            )
+            if not in_scene:
+                time.sleep(2.5)
+                continue
             _click_ratio(logger, hwnd, TEA_DIALOGUE_CLICK, "对话框（推进对话）")
             time.sleep(2.5)
         if drink_hit:

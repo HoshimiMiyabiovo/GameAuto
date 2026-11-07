@@ -61,10 +61,13 @@
       {
         "name": "等待数据加载完毕",
         "action": "wait_template",
-        "target_text": "游戏数据加载完毕",
+        "target_text": "加载完",
         "enable_ocr_fallback": true,
         "timeout_sec": 60,
-        "clicks": 0
+        "clicks": 0,
+        "optional_if_missing": true,
+        "_comment": "2026-11-07 定案（原生截图逐层实测）：目标字在脚本右下 10px 小日志面板，默认引擎（v3 mobile）全窗扫描必漏（检测器对密集 UI 降采样+小框竞争），紧裁剪+短词能命中但字符级噪声大。最终方案：ocr_precision=true 升级高精度引擎（auto=onnxocr PP-OCRv6 GPU，回退 v4 server），全窗扫描直接命中「游戏数据加载完毕！」（v6 0.4s/轮、v4 1.0s/轮）。仍配 optional_if_missing：高精度引擎不可用（缺模型/缺 GPU）时跳过进「登录」，登录 240s 重试兜底。",
+        "ocr_precision": true
       },
       {
         "name": "登录",
@@ -998,6 +1001,12 @@
       {
         "name": "信号残响每月兑换",
         "action": "monthly_exchange",
+        "purchase_verify": {
+          "labels": [
+            "月剩余"
+          ]
+        },
+        "_comment_purchase_verify": "2026-11-07 回填 11-06 实机教训：只看「点过确认」会假成功（前两次库存 3/5、20/20 一点没变）。买前/买后各扫一次整窗 OCR 里的「月剩余×N」数字签名，两次都读到且完全相同就判失败、不写月度标记；读不到（弹窗遮挡/页面没这个标签）保守放行。实机日志 data/artifacts/zzz_stage1.log 里买前 月剩余×3/×5、买满后两商品售罄消失，签名必变。",
         "log_label": "信源兑换",
         "item_scroll_search": false,
         "shop_entry_template": "assets/templates\\绝区零-商城入口.png",
@@ -1114,17 +1123,12 @@
       },
       {
         "name": "打开功能菜单",
-        "action": "click_template",
-        "template": "assets/templates\\绝区零-主菜单按钮.png",
-        "target_text": "",
-        "enable_ocr_fallback": false,
-        "confirm_type": "none",
-        "timeout_sec": 30,
-        "clicks": 1,
+        "action": "press_key",
+        "key": "esc",
+        "presses": 1,
         "post_delay_sec": 2.5,
-        "on_fail": "retry_step",
-        "max_attempts": 3,
-        "_comment": "主界面右下角省略号按钮（OneDragon normal_world/message 模板），打开丽都功能菜单。"
+        "timeout_sec": 10,
+        "_comment": "2026-11-07 从模板点右下···按钮换成扫描码 ESC：12:09 实机模板命中(1777,967)并点击(按住0.06s)后主菜单根本没开出来——confirm_type:none 无验证默认成功，步骤4在主世界空找「后勤商店」4 轮失败（#209）。11-05 实机验证过扫描码 ESC 才被 Unity 接收（monthly_exchange._open_exchange_page 同款，当天 12:07 ZZZ_MONTHLY 实测开出商城买到母带页签）。后勤商店链路 11-06 拆分前从没实机跑过，···点击是 10-21 设计时写下的未验证路径。"
       },
       {
         "name": "点击后勤商店",
@@ -1154,6 +1158,11 @@
       {
         "name": "后勤商店采购",
         "action": "zzz_shop_buy",
+        "purchase_verify": {
+          "labels": [
+            "月剩余"
+          ]
+        },
         "confirm_template": "assets/templates\\绝区零-商店-确认.png",
         "timeout_sec": 1800,
         "post_delay_sec": 3.0,
@@ -1725,6 +1734,12 @@
       {
         "name": "迷迭兑换每月兑换",
         "action": "monthly_exchange",
+        "purchase_verify": {
+          "labels": [
+            "本月库存"
+          ]
+        },
+        "_comment_purchase_verify": "异环商店页 OCR 是「本月库存：x/y」（data/artifacts/nte_stage1.log 实机帧），签名口径同绝区零；读不到就跳过，不误伤。",
         "log_label": "迷迭兑换",
         "item_scroll_search": false,
         "shop_entry_template": "assets/templates\\异环-商城入口.png",

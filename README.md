@@ -37,8 +37,8 @@
 
 - Windows 10/11 操作系统（大量使用 Win32 API）
 - Python 3.10+
-- 主 OCR：**RapidOCR**（`rapidocr-onnxruntime` + `onnxruntime-gpu`）；所有按文字定位点击都走它，建议 NVIDIA 显卡 / CUDA，无 CUDA 会退回 CPU 且明显变慢
-- Tesseract：**Python 包 `pytesseract` 由 `setup_deps.bat` 自动安装（必装）**；`tesseract.exe` + `chi_sim` 中文包**可选**，仓库不含二进制（见下节）。仅当 RapidOCR 返回空或异常时才尝试它；GUI 的「XM Seer 测试」独立工具是唯一硬依赖 `tesseract.exe` 的入口。
+- 主 OCR：**onnxocr PP-OCRv6**（vendored `src/onnxocr` + `onnxruntime-gpu`）；所有按文字定位点击都走它，建议 NVIDIA 显卡 / CUDA，无 CUDA 会退回 CPU 且明显变慢
+- Tesseract：**Python 包 `pytesseract` 由 `setup_deps.bat` 自动安装（必装）**；`tesseract.exe` + `chi_sim` 中文包**可选**，仓库不含二进制（见下节）。仅当 onnxocr v6 返回空或异常时才尝试它；GUI 的「XM Seer 测试」独立工具是唯一硬依赖 `tesseract.exe` 的入口。
 
 ### 克隆后仓库里没有什么
 
@@ -46,7 +46,7 @@
 
 | 路径 | 体积 | 影响 | 怎么补 |
 | --- | --- | --- | --- |
-| `tools/tesseract/` | ~251 MB | 仅 OCR 兜底；主 OCR RapidOCR 不装也能跑，Python 包 `pytesseract` 已由 `setup_deps.bat` 装好 | 安装 Tesseract 5.x 并加入 `PATH`，或把官方安装目录拷到 `tools/tesseract/` |
+| `tools/tesseract/` | ~251 MB | 仅 OCR 兜底；主 OCR onnxocr v6 不装也能跑，Python 包 `pytesseract` 已由 `setup_deps.bat` 装好 | 安装 Tesseract 5.x 并加入 `PATH`，或把官方安装目录拷到 `tools/tesseract/` |
 | `tools/flet/` | ~216 MB | 旧版 Flet 回退界面 | 不用旧界面可忽略 |
 | `data/artifacts/ref_*.png` | 若干 | 文档里「见 `ref_xxx.png`」都是本机截图，仓库未收录 | 看代码里的窗口比例常量与注释即可，点击坐标不依赖这些图 |
 | `app_config.json`、`flow_configs.json` | — | 每台机器的本地配置 | **首次运行自动从 `.example.json` 复制**，无需手动创建 |
@@ -177,7 +177,7 @@ set PYTHONPATH=%CD%\src
 - `flet` — 旧 GUI 框架，保留作回退
 - `psutil` — 进程管理；`pywin32` — Windows API 与 DPAPI 密码加密
 - `pyautogui` / `opencv-python` / `Pillow` — 屏幕自动化与图像模板匹配
-- `pytesseract` — 可选 OCR 兜底的 Python 绑定（必装，但不需要对应的 exe）；`rapidocr-onnxruntime` + `onnxruntime-gpu` — **主 OCR 引擎**（必须 GPU 版，CPU 版会静默降级）
+- `pytesseract` — 可选 OCR 兜底的 Python 绑定（必装，但不需要对应的 exe）；`onnxruntime-gpu` — **主 OCR 引擎 onnxocr PP-OCRv6**（vendored 于 `src/onnxocr`，必须 GPU 版，CPU 版会静默降级）
 - `windows-capture` — 窗口截屏；`numpy` — 图像处理
 - `genshin` — 米哈游协议（签到、便笺、stoken 换取）
 - `browser-cookie3` — 浏览器 Cookie 提取；`qrcode` — 扫码登录二维码

@@ -58,8 +58,8 @@ def test_readme_honest():
           "项目已内置在 `tools/tesseract/`" not in r)
     check("目录树不再把 tools 说成内置二进制",
           "内置工具（Tesseract OCR" not in r)
-    check("写明主 OCR 是 RapidOCR、Tesseract 只在它失败时兜底",
-          "主 OCR：**RapidOCR**" in r and "仅当 RapidOCR 返回空或异常时才尝试" in r)
+    check("写明主 OCR 是 onnxocr v6、Tesseract 只在它失败时兜底",
+          "主 OCR：**onnxocr PP-OCRv6**" in r and "仅当 onnxocr v6 返回空或异常时才尝试" in r)
     check("区分「Python 包必装」与「exe 可选」",
           "自动安装（必装）" in r and "中文包**可选**" in r)
     check("点明唯一硬依赖 exe 的入口",
@@ -97,7 +97,7 @@ def test_setup_deps():
     check("不再残留 /4] 旧编号", "/4]" not in b)
     check("检查 tools/tesseract/tesseract.exe", "tools\\tesseract\\tesseract.exe" in b)
     check("检查 PATH 中的 tesseract", "where tesseract" in b)
-    check("明确主 OCR 不受影响", "RapidOCR" in b and "不受影响" in b)
+    check("明确主 OCR 不受影响", "onnxocr v6" in b and "不受影响" in b)
     check("安装结束提示先跑自检", "先跑自检" in b and "pytest tests -q" in b)
     check("括号配对", b.count("(") == b.count(")"), (b.count("("), b.count(")")))
 
@@ -117,17 +117,17 @@ def test_repo_contract():
 
 
 def test_missing_tesseract_is_soft():
-    print("[5] 缺 Tesseract 不阻断启动，且 RapidOCR 是主引擎")
+    print("[5] 缺 Tesseract 不阻断启动，且 onnxocr v6 是主引擎")
     ocr = text("src/game_auto/runtime/ocr_click_tester.py")
     dm = text("src/game_auto/services/dependency_manager.py")
     rr = text("src/game_auto/runtime/foreground_flow_runner.py")
     check("_ensure_tesseract_cmd 有 PATH 兜底",
           'shutil.which("tesseract")' in ocr)
     check("OCR 兜底入口先判可用性", "if not _ensure_tesseract_cmd(logger):" in ocr)
-    check("主 OCR 是 RapidOCR", "RapidOCR" in ocr or "rapidocr" in ocr.lower())
+    check("主 OCR 是 onnxocr v6", "onnxocr v6" in ocr or "onnxocr_v6" in ocr)
     seg = ocr[ocr.find("def _ocr_scan"):ocr.find("def ocr_window_content")]
-    check("_ocr_scan 里 RapidOCR 成功即返回，Tesseract 只在其后兜底",
-          seg.find('"source": "rapidocr"') < seg.find("备选：使用 Tesseract")
+    check("_ocr_scan 里 onnxocr v6 成功即返回，Tesseract 只在其后兜底",
+          seg.find('"source": "onnxocr_v6"') < seg.find("备选：使用 Tesseract")
           and "return _check_log_contamination(logger, results)" in seg)
     check("缺 exe 记 info 而非误导性 warning",
           'report.add_info("未检测到 tesseract.exe：可选 OCR 兜底不可用' in dm
@@ -144,17 +144,18 @@ def test_missing_tesseract_is_soft():
 
 
 def test_engine_source_of_truth():
-    print("[6] 引擎口径：Python 包必装 / exe 可选 / 下游走 RapidOCR")
+    print("[6] 引擎口径：Python 包必装 / exe 可选 / 下游走 onnxocr v6")
     req = text("requirements.txt")
     r = text("README.md")
     check("pytesseract 在 requirements 里（必装）",
           re.search(r"^pytesseract", req, re.M) is not None)
-    check("RapidOCR 套件在 requirements 里",
-          "rapidocr-onnxruntime" in req and "onnxruntime-gpu" in req)
+    check("onnxocr 主引擎依赖在 requirements 里",
+          "onnxruntime-gpu" in req and "rapidocr-onnxruntime" not in req)
     check("README 明确 exe 可选、仓库不含二进制", "仓库不含二进制" in r)
     ocr = text("src/game_auto/runtime/ocr_click_tester.py")
-    check("ocr_find_any_text 直接调 _ocr_scan（RapidOCR 主链路）",
-          "_ocr_scan(logger, hwnd=hwnd, region=region)" in ocr)
+    check("ocr_find_any_text 直接调 _ocr_scan 并透传 engine（onnxocr v6 主链路）",
+          "results, screenshot, _scan_region = _ocr_scan(" in ocr
+          and "logger, hwnd=hwnd, region=region, engine=engine" in ocr)
     check("setup_deps 说明 Python 包已随依赖装好",
           "Python 包 pytesseract 已随依赖装好" in text("setup_deps.bat"))
 

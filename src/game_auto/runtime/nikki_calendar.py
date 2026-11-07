@@ -996,13 +996,13 @@ def _exchange_entry_point(entry: Dict, rect) -> Tuple[int, int]:
 
 
 def _resonance_entry_point(entry: Dict, rect) -> Tuple[int, int]:
-    """左列「共鸣商店」与「晶石兑换」同构：圆形图标在上、文字在下，点文字无效。
+    """左列「共鸣商店」入口：直接点**文字中心**。
 
-    11-06 22:22 实机：文字中心 (202,915) 点下去页面纹丝不动；上移约 1.1 个
-    文字框高到 (202,870) 一次进入共鸣商店页（澎湃/静谧两页签出现）。
-    两处共用同一套相对偏移，换分辨率自适应。
+    与「晶石兑换」不同构：晶石兑换是图标在上、文字在下，点文字无效；
+    共鸣商店文字中心即可命中（2026-11-07 #211 实机：上移到图标圆区
+    反而点不进去，页面纹丝不动）。rect 仅为签名兼容，不用。
     """
-    return _exchange_entry_point(entry, rect)
+    return tuple(entry["center"])
 
 
 def _claim_pair_rewards(logger: logging.Logger, hwnd: int, stop_check=None) -> Tuple[int, str]:

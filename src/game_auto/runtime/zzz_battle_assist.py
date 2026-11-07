@@ -395,9 +395,12 @@ class ZzzBattleAssist:
     # -- 动作 ---------------------------------------------------------------
     @staticmethod
     def _press(key: str, hold: float = 0.03) -> None:
-        pyautogui.keyDown(key)
-        time.sleep(hold)
-        pyautogui.keyUp(key)
+        # 2026-11-07 换扫描码按键（同 notorious _press_key）：11-05 实机证明
+        # pyautogui 的瞬时虚拟键事件会被 Unity 吞掉，恶名狩猎 F2 就是这么失败的
+        # （#210）。战斗普攻/技能/切人/闪避同为游戏内按键，统一 keybd_event。
+        from .foreground_flow_runner import press_key_scancode
+
+        press_key_scancode(key, hold_sec=max(0.05, float(hold)))
 
     @staticmethod
     def _click() -> None:
@@ -462,8 +465,20 @@ class ZzzBattleAssist:
         OneDragon 同样用「无视闪光」状态屏蔽这段时间的闪避——刻意为之，不是漏了。
         """
         is_mouse = str(key).lower().startswith("mouse")
-        down = (lambda: pyautogui.mouseDown(button="left")) if is_mouse else (lambda: pyautogui.keyDown(key))
-        up = (lambda: pyautogui.mouseUp(button="left")) if is_mouse else (lambda: pyautogui.keyUp(key))
+        if is_mouse:
+            down = (lambda: pyautogui.mouseDown(button="left"))
+            up = (lambda: pyautogui.mouseUp(button="left"))
+        else:
+            # 2026-11-07 键盘长按也走扫描码：pyautogui 虚拟键事件会被 Unity 吞
+            # （#210 F2 同款）。重复 down 期间保持按住语义，与 OneDragon 一致。
+            import win32api
+            import win32con
+            from .foreground_flow_runner import _scancode_vk
+
+            vk = _scancode_vk(key)
+            scan = win32api.MapVirtualKey(vk, 0)
+            down = (lambda: win32api.keybd_event(vk, scan, 0, 0))
+            up = (lambda: win32api.keybd_event(vk, scan, win32con.KEYEVENTF_KEYUP, 0))
         down()
         end = time.time() + max(0.0, float(seconds))
         while True:

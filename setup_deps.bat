@@ -47,7 +47,7 @@ if errorlevel 1 goto :fail
 echo [3/5] 校验 ONNX Runtime provider...
 "%PY%" -c "import onnxruntime as o; p=o.get_available_providers(); print('providers:', p); raise SystemExit(0 if 'CUDAExecutionProvider' in p else 2)"
 if errorlevel 2 (
-    echo [警告] 未检测到 CUDAExecutionProvider，RapidOCR 会退回 CPU。
+    echo [警告] 未检测到 CUDAExecutionProvider，onnxocr v6 会退回 CPU。
     echo        请确认装的是 onnxruntime-gpu，且没有被 CPU 版 onnxruntime 覆盖。
 )
 
@@ -66,7 +66,7 @@ if not errorlevel 1 set "TESS_OK=1"
 if "%TESS_OK%"=="1" (
     echo       OK: 已检测到 Tesseract
 ) else (
-    echo       [提示] 未检测到 tesseract.exe。主 OCR（RapidOCR）不受影响，
+    echo       [提示] 未检测到 tesseract.exe。主 OCR（onnxocr v6）不受影响，
     echo              Python 包 pytesseract 已随依赖装好，缺的是可选的 exe，
     echo              仅影响 OCR 兜底。需要时安装 Tesseract 5.x 并加入 PATH，
     echo              或把官方安装目录拷到 tools\tesseract\。

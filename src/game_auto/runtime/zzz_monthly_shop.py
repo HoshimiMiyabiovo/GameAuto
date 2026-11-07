@@ -26,6 +26,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from ..settings.paths import BASE_DIR
 from .monthly_shop_evidence import capture_shop_evidence
+from .ui_coords import CONFIRM_MIN_Y_RATIO
 
 LOGGER = logging.getLogger("GameAutomation")
 
@@ -54,6 +55,21 @@ REWARD_POPUP_TEXTS = ("获得物品", "点击空白区域关闭")
 REWARD_POPUP_DISMISS_FRAC = (0.92, 0.93)
 REWARD_POPUP_DISMISS_TRIES = 3
 REWARD_POPUP_SETTLE_SEC = 0.8
+
+# 2026-11-06 提权实机（data/artifacts/zzz_stage1.py）反复踩到：兑换确认弹窗的
+# **标题**就叫「兑换确认」@y≈316，真正的确认按钮在弹窗**底部** @y≈763（1080p）。
+# OCR 按「确认」找会先命中标题，点上去库存一点没扣，看起来却像"点了确认"。
+# 正式代码以前只走 confirm_template，模板失配时既没有 OCR 兜底，也不校验命中点
+# 是否在底部；11-06 上午 #201「加密母带 0/5（确认后弹窗未关）」即此通道。
+# 口径与探针一致：只认窗口下部（ui_coords.CONFIRM_MIN_Y_RATIO = 700/1080）的按钮词，
+# 模板命中也必须过同一道闸；比例按窗高换算，换 4K / 开 DSR 都不失效。
+CONFIRM_BUTTON_TEXTS = ("确认", "购买", "确定")
+CONFIRM_OCR_MIN_CONF = 0.4
+CONFIRM_TEMPLATE_FIRST_SEC = 5                       # 模板先短轮询，失配立刻转 OCR
+CONFIRM_OCR_RETRY_SEC = CONFIRM_TIMEOUT_SEC - CONFIRM_TEMPLATE_FIRST_SEC
+CONFIRM_GONE_POLL_SEC = 0.5
+CONFIRM_GONE_NEAR_FRAC = 0.04    # 「按钮还在原位」的容差（窗口宽/高比例）
+
 EXIT_MAX_ESC = 3             # 采购完最多按几次 ESC 回主世界
 EXIT_CHECK_SEC = 5           # 每次 ESC 后等主世界特征出现的超时
 
@@ -64,6 +80,7 @@ NOT_FULL = "not_full"            # 点商品无弹窗，但页面还显示有剩
 ITEM_MISSING = "item_missing"    # 商品图标匹配不到
 CONFIRM_GONE_FAIL = "confirm_gone_fail"  # 点了确认但弹窗不关（如余额不足换了提示）
 REWARD_POPUP_STUCK = "reward_popup_stuck"  # 「获得物品」浮层关不掉，后续采购不可信
+PURCHASE_UNVERIFIED = "purchase_unverified"  # 点完确认但余额/库存没变，疑似假成功
 STOPPED = "stopped"              # 用户请求停止
 
 # 「本月已经买过」的两种表现，都不计失败（用户 2026-11-01 拍板）：
@@ -160,6 +177,214 @@ def _locate_ocr(
             return center
         time.sleep(interval)
     return None
+
+
+def _confirm_min_local_y(hwnd: int, ratio=None) -> Optional[int]:
+    """「底部确认按钮」的窗口局部 y 下界；窗口尺寸取不到返回 None（不猜测，放行）。
+
+    `ui_coords.min_confirm_y` 吃 (l,t,r,b) 且返回**屏幕** y；这里 `_window_rect`
+    返回 (l,t,w,h)，点击坐标又全是**窗口局部**，所以直接用比例乘窗高，不混两套口径。
+    取不到 rect（窗口最小化/测试桩）时返回 None：宁可保持旧行为，也不凭空拦掉购买。
+    """
+    from .foreground_flow_runner import _window_rect
+
+    rect = _window_rect(hwnd)
+    if not rect:
+        return None
+    try:
+        value = float(ratio if ratio is not None else CONFIRM_MIN_Y_RATIO)
+    except (TypeError, ValueError):
+        value = CONFIRM_MIN_Y_RATIO
+    if not 0.0 < value < 1.0:
+        value = CONFIRM_MIN_Y_RATIO
+    return int(rect[3] * value)
+
+
+def _confirm_bottom_region(hwnd: int, min_y: Optional[int]):
+    """只扫弹窗底部的 OCR 区域（屏幕绝对 l,t,w,h）；标题「兑换确认」根本进不来。"""
+    from .foreground_flow_runner import _window_rect
+
+    rect = _window_rect(hwnd)
+    if not rect:
+        return None
+    left, top, width, height = rect
+    cut = min_y if min_y is not None else 0
+    return (left, top + cut, width, max(1, height - cut))
+
+
+def _ocr_bottom_confirm(
+    logger: logging.Logger,
+    hwnd: int,
+    min_y: Optional[int],
+    timeout_sec: int,
+    stop_check: Optional[Callable[[], bool]],
+) -> Tuple[Optional[Tuple[int, int]], Optional[str]]:
+    """OCR 兜底找底部确认按钮，返回 (窗口局部坐标, 命中文本)；找不到返回 (None, None)。
+
+    与 11-06 实机探针同口径：按钮词 + 置信度 + 底部区域。region 已把标题截掉，
+    坐标仍按 `_ocr_scan` 契约减窗口原点换算回局部坐标再交给 `_click_window_local`。
+    """
+    from .foreground_flow_runner import _window_rect
+    from .ocr_click_tester import ocr_window_content
+
+    rect = _window_rect(hwnd)
+    if not rect:
+        return None, None
+    left, top, _width, _height = rect
+    region = _confirm_bottom_region(hwnd, min_y)
+    end = time.time() + max(1, int(timeout_sec))
+    while time.time() < end:
+        if stop_check is not None and stop_check():
+            return None, None
+        try:
+            items = ocr_window_content(logger, hwnd=hwnd, region=region) or []
+        except Exception as exc:  # noqa: BLE001 - OCR 失败按未命中处理，下一轮重试
+            LOGGER.debug(f"[商店采购] 底部确认按钮 OCR 失败: {exc}")
+            items = []
+        cands = []
+        for item in items:
+            text = str(item.get("text") or "")
+            if not any(word in text for word in CONFIRM_BUTTON_TEXTS):
+                continue
+            if float(item.get("confidence") or 0) < CONFIRM_OCR_MIN_CONF:
+                continue
+            center = item.get("center") or (0, 0)
+            local = (int(center[0]) - left, int(center[1]) - top)
+            if min_y is not None and local[1] < min_y:
+                continue
+            cands.append((float(item.get("confidence") or 0), local, text))
+        if cands:
+            cands.sort(key=lambda c: (-c[0], c[1][1]))
+            _conf, local, text = cands[0]
+            return local, text
+        time.sleep(CONFIRM_GONE_POLL_SEC)
+    return None, None
+
+
+def _locate_confirm_button(
+    logger: logging.Logger,
+    hwnd: int,
+    template: str,
+    scales,
+    confidences,
+    stop_check: Optional[Callable[[], bool]],
+    min_y_ratio=None,
+) -> Tuple[Optional[Tuple[int, int]], Optional[str]]:
+    """定位确认按钮 → (窗口局部坐标, "template"/"ocr")；找不到 → (None, None)。
+
+    模板命中**必须**在弹窗底部；命中标题区（y < 下界）或模板失配一律转 OCR 底部兜底。
+    模板只先等 CONFIRM_TEMPLATE_FIRST_SEC，剩下的时间留给 OCR，总时长仍是
+    CONFIRM_TIMEOUT_SEC，不拖慢「弹窗出得慢」的场景。
+    """
+    min_y = _confirm_min_local_y(hwnd, min_y_ratio)
+    center = _locate(
+        hwnd, template, scales, confidences, CONFIRM_TEMPLATE_FIRST_SEC, stop_check,
+    )
+    if center and (min_y is None or center[1] >= min_y):
+        return center, "template"
+    if center:
+        logger.warning(
+            f"[商店采购] 确认按钮模板命中 y={center[1]} < 底部下界 {min_y}，"
+            "疑似弹窗标题「兑换确认」，不点击，改走 OCR 底部兜底"
+        )
+    else:
+        logger.info("[商店采购] 确认按钮模板未命中，改走 OCR 底部兜底")
+    local, text = _ocr_bottom_confirm(
+        logger, hwnd, min_y, CONFIRM_OCR_RETRY_SEC, stop_check,
+    )
+    if local:
+        logger.info(f"[商店采购] OCR 命中底部确认按钮「{text}」@ {local}")
+        return local, "ocr"
+    return None, None
+
+
+def _confirm_button_still_at(
+    logger: logging.Logger,
+    hwnd: int,
+    point: Tuple[int, int],
+    min_y: Optional[int],
+) -> bool:
+    """点完确认后，原位置附近是否还看得到同一个底部按钮（= 弹窗没关）。"""
+    from .foreground_flow_runner import _window_rect
+    from .ocr_click_tester import ocr_window_content
+
+    rect = _window_rect(hwnd)
+    if not rect:
+        return False
+    left, top, width, height = rect
+    tol = max(20, int(max(width, height) * CONFIRM_GONE_NEAR_FRAC))
+    try:
+        items = ocr_window_content(
+            logger, hwnd=hwnd, region=_confirm_bottom_region(hwnd, min_y),
+        ) or []
+    except Exception as exc:  # noqa: BLE001 - 取不到证据就不拦，交给模板 _wait_gone
+        LOGGER.debug(f"[商店采购] 确认按钮消失复核 OCR 失败: {exc}")
+        return False
+    for item in items:
+        text = str(item.get("text") or "")
+        if not any(word in text for word in CONFIRM_BUTTON_TEXTS):
+            continue
+        if float(item.get("confidence") or 0) < CONFIRM_OCR_MIN_CONF:
+            continue
+        center = item.get("center") or (0, 0)
+        local = (int(center[0]) - left, int(center[1]) - top)
+        if min_y is not None and local[1] < min_y:
+            continue
+        if abs(local[0] - point[0]) <= tol and abs(local[1] - point[1]) <= tol:
+            return True
+    return False
+
+
+def _read_verify_signature(
+    logger: logging.Logger,
+    hwnd: int,
+    verify: Optional[Dict],
+):
+    """读「月剩余/本月限购/本月库存」等数字当购买证据，返回排序后的数字元组。
+
+    11-06 实机教训：只看「确认按钮点过了」会假成功（前两次库存 3/5、20/20 一点
+    没变，靠截图对比才发现）。这里不依赖任何坐标——整窗 OCR 里凡是命中配置标签
+    的数字全收进签名，真买了签名必变；**读不到就返回 None 保守放行**，避免弹窗
+    遮罩 / 浮层遮挡 / 别的游戏没有这个标签时误判成失败。
+    """
+    if not isinstance(verify, dict) or not verify:
+        return None
+    labels = [str(t).strip() for t in (verify.get("labels") or []) if str(t).strip()]
+    if not labels:
+        return None
+    from .ocr_click_tester import ocr_window_content
+
+    try:
+        items = ocr_window_content(logger, hwnd=hwnd) or []
+    except Exception as exc:  # noqa: BLE001 - 取不到证据就不拦
+        LOGGER.debug(f"[商店采购] 购买证据 OCR 失败: {exc}")
+        return None
+    numbers = []
+    for item in items:
+        text = str(item.get("text") or "")
+        if not any(label in text for label in labels):
+            continue
+        numbers.extend(int(m.group()) for m in re.finditer(r"\d+", text))
+    return tuple(sorted(numbers)) if numbers else None
+
+
+def _wait_confirm_button_gone(
+    logger: logging.Logger,
+    hwnd: int,
+    point: Tuple[int, int],
+    min_y: Optional[int],
+    stop_check: Optional[Callable[[], bool]],
+    timeout_sec: int = CONFIRM_GONE_SEC,
+) -> bool:
+    """OCR 兜底路径专用：模板本就失配时 `_wait_gone` 恒真，必须自己复核按钮消失。"""
+    end = time.time() + max(1, int(timeout_sec))
+    while time.time() < end:
+        if stop_check is not None and stop_check():
+            return False
+        if not _confirm_button_still_at(logger, hwnd, point, min_y):
+            return True
+        time.sleep(CONFIRM_GONE_POLL_SEC)
+    return False
 
 
 def _frac_point(hwnd: int, frac) -> Optional[Tuple[int, int]]:
@@ -364,8 +589,9 @@ def _buy_once(
     stop_check: Optional[Callable[[], bool]],
     label: str = "商店采购",
     scroll_finder: Optional[Callable[..., Optional[Tuple[int, int]]]] = None,
+    step: Optional[Dict] = None,
 ) -> str:
-    """执行一次「点商品 → 确认」。返回 BOUGHT/NO_POPUP/ITEM_MISSING/CONFIRM_GONE_FAIL/STOPPED。
+    """执行一次「点商品 → 确认」。返回 BOUGHT/NO_POPUP/.../PURCHASE_UNVERIFIED/STOPPED。
 
     商品定位优先级：point_frac（固定比例坐标）→ 模板 → OCR 文字兜底。
     point_frac 是给「图标灰度相同、OCR 也认不准」的商品用的（异环两个骰子），
@@ -373,11 +599,19 @@ def _buy_once(
     label 只影响日志前缀（信源残响兑换复用本函数，避免日志里出现"商店采购"字样）。
     scroll_finder：当前视图定位不到时的翻页兜底（见 monthly_exchange._scroll_find_item）；
     为 None 时保持旧行为（找不到 = 已买过，不做额外操作）。
+    step：`confirm_min_y_ratio`（底部按钮下界比例）/ `purchase_verify`（购买证据
+    标签词表）两个可选配置，缺省时只启用底部按钮过滤，不做数字核对。
     """
     from .foreground_flow_runner import _click_window_local
 
     if stop_check is not None and stop_check():
         return STOPPED
+
+    step = step or {}
+    min_y_ratio = step.get("confirm_min_y_ratio")
+    verify = step.get("purchase_verify")
+    # 点商品之前读一次证据：此时商店页干净，弹窗/浮层还没遮住限购数字。
+    before = _read_verify_signature(logger, hwnd, verify) if verify else None
 
     item_name = str(item.get("name", "商品") or "商品")
     center = _locate_item(logger, hwnd, item, scales, confidences, stop_check, label)
@@ -395,7 +629,10 @@ def _buy_once(
     _click_window_local(hwnd, center[0], center[1], clicks=1)
     time.sleep(SETTLE_SEC)
 
-    confirm_center = _locate(hwnd, confirm_template, scales, confidences, CONFIRM_TIMEOUT_SEC, stop_check)
+    confirm_center, confirm_method = _locate_confirm_button(
+        logger, hwnd, confirm_template, scales, confidences, stop_check,
+        min_y_ratio=min_y_ratio,
+    )
     if confirm_center is None:
         if stop_check is not None and stop_check():
             return STOPPED
@@ -408,8 +645,9 @@ def _buy_once(
             logger.info(f"[{label}] {item_name} 首次点击未弹确认，重新定位再点一次 @ {retry_center}")
             _click_window_local(hwnd, retry_center[0], retry_center[1], clicks=1)
             time.sleep(SETTLE_SEC)
-            confirm_center = _locate(
-                hwnd, confirm_template, scales, confidences, CONFIRM_TIMEOUT_SEC, stop_check
+            confirm_center, confirm_method = _locate_confirm_button(
+                logger, hwnd, confirm_template, scales, confidences, stop_check,
+                min_y_ratio=min_y_ratio,
             )
     if confirm_center is None:
         if stop_check is not None and stop_check():
@@ -430,7 +668,16 @@ def _buy_once(
     _click_window_local(hwnd, confirm_center[0], confirm_center[1], clicks=1)
     time.sleep(SETTLE_SEC)
 
-    if not _wait_gone(hwnd, confirm_template, scales, confidences, CONFIRM_GONE_SEC, stop_check):
+    if confirm_method == "ocr":
+        # 模板本来就没命中时 `_wait_gone` 会立刻返回 True，等于「点了标题也算买成功」。
+        # 必须用同一套底部探测复核按钮真的从原位消失，否则 OCR 兜底反而开了假成功通道。
+        gone = _wait_confirm_button_gone(
+            logger, hwnd, confirm_center,
+            _confirm_min_local_y(hwnd, min_y_ratio), stop_check,
+        )
+    else:
+        gone = _wait_gone(hwnd, confirm_template, scales, confidences, CONFIRM_GONE_SEC, stop_check)
+    if not gone:
         if stop_check is not None and stop_check():
             return STOPPED
         logger.warning(f"[{label}] 已点确认但弹窗未关闭（可能余额不足或界面异常）")
@@ -443,6 +690,17 @@ def _buy_once(
     popup = _dismiss_reward_popup(logger, hwnd, label)
     if popup is False:
         return REWARD_POPUP_STUCK
+
+    # 防假成功：点了「确认」、弹窗也关了，但限购/库存数字一点没变 —— 11-06
+    # 实机前两次就是这种假成功。两次都读到且签名完全一致才判失败，读不到就放行。
+    if before is not None:
+        after = _read_verify_signature(logger, hwnd, verify)
+        if after is not None and after == before:
+            logger.error(
+                f"[{label}] {item_name} 点完确认但购买证据未变化（{before}），"
+                "疑似点到弹窗标题的假成功，本次不计入已购买"
+            )
+            return PURCHASE_UNVERIFIED
     return BOUGHT
 
 
@@ -578,6 +836,7 @@ def buy_shop_groups(
                 result = _buy_once(
                     logger, hwnd, item, confirm_template,
                     scales, confidences, stop_check,
+                    step=step,
                 )
                 if result == BOUGHT:
                     bought += 1
@@ -602,6 +861,9 @@ def buy_shop_groups(
                     break
                 if result == REWARD_POPUP_STUCK:
                     reason = "「获得物品」浮层未关闭，无法继续采购"
+                    break
+                if result == PURCHASE_UNVERIFIED:
+                    reason = "点完确认但限购/库存数字未变，疑似假成功"
                     break
 
             if bought >= count:

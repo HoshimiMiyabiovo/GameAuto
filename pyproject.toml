@@ -15,8 +15,9 @@ cache_dir = "data/cache/pytest"
 line-length = 140
 target-version = "py310"
 cache-dir = "data/cache/ruff"
-# flet/ 内嵌第三方框架、data/reference/ 为参考项目副本、artifacts/ 为本地证据与真机脚本
-exclude = [".venv", "data/reference", "artifacts", "tools/flet", "src/game_auto/ui/flet", "src/game_auto/ui/flet_app.py", "tests/suite_*.py"]
+# flet/ 内嵌第三方框架、data/reference/ 为参考项目副本、artifacts/ 为本地证据与真机脚本、
+# src/onnxocr 为 vendored 第三方 OCR（OneDragon fork），不参与本项目静态检查
+exclude = [".venv", "data/reference", "artifacts", "tools/flet", "src/game_auto/ui/flet", "src/game_auto/ui/flet_app.py", "tests/suite_*.py", "src/onnxocr"]
 
 [tool.ruff.lint]
 # 先只开能兜住 AGENTS.md 硬规则的窄集合：语法错误、未定义名、裸 except。

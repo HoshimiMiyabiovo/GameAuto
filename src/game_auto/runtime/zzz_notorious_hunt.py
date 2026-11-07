@@ -84,25 +84,25 @@ def _sleep(seconds: float, stop_check: Optional[Callable[[], bool]] = None) -> N
 
 
 def _press_key(hwnd: int, key: str) -> None:
-    from .foreground_flow_runner import _focus_window, FailSafeAborted, _FAILSAFE_HINT
+    """游戏内按键一律发扫描码（2026-11-07 从 pyautogui.press 换过来）。
+
+    11-05 绝区零实机：瞬时虚拟键事件被 Unity 整口吞掉；11-07 12:15 再实锤——
+    pyautogui F2 按三次快捷手册都没开（#210），只有 keybd_event+MapVirtualKey
+    按住 0.15s 的扫描码才被接收（press_key_scancode，同 monthly_exchange 的 ESC）。
+    """
+    from .foreground_flow_runner import _focus_window, press_key_scancode
 
     _focus_window(hwnd)
-    try:
-        pyautogui.press(key)
-    except pyautogui.FailSafeException as exc:
-        raise FailSafeAborted(_FAILSAFE_HINT) from exc
+    press_key_scancode(key)
 
 
 def _hold_key(hwnd: int, key: str, seconds: float) -> None:
-    from .foreground_flow_runner import _focus_window, FailSafeAborted, _FAILSAFE_HINT
+    # 战斗里的 W/闪避/切人同是游戏内按键：pyautogui 的虚拟键事件同样会被吞
+    # （11-05 实机 ESC/F3 全无效），统一走扫描码按住
+    from .foreground_flow_runner import _focus_window, press_key_scancode
 
     _focus_window(hwnd)
-    try:
-        pyautogui.keyDown(key)
-        time.sleep(max(0.0, float(seconds)))
-        pyautogui.keyUp(key)
-    except pyautogui.FailSafeException as exc:
-        raise FailSafeAborted(_FAILSAFE_HINT) from exc
+    press_key_scancode(key, hold_sec=max(0.05, float(seconds)))
 
 
 def _texts(logger: logging.Logger, hwnd: int) -> List[Dict]:
