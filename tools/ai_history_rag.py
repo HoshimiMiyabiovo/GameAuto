@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """AI 对话史 RAG：从外部对话导出中筛选本项目的会话，建本地检索库（data/ai_history）。
 
-数据源：F:\\data\\AI对话汇总\\data.json（2026-11-08 导出，411 会话/约 1000 万字，
-外部目录不入库）。本工具把**与本项目开发相关**的会话筛出、切块，落到
+数据源：F:\\data\\AI对话汇总\\data.json（2026-11-09 00:08 重导出，514 会话 / 83,693 条
+消息 / 约 7594 万字，外部目录不入库；ZCode 会话由 F:\\data\\_ai_organize_tools\\build.py
+的 do_zcode 从 ~/.zcode/cli/db/db.sqlite 直读并入，全部会话进上游、相关的由本工具
+双门控筛进 RAG）。本工具把**与本项目开发相关**的会话筛出、切块，落到
 `data/ai_history/`（已 gitignore），并用纯标准库 BM25（字符二元组，中文友好）
 做检索——不引新依赖、不占 GPU（显存留给 OCR）。
 
@@ -12,6 +14,13 @@
            --session <id> 整会话导出（打印全文）
   stats    库概况（会话数/块数/字数/来源分布）
   selftest 切块与筛选不变量断言
+
+**不自动同步**：上游各会话库涨了，要先手跑外部 `F:\\data\\_ai_organize_tools\\build.py`
+重导 data.json，再跑本工具 `build`；`build` 是**全量覆盖重建**（`open("w")` 重写
+chunks/sessions，不是增量追加、不做 id 去重），项目里没有 watcher / 定时任务 /
+启动钩子。2026-11-09 追平后当前库 91 会话 / 64030 块 / 约 6798 万字 /
+chunks.jsonl 约 91MB（此前 43 / 11032 / 1165 万 / 16MB）。query 无倒排、扫全库，
+块数上万后单次约 14s，再要提速得另建索引或缓存 bigrams。
 """
 import argparse
 import json
