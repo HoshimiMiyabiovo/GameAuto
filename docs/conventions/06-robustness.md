@@ -46,6 +46,20 @@
 - **显存错峰**：v6 走 CUDA EP 单进程常驻 ~730MB（nvidia-smi 实测）。GUI 常驻但 OCR 只在批次任务时用，`run_task_batch` 收尾调 `_release_onnxocr_engine()` 卸载引擎（断引用 + gc），与 ok-ww（鸣潮）/ok-ef 等独立 GPU 进程错峰；下次批次首次 OCR 自动重建（冷启动 ~450ms）。实测释放回落 ~81%、残留 ~137MB（onnxruntime CUDA 显存池固有，Python 侧无法完全消除，要 100% 归还需子进程隔离）。
 - **基准**（`tools/bench_ocr_engines.py`，RTX 5070，XM 窗口 901×610，预热后 best of 3）：v6 窗口 239ms 命中（整行 1.00）、panel 15ms。结果 `data/artifacts/ocr_bench_20261107.json`。
 - 回归：`tests/suite_onnxocr_precision_20261107.py`（vendored 无 one_dragon 残留 / v6 命中与格式 / CUDA EP / 工厂单档 / runner 接线）；`suite_step_ocr_region_20261107.py` 锁 v6 端到端命中与区域换算。
+### OCR 空格拆字：子串匹配前先去空白归一化（2026-11-08 XM 实锤）
+
+- **事实**：onnxocr v6 会把部分英文标签**稳定**拆开——"Unity" 两天三次取证都是
+  "Uni ty"（11-07 10:37 conf 0.78、11-08 08:17 conf 0.96），不是偶发抖动；同帧其余
+  标签（Flash/精灵因子/巅峰圣战…）全部正常。中文标签未见此现象。
+- **规则**：拿 OCR 文本做**子串包含类**匹配（标签页/目标词/锚点）时，两边先
+  `_norm_text`（去空白+去截断省略号）再比，原始子串匹配会在稳定拆字上永远落空。
+  `_rank_ocr_candidates` 的分级匹配有漏字反向兜底不受影响；这里是手写子串的地方，
+  别照抄原始 `in`。
+- **事故**：2026-11-08 08:17 XM 步骤 6「同步限时活动勾选」（清单同步功能首跑），
+  `script_checklist._click_tab` 匹配不到 "Uni ty" → 流程失败终止，脚本本体登录/页面
+  全正常。修复后实锤帧正常命中并按顶部坐标点击。
+- 回归：`tests/suite_script_checklist_tab_20261108.py`（实锤帧复现 / 精确文本 /
+  多候选取 y 最小 / 无匹配不点击 / 静态防退化）。
 ### OCR 结构化匹配：不要靠堆排除词 (2026-10-31)
 
 **背景**：MiniMax 步骤4 目标「签到得」按旧逻辑（目标顺序 + OCR 顺序，先命中先返回）子串命中卡片宣传语「连续签到得更多积分」，点在文案中间，接口日志里根本没有 `signin/claim`。当天先加了 `ocr_exclude_texts`，但每遇到一句宣传语就要加一个排除词，不可持续。
