@@ -10,6 +10,7 @@
 
 ## 2026-11-09
 
+- 全库代码审计（154 文件 / 6.8 万行，五片区并行深读 + 关键结论人工复核），报告落 `docs/notes/code-audit-20261109.md`。无 P0；最大发现是 `settings/manager.py` 全链路**无锁读-改-写**（24 处 save 调用点跨 3 类线程 + settings_gui 跨进程陈旧快照覆盖，三条旁路绕行 save）与 `run_flow` 全链 0 处心跳（prelaunch 3600s 等待必撞 600s 看门狗阈值，11-05 事故同族未铺满）；另有 Momo Token 明文落日志、WebUI /run TOCTOU 双开、每日页同步等 3s 冻结、CLI 自提权 100% 损坏等 7 项 P1 与 30 余项 P2/P3，含"已排查干净"清单备查。
 - 追平 AI 对话史 RAG 库（用户「按上面两步补跑一次」）：先跑外部 `F:\data\_ai_organize_tools\build.py` 重导 13 个会话源（514 会话 / 83,693 条消息 / 约 7594 万字，data.json 98.0→98.45MB，ZCode 子任务 16→18），再跑 `tools/ai_history_rag.py build` 全量重建——双门控筛入 91 会话（工作区 84 + 关键词 7），11032→64030 块 / 1165→6798 万字 / chunks.jsonl 16→91MB；`stats`/`selftest`/`query` 验证通过。跑前已备份上游 `data.json.bak_20261109_pre_rag_resync` 与旧库 `*.bak_20261109_pre_resync`。**仍是手动两步、不自动同步**：上游库增长不会触发重建，`build` 每次覆盖重写而非增量追加；规模上去后无倒排的 BM25 单次 query 从 <2s 退化到约 14s，工具 docstring 与 `docs/notes/ai-dev-history-202611.md` 追平注记已同步真实数字。
 
 ## 2026-11-08
