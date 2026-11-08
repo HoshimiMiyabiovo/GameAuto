@@ -70,14 +70,20 @@ def main():
     check("两件都有彩色模板",
           all((PROJECT_ROOT / str(it.get("template", "")).replace("\\", "/")).is_file() for it in items),
           [it.get("template") for it in items])
-    check("坐标保留作兜底",
-          all(isinstance(it.get("point_frac"), list) and len(it["point_frac"]) == 2 for it in items), items)
-    for it in items:
-        fx, fy = it["point_frac"]
-        check(f"{it['name']} 坐标在窗口内", 0 < fx < 1 and 0 < fy < 1, it["point_frac"])
-    check("两件商品横向排开（x 递增）",
-          items[0]["point_frac"][0] < items[1]["point_frac"][0],
-          [it["point_frac"][0] for it in items])
+    # 2026-11-08 反转：item point_frac 盲点购买废除（11-07 事故——月初布局变化后
+    # 旧坐标落到第一格捏造骰子上，5 连击买光、报告假成功「质感骰子 5/5」）。
+    # 商品必须带 OCR 商品名做第二道定位，且不允许再配置 point_frac。
+    check("商品禁止盲点坐标（point_frac 已废除）",
+          all("point_frac" not in it for it in items),
+          [it.get("point_frac") for it in items])
+    check("两件都有 OCR 商品名兜底",
+          all(str(it.get("ocr_text") or "").strip() for it in items),
+          [it.get("ocr_text") for it in items])
+    check("翻页找商品开启（11-07 起商品不在首屏）",
+          step.get("item_scroll_search") is True, step.get("item_scroll_search"))
+    check("购买证据签名接「本月库存」",
+          (step.get("purchase_verify") or {}).get("labels") == ["本月库存"],
+          step.get("purchase_verify"))
     check("不再包含捏造骰子", "捏造骰子" not in names, names)
 
     print("[4] 页签与内容校验")
@@ -93,8 +99,9 @@ def main():
     with patch.object(ffr, "_window_rect", return_value=(100, 50, 1920, 1080)):
         pt = shop._frac_point(1, [0.5, 0.5])
         check("窗口中心", pt == (960, 540), pt)
-        pt2 = shop._frac_point(1, [0.256, 0.371])
-        check("质感骰子坐标", pt2 == (int(0.256 * 1920), int(0.371 * 1080)), pt2)
+        pt2 = shop._frac_point(1, [0.441, 0.16])
+        check("页签坐标换算（_frac_point 仍服务页签/入口，商品已禁盲点）",
+              pt2 == (int(0.441 * 1920), int(0.16 * 1080)), pt2)
     with patch.object(ffr, "_window_rect", return_value=None):
         check("取不到窗口返回 None", shop._frac_point(1, [0.5, 0.5]) is None)
     with patch.object(ffr, "_window_rect", return_value=(0, 0, 1920, 1080)):
