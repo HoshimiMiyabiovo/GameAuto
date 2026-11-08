@@ -79,13 +79,19 @@ def _checkbox_checked(screenshot, local_x: int, local_y: int) -> bool:
 
 
 def _click_tab(logger: logging.Logger, hwnd: int, tab_name: str) -> bool:
-    """点击窗口顶部的标签页：取所有匹配里 y 最小的（标签栏在窗口顶部）。"""
+    """点击窗口顶部的标签页：取所有匹配里 y 最小的（标签栏在窗口顶部）。
+
+    匹配前两边先去空白再比（`_norm_text`，不分大小写）：OCR 会把 "Unity"
+    稳定拆成 "Uni ty"（2026-11-07/08 两天取证一致，conf 0.78/0.96），
+    原始子串匹配直接落空——2026-11-08 首跑实锤。
+    """
     from .foreground_flow_runner import _pyautogui_click_guarded
 
     results, _shot, _region = _ocr_scan(logger, hwnd=hwnd)
+    target_key = _norm_text(tab_name).lower()
     candidates = [
         r for r in results
-        if tab_name.lower() in str(r.get("text", "")).lower()
+        if target_key in _norm_text(str(r.get("text", ""))).lower()
     ]
     if not candidates:
         logger.error("[清单同步] 未找到标签页 %s（OCR 无匹配）", tab_name)
