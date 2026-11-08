@@ -72,6 +72,16 @@ PROFILE = GameProfile(
         "zzz_daily_log_monitor": {
             "log_dir": "",
         },
+        # OneDragon-Launcher.exe 只是引导器（拉起安装目录自带 .venv\scripts\pythonw.exe
+        # 跑一条龙链路后 ~50 秒自退），快照按 PID / 按名都只能杀到引导器——
+        # 2026-11-08 实证：用户退出 GUI 后链路"复活"自己跑完整条龙，把游戏留在
+        # 功能菜单（同异环 ok-nte / 鸣潮 ok-ww 的包装器坑）。pythonw.exe 在
+        # WRAPPER_PROCESS_NAMES 里禁止裸名杀，按命令行特征串补刀；特征串取
+        # 安装目录名（OneDragon 的解释器绝对路径必含它，本机其他 Python 进程没有），
+        # script_tool_installer 按仓库名装目录，换机不变。
+        "cleanup_cmd_patterns": [
+            {"name": "pythonw.exe", "cmdline": "ZenlessZoneZero-OneDragon"},
+        ],
     },
 )
 
