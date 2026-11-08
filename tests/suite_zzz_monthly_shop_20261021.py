@@ -200,9 +200,12 @@ check("仓鼠笼 OCR 兜底仍执行：1/1", "仓鼠笼访问器: 1/1" in msg, m
 check("点击次数 = 35（原装2+日常20+邦布10+仓鼠笼2+页签1）", n_clicks == 35, f"实际 {n_clicks}")
 
 print()
-print("== 用例4：模板与 OCR 都找不到仓鼠笼访问器（按本月已买过处理）==")
+print("== 用例4：模板与 OCR 都找不到仓鼠笼访问器（2026-11-08 起判失败）==")
 # 2026-11-01 起仓鼠笼访问器有正式模板了，正常路径会命中；这里把模板指向不存在的文件，
 # 复现「商品撤架/模板失效 + OCR 也不认识」的场景。
+# 2026-11-08 语义反转（异环 11-07 事故：盲点废除后，一件都没买到就看不到 =
+# 布局变化/加载异常，判失败不写月度标记，取证后人工复核；"买满隐藏"由
+# bought>0 后消失的分支维持已购口径）。
 step_missing_tpl = copy.deepcopy(step_norm)
 for _it in step_missing_tpl["shop_groups"][1]["items"]:
     if _it.get("name") == "仓鼠笼访问器":
@@ -210,8 +213,9 @@ for _it in step_missing_tpl["shop_groups"][1]["items"]:
         _it["ocr_text"] = "仓鼠笼访问器"
 fake = FakeGame(ocr_missing_items={"仓鼠笼访问器"})
 ok, msg, n_clicks = run_case(step_missing_tpl, fake)
-check("看不到商品不算失败 all_ok=True", ok is True, msg)
-check("摘要写按已购买处理", "仓鼠笼访问器: 0/1（页面上没看到该商品，按已购买处理）" in msg, msg)
+check("一件都没买到判失败 all_ok=False", ok is False, msg)
+check("摘要写明不能按已购买处理",
+      "仓鼠笼访问器: 0/1（商品未在页面找到（模板/OCR 均未命中），不能按已购买处理）" in msg, msg)
 check("其他商品不受影响：邦布券 5/5", "邦布券: 5/5" in msg, msg)
 
 print()

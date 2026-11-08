@@ -420,12 +420,14 @@ def _locate_item(
     label: str,
     ocr_timeout: Optional[int] = None,
 ) -> Optional[Tuple[int, int]]:
-    """按 point_frac → 模板 → OCR 的优先级定位商品，返回窗口局部中心坐标。
+    """按 模板 → OCR 文字 的优先级定位商品，返回窗口局部中心坐标。
 
-    point_frac 是给「图标灰度相同、OCR 也认不准」的商品用的（异环两个骰子）。
-    拆成独立函数是为了让「当前视图找不到 → 翻页再找」能复用同一套定位逻辑
-    （2026-11-02：崩铁余烬兑换的商品网格同屏只有 2~3 行，票类商品在折叠区以下，
-    一次整窗 OCR 根本看不到，会被"看不到=已买过"吞成静默漏买）。
+    两道定位都是「看到目标商品才点」：模板未命中且 OCR 也找不到就返回 None，
+    由调用方按 ITEM_MISSING 处理（2026-11-07 起禁止 point_frac 盲点购买，
+    见函数内注释）。拆成独立函数是为了让「当前视图找不到 → 翻页再找」能
+    复用同一套定位逻辑（2026-11-02：崩铁余烬兑换的商品网格同屏只有 2~3 行，
+    票类商品在折叠区以下，一次整窗 OCR 根本看不到，会被"看不到=已买过"
+    吞成静默漏买）。
 
     ocr_timeout：翻页场景专用。默认 `OCR_TIMEOUT_SEC=25s` 是给"首屏找商品"的，
     翻页时每屏都等满 25s 会变成 8 屏×25s 的空转（2026-11-03 实测 3 件商品烧了
@@ -435,12 +437,15 @@ def _locate_item(
     item_template = _abs_template(str(item.get("template", "") or ""))
     ocr_text = str(item.get("ocr_text", "") or "").strip()
     has_template = bool(item_template) and os.path.isfile(item_template)
-    point_frac = item.get("point_frac")
     use_color = bool(item.get("color_match"))
 
     center = None
-    # 模板优先（配了 color_match 时走三通道，红/蓝骰子靠它分开）；
-    # 模板没命中才退到固定比例坐标，最后才是 OCR。
+    # 定位只有两道：模板（配了 color_match 走三通道）→ OCR 文字，都是
+    # 「看到目标商品才点」。**point_frac 盲点购买已废除（2026-11-07 异环事故）**：
+    # 迷迭兑换月初布局变化，质感骰子旧坐标 (0.256,0.371) 落到第一格捏造骰子上，
+    # 5 连击买光捏造骰子（0/5）+ 缀缀棉花 3 个，报告却写「质感骰子 5/5」假成功
+    # ——迷迭是抽卡兑换来的货币，宁可定位失败落证据等人工校准，绝不按旧布局
+    # 盲点花货币。
     if has_template:
         center = _locate(
             hwnd, item_template, scales, confidences, ITEM_TIMEOUT_SEC, stop_check,
@@ -448,12 +453,6 @@ def _locate_item(
         )
         if center and use_color:
             logger.info(f"[{label}] {item_name} 彩色模板命中 @ {center}")
-    if center is None and isinstance(point_frac, (list, tuple)) and len(point_frac) == 2:
-        center = _frac_point(hwnd, point_frac)
-        if center:
-            logger.info(f"[{label}] {item_name} 模板未命中，改用固定比例坐标 @ {center}")
-        else:
-            logger.warning(f"[{label}] {item_name} 比例坐标无效: {point_frac}")
     if center is None and ocr_text:
         if stop_check is not None and stop_check():
             return None
@@ -593,9 +592,9 @@ def _buy_once(
 ) -> str:
     """执行一次「点商品 → 确认」。返回 BOUGHT/NO_POPUP/.../PURCHASE_UNVERIFIED/STOPPED。
 
-    商品定位优先级：point_frac（固定比例坐标）→ 模板 → OCR 文字兜底。
-    point_frac 是给「图标灰度相同、OCR 也认不准」的商品用的（异环两个骰子），
-    点完同样要等确认弹窗出现，点空/点错照样会暴露成 NO_POPUP。
+    商品定位只有 模板 → OCR 文字 两道（2026-11-07 起 point_frac 盲点购买已废除，
+    见 `_locate_item` 注释），点完同样要等确认弹窗出现，点空/点错照样会暴露成
+    NO_POPUP。
     label 只影响日志前缀（信源残响兑换复用本函数，避免日志里出现"商店采购"字样）。
     scroll_finder：当前视图定位不到时的翻页兜底（见 monthly_exchange._scroll_find_item）；
     为 None 时保持旧行为（找不到 = 已买过，不做额外操作）。
@@ -853,6 +852,11 @@ def buy_shop_groups(
                     reason = "页面仍有剩余，未买满"
                     break
                 if result == ITEM_MISSING:
+                    if bought == 0:
+                        # 2026-11-07 异环事故收口：一次都没定位到就判失败（不写月度
+                        # 标记），不能把"看不到"硬说成"已购买"——布局变化时那是错的。
+                        reason = "商品未在页面找到（模板/OCR 均未命中），不能按已购买处理"
+                        break
                     missing_count += 1
                     reason = "页面上没看到该商品，按已购买处理"
                     break

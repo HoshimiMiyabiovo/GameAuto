@@ -298,7 +298,10 @@ def test_standalone_tasks_removed():
 
 
 def test_missing_item_treated_as_bought():
-    print("[8c] 商店里看不到商品 → 视为本月已买过")
+    print("[8c] 看不到商品的收口：一件没买到=失败；买到一半消失=已买过")
+    # 2026-11-08 反转（异环 11-07 事故）：盲点购买废除后，模板/OCR 全程未命中
+    # 且一件都没买到 = 布局变化/加载异常，不能再按"本月已买过"写成功标记；
+    # 只有先定位成功买到了、之后商品消失（买满隐藏）才维持"已买过"口径。
     items = [{"name": "星轨专票", "count": 5}, {"name": "星轨通票", "count": 5}]
 
     def fake_buy(logger, hwnd, item, confirm_template, scales, confidences, stop_check,
@@ -309,13 +312,30 @@ def test_missing_item_treated_as_bought():
 
     with patch.object(me, "_buy_once", side_effect=fake_buy):
         ok, summaries = me._buy_items(LOGGER, 0, items, "tpl.png", "余烬兑换", [], [], None)
-    check("部分看不到不计失败", ok is True, summaries)
-    check("摘要写明按已购买处理", any("按已购买处理" in s for s in summaries), summaries)
+    check("一件都没买到判失败（不写月度标记）", ok is False, summaries)
+    check("摘要写明不能按已购买处理",
+          any("不能按已购买处理" in s for s in summaries), summaries)
     check("其余商品照常买满", any("星轨通票: 5/5" in s for s in summaries), summaries)
+
+    # 买到一半商品消失（买满后游戏隐藏该卡）→ 维持"已达上限/已购买"口径
+    state = {"n": 0}
+
+    def fake_buy_partial(logger, hwnd, item, confirm_template, scales, confidences, stop_check,
+                         label="", scroll_finder=None):
+        if item["name"] == "星轨专票":
+            state["n"] += 1
+            return me.BOUGHT if state["n"] <= 2 else me.ITEM_MISSING
+        return me.BOUGHT
+
+    with patch.object(me, "_buy_once", side_effect=fake_buy_partial):
+        ok, summaries = me._buy_items(LOGGER, 0, items, "tpl.png", "余烬兑换", [], [], None)
+    check("买到一半后消失仍算已购买", ok is True, summaries)
+    check("部分购买摘要写按已购买处理",
+          any("按已购买处理" in s for s in summaries), summaries)
 
     with patch.object(me, "_buy_once", return_value=me.ITEM_MISSING):
         ok, summaries = me._buy_items(LOGGER, 0, items, "tpl.png", "余烬兑换", [], [], None)
-    check("整张清单都看不到也按已买处理", ok is True, summaries)
+    check("整张清单都定位不到判失败", ok is False, summaries)
 
     with patch.object(me, "_buy_once", return_value=me.CONFIRM_GONE_FAIL):
         ok, _ = me._buy_items(LOGGER, 0, items, "tpl.png", "余烬兑换", [], [], None)

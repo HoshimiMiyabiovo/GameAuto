@@ -186,7 +186,9 @@ def test_buy_items_uses_scroll_finder():
             [1.0], [0.8], None, scroll_search=False,
         )
     check("关掉翻页时不传兜底", calls and calls[0] is None, calls)
-    check("关掉翻页 → 旧行为（按已买过，不算失败）", ok2 is True, (ok2, summaries2))
+    # 2026-11-08 语义收紧（异环 11-07 事故）：一件都没买到就看不到 = 判失败，
+    # 与翻页开关无关——开关只决定"要不要先翻页再下结论"。
+    check("关掉翻页且没买到 → 判失败（不按已买过）", ok2 is False, (ok2, summaries2))
 
 
 def test_step_switch():
@@ -298,7 +300,9 @@ def test_strict_semantics_when_scroll_dead():
     check("失败原因写明不能按已购买处理",
           any("不能按已购买处理" in s for s in summaries), summaries)
 
-    # 8b. 翻遍了（有效滚动）没找到 → 维持"已买过"成功口径
+    # 8b. 翻遍了（有效滚动）没找到 → 2026-11-08 起判失败：翻页只负责"找全"，
+    # 不能把"真没有"硬说成"已买过"——11-07 异环事故证明布局会变，让人工看
+    # 取证截图复核（买满隐藏 vs 布局变化），不写月度标记。
     def _alive_finder(logger, hwnd, item, scales, confidences, stop_check, label, diag=None):
         if diag is not None:
             diag["effective_pages"] = 3
@@ -311,9 +315,9 @@ def test_strict_semantics_when_scroll_dead():
             _logger(), 1234, [dict(ITEM)], "confirm.png", "余烬兑换",
             [1.0], [0.8], None, scroll_search=True,
         )
-    check("翻遍没找到仍按已买过（成功）", ok2 is True, (ok2, summaries2))
-    check("摘要带已购买说明",
-          any("按已购买处理" in s for s in summaries2), summaries2)
+    check("翻遍没找到且一件没买到 → 判失败", ok2 is False, (ok2, summaries2))
+    check("摘要写明不能按已购买处理",
+          any("不能按已购买处理" in s for s in summaries2), summaries2)
 
 
 def main():

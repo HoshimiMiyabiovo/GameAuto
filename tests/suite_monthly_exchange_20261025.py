@@ -20,7 +20,7 @@
 3. 已在 ESC 菜单不多按 ESC
 4. 已达上限（点商品无弹窗）中断剩余次数且不计失败
 5. 找不到目标页签：整步失败，不进入购买
-6. 商品在页面上看不到（月上限已用完）：按已购买处理，不算失败，其余继续
+6. 商品在页面上看不到：2026-11-08 起一件没买到判失败（买到一半后消失仍按已购买）
 7. 用户停止
 8. 回不到主世界：购买成功照报，但摘要标注
 9. 确认模板缺失：直接失败，不点任何东西
@@ -382,10 +382,13 @@ check("错误说明页签未找到", "未找到「信号残响」页签" in msg,
 check("未进入购买", all(c not in (ITEM, CONFIRM) for c in fake.clicks), f"{fake.clicks}")
 
 print()
-print("== 用例6：商品在页面上看不到（本月已买过）==")
+print("== 用例6：商品在页面上看不到（2026-11-08 起一件没买到判失败）==")
+# 2026-11-08 语义反转（异环 11-07 事故）：盲点废除后，全程未命中且一件都没
+# 买到 = 布局变化/加载异常，判失败不写月度标记，取证后人工复核。
 ok, msg, fake, _ = run_case(zzz_step(), ZZZ, FakeGame(ZZZ, page="menu", missing_items={"加密母带"}))
-check("按已购买处理，不算失败", ok is True, msg)
-check("摘要写按已购买处理", "加密母带: 0/5（页面上没看到该商品，按已购买处理）" in msg, msg)
+check("一件都没买到判失败", ok is False, msg)
+check("摘要写明不能按已购买处理",
+      "加密母带: 0/5（商品未在页面找到（模板/OCR 均未命中），不能按已购买处理）" in msg, msg)
 check("其余商品继续 原装母带 5/5", "原装母带: 5/5" in msg, msg)
 
 print()
@@ -540,9 +543,10 @@ zzz = load_step("ZZZ_MONTHLY", "信号残响每月兑换")
 check("绝区零主流程：等主界面 → 信号残响（且为末步）",
       zzz_names.index("信号残响每月兑换") == zzz_names.index("等待进入主界面") + 1
       and zzz_names[-1] == "信号残响每月兑换", f"{zzz_names}")
-check("后勤商店独立流程：等主界面 → 打开功能菜单 → … → 采购",
-      "打开功能菜单" in log_names
-      and log_names.index("打开功能菜单") == log_names.index("等待进入主界面") + 1
+check("后勤商店独立流程：场景校正 → 打开功能菜单 → 丽都城募 → … → 采购",
+      log_names[0] == "场景校正到大世界"
+      and log_names.index("打开功能菜单") == 1
+      and "点击丽都城募" in log_names
       and log_names[-1] == "后勤商店采购", f"{log_names}")
 check("绝区零 action=monthly_exchange", zzz.get("action") == "monthly_exchange", zzz.get("action"))
 check("绝区零清单：加密母带×5 + 原装母带×5",
