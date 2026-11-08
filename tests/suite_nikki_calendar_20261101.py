@@ -331,9 +331,10 @@ class Harness:
             self.state = f"reward_crystal:{name}"
         elif s.startswith("reward_crystal:") and _points_near((x, y), (959, 884)):
             self.state = "exchange"
-        elif s == "shop_scrolled" and _points_near((x, y), (202, 823)):
-            # 11-06 实机：左列「共鸣商店」文字 (202,915) 点不动，热区是文字
-            # 上方约 1.1 个框高的圆形图标；本桩框高 24 → (202,823)。
+        elif s == "shop_scrolled" and _points_near((x, y), (202, 849)):
+            # 2026-11-07 #211 实机：共鸣商店与晶石兑换不同构——点**文字中心**
+            # (202,849) 即可命中（本桩 OCR 行的 center），上移到图标圆区反而
+            # 点不进去；晶石兑换才保留图标偏移。
             self.state = "resonance_surge"
         elif s in ("resonance_surge", "resonance_serene") and _points_near((x, y), (959, 127)):
             if not self.fail_serene:

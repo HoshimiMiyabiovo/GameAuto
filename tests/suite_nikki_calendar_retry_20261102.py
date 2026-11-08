@@ -180,6 +180,7 @@ def test_exchange_entry_polled():
 
     with mock.patch.object(nc, "_window_rect", lambda hwnd: RECT), \
          mock.patch.object(nc, "_ocr_full", _fake_ocr), \
+         mock.patch.object(nc, "_monthly_done", lambda *a, **k: False), \
          mock.patch.object(nc, "_record_failure", lambda *a, **k: None), \
          mock.patch.object(nc, "_dismiss_continue_screens", lambda *a, **k: 0), \
          mock.patch.object(nc, "_click", lambda center: None), \

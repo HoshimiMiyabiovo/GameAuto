@@ -153,21 +153,25 @@ def test_entry_wiring():
           and "range(30" not in drag and "steps" not in drag)
     check("上拖有 finally 保证松开左键", "pyautogui.mouseUp()" in drag
           and "finally:" in drag)
-    check("入口不再直接点文字中心", "_click(entry[\"center\"])" not in run
+    check("入口点击统一走 _resonance_entry_point（不裸点 center）",
+          "_click(entry[\"center\"])" not in run
           and "_resonance_entry_point(entry, rect)" in run)
 
-    # 入口图标偏移按文字框高缩放（与晶石兑换共用同一实现）
+    # 2026-11-07 #211 实机：共鸣商店与晶石兑换**不同构**——点文字中心即可命中，
+    # 上移到图标圆区反而点不进去；晶石兑换保留图标偏移（图标在上、文字在下）。
     entry = {"text": "共鸣商店", "center": (202, 915),
              "box": (160, 903, 244, 927)}
     p1080 = nc._resonance_entry_point(entry, (0, 0, 1920, 1080))
     p4k = nc._resonance_entry_point(
         {"text": "共鸣商店", "center": (404, 1830), "box": (320, 1806, 488, 1854)},
         (0, 0, 3840, 2160))
-    check("1080p 文字 (202,915) → 图标约 (202,889)",
-          p1080[0] == 202 and abs(p1080[1] - 889) <= 3, p1080)
-    check("4K 窗口偏移同比放大", p4k[0] == 404 and abs(p4k[1] - 1777) <= 6, p4k)
-    check("共鸣与晶石兑换共用图标偏移实现",
-          p1080 == nc._exchange_entry_point(entry, (0, 0, 1920, 1080)))
+    check("1080p 共鸣商店入口 = 文字中心 (202,915)", p1080 == (202, 915), p1080)
+    check("4K 共鸣商店入口 = 文字中心 (404,1830)", p4k == (404, 1830), p4k)
+    check("共鸣商店不再用晶石兑换的图标偏移",
+          p1080 != nc._exchange_entry_point(entry, (0, 0, 1920, 1080)))
+    check("晶石兑换保留图标偏移（框高 24 → 上移约 26px）",
+          abs(nc._exchange_entry_point(entry, (0, 0, 1920, 1080))[1] - 889) <= 3,
+          nc._exchange_entry_point(entry, (0, 0, 1920, 1080)))
 
 
 def main():
