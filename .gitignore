@@ -31,6 +31,8 @@ flow_configs.json
 /data/backups/
 /data/okww/
 /data/reference/
+# AI 对话史 RAG 库（tools/ai_history_rag.py 生成）：含全部历史对话正文，
+# 用户 2026-11-08 拍板**永不可进远端**——删掉本行前先想清楚。
 /data/ai_history/
 /data/*.sqlite3
 /data/*.sqlite3.*
