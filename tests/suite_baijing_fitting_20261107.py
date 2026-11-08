@@ -44,6 +44,7 @@ PAGES = {
     "battle": "ref_baijing_fitting_battle_20261107.png",
     "result": "ref_baijing_fitting_result_20261107.png",
     "reward": "ref_baijing_fitting_reward_20261107.png",
+    "item_popup": "ref_baijing_fitting_item_popup_20261108.jpg",
 }
 # 每页允许命中的判定集合：本流程各页互斥，不允许「顺便命中别的页」
 EXPECTED = {k: {k} for k in PAGES}
@@ -80,6 +81,13 @@ TEXT_FRAMES = {
     "reward": ["新物品已存入S.E.E.D.仓库", "5000", "海隅点数", "错金拓片", "秘银拓片",
                "X晶粒", "已领30/60", "已领 12500/25000", "15", "20", "23", "25",
                "拟合开始", "点击屏幕继续"],
+    # 2026-11-08 12:41 首跑实帧：本周奖励已领完时点左下角里程碑弹出「秘银拓片」
+    # 物品详情（取证图 flow_failures/20261108_124152，已转存 ref 图）。
+    # 注意「拟合开始/本周累积波次」被浮层压暗读不到 → 旧判定落 unknown 判失败。
+    "item_popup": ["Gつ拟合回归", "秘银拓片", "覆有秘银刻印的拓片，可为全部记忆烙痕提供较多经",
+                   "验。", "成千上万次冷酷的锤揲带来了匠人的温度，蒸腾起一片", "温暖的银灰。",
+                   "获取方式:", "库存", "17324", "错金拓片兑换", "前往", "E-4 险控策略",
+                   "前往", "E-4", "24919904"],
 }
 
 
@@ -204,7 +212,7 @@ class Script:
         return page, _items(page, *extra)
 
 
-def _harness(script, stop_check=None):
+def _harness(script, stop_check=None, dismiss=None):
     clicks, failures, leaves = [], [], []
 
     def fake_click(logger, hwnd, point, label):
@@ -218,6 +226,8 @@ def _harness(script, stop_check=None):
                           side_effect=lambda *a, **k: failures.append(a[2])),
         mock.patch.object(bf, "_leave_to_hub",
                           side_effect=lambda *a, **k: leaves.append(True)),
+        mock.patch.object(bf, "_dismiss_item_popup",
+                          side_effect=lambda *a, **k: dismiss.append(True) if dismiss is not None else None),
         mock.patch.object(bf.time, "sleep", lambda *_: None),
     ]
     for p in patches:
@@ -262,6 +272,18 @@ def test_state_machine():
     check("奖励已领过按成功", res3["ok"] and res3["claimed"] is False, res3)
     check("已领过不写失败", failures3 == [], failures3)
 
+    # 奖励本周已领过（物品详情形态，2026-11-08 实锤）：点里程碑弹出「秘银拓片」
+    # 详情浮层而不是没反应——按 already 收口 + 尝试关浮层，不算失败、写周标记
+    dismissals = []
+    s6 = Script(["main", "field", "activity", "item_popup"], wave="50/50")
+    res6, clicks6, failures6, _ = _harness(s6, dismiss=dismissals)
+    check("物品详情浮层按已领过收口",
+          res6["ok"] and res6["claimed"] is False and res6["runs"] == 0, res6)
+    check("浮层路径不写失败", failures6 == [], failures6)
+    check("浮层被尝试关闭", dismissals == [True], dismissals)
+    check("浮层路径不点「点击屏幕继续」",
+          not any("点击屏幕继续" in c[0] for c in clicks6), clicks6)
+
     # 中途页面不对：判失败、落取证、仍然收尾
     s4 = Script(["main", "field", "unknown"])
     res4, _, failures4, leaves4 = _harness(s4)
@@ -274,6 +296,47 @@ def test_state_machine():
     res5, clicks5, _, _ = _harness(s5, stop_check=lambda: True)
     check("停止标志立即生效", not res5["ok"], res5)
     check("停止后不再点击", all(c[0] == "活动页返回" for c in clicks5), clicks5)
+
+
+# ── [4b] 关浮层尽力而为 ────────────────────────────────────────────────
+def test_dismiss_item_popup():
+    print("[4b] _dismiss_item_popup：按 ESC + OCR 复核，结果不影响结论")
+    from game_auto.runtime import foreground_flow_runner as ffr
+
+    # 浮层已关（复核页不再是 item_popup）：ESC 打了一次
+    pressed = []
+    pages = iter([("activity", [])])
+    patches = [
+        mock.patch.object(bf, "_page_now", side_effect=lambda *a, **k: next(pages)),
+        mock.patch.object(ffr, "press_key_scancode",
+                          side_effect=lambda key, **k: pressed.append(key)),
+        mock.patch.object(bf.time, "sleep", lambda *_: None),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        bf._dismiss_item_popup(LOG, 1)
+    finally:
+        for p in reversed(patches):
+            p.stop()
+    check("按了 ESC", pressed == ["escape"], pressed)
+
+    # 浮层仍在：只告警不抛错（不影响"已领过"结论）
+    pages2 = iter([("item_popup", [])])
+    patches2 = [
+        mock.patch.object(bf, "_page_now", side_effect=lambda *a, **k: next(pages2)),
+        mock.patch.object(ffr, "press_key_scancode",
+                          side_effect=lambda key, **k: pressed.append(key)),
+        mock.patch.object(bf.time, "sleep", lambda *_: None),
+    ]
+    for p in patches2:
+        p.start()
+    try:
+        bf._dismiss_item_popup(LOG, 1)
+    finally:
+        for p in reversed(patches2):
+            p.stop()
+    check("关不掉不抛错（ESC 共按两次）", pressed == ["escape", "escape"], pressed)
 
 
 # ── [5] 独立周门控 ──────────────────────────────────────────────────────
@@ -316,10 +379,10 @@ def test_wiring():
     check("门控函数已定义", "def _maybe_run_fitting_weekly(" in flow_src)
     check("周标记用 weekly_flow_week_key", "weekly_flow_week_key()" in flow_src)
     check("进度卡片加了 fitting_weekly", '"fitting_weekly"' in profile_src)
-    check("8 个判定都登记了证据", policy_src.count('("baijing_fitting.py"') == 8,
+    check("9 个判定都登记了证据", policy_src.count('("baijing_fitting.py"') == 9,
           policy_src.count('("baijing_fitting.py"'))
     check("变更记录有本轮", "拟合回归" in changelog)
-    check("8 张参考图都列进矩阵", set(PAGES.values()) == {
+    check("9 张参考图都列进矩阵", set(PAGES.values()) == {
         "ref_baijing_fitting_main_20261107.png",
         "ref_baijing_fitting_field_20261107.png",
         "ref_baijing_fitting_activity_20261107.png",
@@ -328,6 +391,7 @@ def test_wiring():
         "ref_baijing_fitting_battle_20261107.png",
         "ref_baijing_fitting_result_20261107.png",
         "ref_baijing_fitting_reward_20261107.png",
+        "ref_baijing_fitting_item_popup_20261108.jpg",
     })
 
 
@@ -337,6 +401,7 @@ def main():
     test_ratio_points()
     test_wave_parsing()
     test_state_machine()
+    test_dismiss_item_popup()
     test_weekly_gate()
     test_wiring()
 

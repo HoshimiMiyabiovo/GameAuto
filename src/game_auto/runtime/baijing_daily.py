@@ -179,6 +179,19 @@ MEMORY_RESET_REGION = (0.55, 0.58, 0.68, 0.66)
 MEMORY_ENHANCE_TEXTS = ("强化烙痕", "强化熔垣")
 # 「+」按钮相对「重置」的水平偏移（占窗口宽度比例；实测 1425-1190=235px @1919 宽）
 PLUS_BUTTON_DX_RATIO = 0.1225
+# 突破弹窗（2026-11-08 12:41 首跑实锤 #221）：烙痕升到整十级（10/20/30…）时点
+# 「强化烙痕」弹的不是强化窗而是「等级提升」突破确认——顶部页签就叫「等级提升」，
+# 会被 MEMORY_DIALOG_MARKERS 误认成强化窗，随后 重置/+ 全部落空。用户口径：
+# 能突破（确认按钮蓝色可点）就确认后继续强化；材料不够不能突破就取消换一张。
+# 判定标记只在突破窗出现；「等级提升」两个窗都有，绝不能算突破证据。
+MEMORY_BREAKTHROUGH_MARKERS = ("突破效果变化", "烙痕等级上限", "消耗以下材料")
+# 弹窗按钮（窗口比例，2026-11-08 取证帧 @1919x1079）：确认中心 (1173,860) →
+# (0.611,0.796)；取色点在确认文字左侧的按钮底色空白 (1056,860)→(0.55,0.796)；
+# 取消中心 (741,860)→(0.386,0.796)。按钮文字「确 认/取 消」带空格，OCR 匹配
+# 走 _ocr_best_match 的 _normalize_text（去空白），上午 XM「Uni ty」同款坑。
+MEMORY_BREAKTHROUGH_CONFIRM = (0.611, 0.796)
+MEMORY_BREAKTHROUGH_CONFIRM_SAMPLE = (0.55, 0.796)
+MEMORY_BREAKTHROUGH_CANCEL = (0.386, 0.796)
 
 # ── 午后茶憩任务（2026-10-18 用户截图实测） ──
 # 流程：任务行「前往」→「是否前往茶憩?」确定 → 角色选择页点首个角色 →
@@ -2030,14 +2043,104 @@ def _return_to_task_panel(logger: logging.Logger, hwnd, stop_check=None, max_att
     return _ocr_best_match(logger, TASK_LIST_CORE_MARKERS, hwnd, min_conf=0.55) is not None
 
 
+def _ratio_point(logger: logging.Logger, hwnd, ratio: Tuple[float, float]) -> Optional[Tuple[int, int]]:
+    """窗口比例 → 屏幕绝对坐标（只换算不点击；窗口取不到返回 None）。"""
+    region = _window_region(hwnd)
+    if not region:
+        return None
+    return (
+        int(region[0] + ratio[0] * region[2]),
+        int(region[1] + ratio[1] * region[3]),
+    )
+
+
+def _pixel_is_blue(logger: logging.Logger, hwnd, rx: float, ry: float) -> bool:
+    """窗口比例坐标附近取色判蓝（突破确认按钮可点=蓝色底；置灰/抓屏异常=不可点）。
+
+    2026-11-08 取证帧确认按钮为高饱和蓝底白字；材料不足时应为置灰（未取证，
+    按保守方向处理：判不出可点就当不能突破，取消换一张——误判方向安全）。
+    """
+    region = _window_region(hwnd)
+    if not region:
+        return False
+    px = int(region[0] + rx * region[2])
+    py = int(region[1] + ry * region[3])
+    try:
+        img = grab_screen(region=(px - 6, py - 6, 13, 13)).convert("RGB")
+    except Exception as exc:  # noqa: BLE001 - 抓屏失败按不可点处理
+        logger.debug(f"[白荆回廊·日常] 突破按钮取色失败: {exc}")
+        return False
+    blue = sum(1 for r, g, b in img.getdata() if b > 140 and b - r > 40)
+    return blue >= 3
+
+
+def _is_breakthrough_dialog(logger: logging.Logger, hwnd) -> bool:
+    """当前弹窗是否「突破」确认窗（烙痕整十级）：专属标记 ≥2。
+
+    「等级提升」是突破弹窗的页签、也被 MEMORY_DIALOG_MARKERS 收录，两个窗都有，
+    绝不能当突破证据；「突破效果变化/烙痕等级上限/消耗以下材料」只在突破窗出现
+    （2026-11-08 12:41 取证帧三词全在，conf ≥0.9）。
+    """
+    results = ocr_window_content(logger, hwnd=hwnd)
+    if not results:
+        return False
+    texts = [_normalize_text(str(r.get("text") or "")) for r in results]
+    texts = [t for t in texts if t]
+    hits = sum(1 for m in MEMORY_BREAKTHROUGH_MARKERS if any(m in t for t in texts))
+    return hits >= 2
+
+
+def _find_memory_enhance_button(logger: logging.Logger, hwnd) -> Optional[Tuple[int, int]]:
+    """烙痕详情页「强化烙痕」按钮：模板优先，OCR 兜底（烙痕/熔垣两词都收）。"""
+    btn = _template_center(logger, hwnd, MEMORY_ENHANCE_BUTTON_TPL, threshold=0.85)
+    if btn:
+        return btn
+    ocr_btn = _ocr_best_match(
+        logger,
+        MEMORY_ENHANCE_TEXTS,
+        hwnd,
+        frac_region=MEMORY_ENHANCE_BTN_REGION,
+        min_conf=0.55,
+    )
+    if ocr_btn:
+        pos = (int(ocr_btn["center"][0]), int(ocr_btn["center"][1]))
+        logger.info(f"[白荆回廊·日常] 用 OCR 兜底定位「强化烙痕」@ {pos}")
+        return pos
+    return None
+
+
+def _back_to_memory_list(logger: logging.Logger, hwnd) -> bool:
+    """烙痕详情页点左上「返回」回列表页（换下一张烙痕用），**必须验证落点**。
+
+    2026-11-08 用户追问「防止一直在同一张上循环」：返回后若不验证列表特征，
+    停在详情页时下一轮点卡片坐标全是无效点击、详情页复核又把"没换成功"当
+    成功——剩余候选全耗在同一张烙痕上。所以点返回（最多重试 2 次）后必须
+    OCR 到列表页特征才算换卡成功；到不了返回 False，调用方立即终止落证据。
+    """
+    for _ in range(2):
+        try:
+            _exit_via_top_left_back(logger, hwnd, _scene_results(logger, hwnd), "烙痕详情")
+        except Exception as exc:  # noqa: BLE001 - 返回异常按未离开详情页处理
+            logger.debug(f"[白荆回廊·日常] 详情页返回异常: {exc}")
+        if _wait_page_markers(logger, hwnd, MEMORY_LIST_MARKERS, timeout=5.0):
+            logger.info("[白荆回廊·日常] 已返回烙痕列表页，换下一张")
+            return True
+    logger.warning("[白荆回廊·日常] 点返回后未回到烙痕列表页（防同卡循环，终止换卡）")
+    return False
+
+
 def _handle_memory_exp_task(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """记忆烙痕经验任务：前往 → 任选烙痕 → 强化烙痕 → 重置 → +1 → 确认 → 动画 → 回面板。
+    """记忆烙痕经验任务：前往 → 逐张卡尝试强化 → 重置 → +1 → 确认 → 动画 → 回面板。
 
     2026-10-18 用户截图实测流程：点行内「前往」进入记忆烙痕列表页（3列卡片网格，
-    左上角首个卡片实测坐标 (402,442)@1919x1079），点首个卡片进详情页，点右下
+    左上角首个卡片实测坐标 (402,442)@1919x1079），点卡片进详情页，点右下
     「强化烙痕」打开等级提升弹窗，「重置」后点一次「+」，「确认」后播等级提升
     动画，点击屏幕继续，然后逐层返回日常任务面板（该任务随后出现「领取奖励」，
     由常规领取循环处理）。
+
+    2026-11-08 起逐卡循环（用户口径）：烙痕到整十数等级点「强化烙痕」弹的是
+    「突破」确认窗——能突破就确认后继续强化，材料不够不能突破就取消换一张；
+    全部候选卡试完仍没强化成功才判失败（#221 首跑实锤：首卡已 20/20 满级）。
     """
     goto_pos = _find_row_button(logger, hwnd, "经验", "前往", stop_check=stop_check)
     if not goto_pos:
@@ -2047,108 +2150,196 @@ def _handle_memory_exp_task(logger: logging.Logger, hwnd, stop_check=None) -> bo
     # 等落地页：烙痕列表页（顶部工具栏）或直接就是详情页
     _wait_page_markers(logger, hwnd, MEMORY_LIST_MARKERS, timeout=8.0, stop_check=stop_check)
     time.sleep(1.5)
-    # 1) 若落地不是详情页，点首个卡片进去（实测坐标校准）
-    if not _on_memory_detail_page(logger, hwnd):
-        opened = False
-        for fx, fy in MEMORY_LIST_CLICK_CANDIDATES:
-            if _stopped(stop_check):
-                return False
+    # 2) 逐张卡尝试强化（2026-11-08 用户口径）：整十级烙痕弹突破窗——能突破就
+    #    确认后继续强化，不能就取消换下一张；全部候选试完仍没强化成才判失败。
+    on_detail = _on_memory_detail_page(logger, hwnd)
+    if on_detail:
+        logger.info("[白荆回廊·日常] 落地即烙痕详情页，直接强化")
+    last_fail = ""
+    for attempt, (card_fx, card_fy) in enumerate(MEMORY_LIST_CLICK_CANDIDATES):
+        if _stopped(stop_check):
+            return False
+        if not on_detail:
             hwnd = _ensure_window(logger, hwnd)
             if not hwnd:
                 return False
             region = _window_region(hwnd)
             if not region:
                 return False
-            cx = int(region[0] + fx * region[2])
-            cy = int(region[1] + fy * region[3])
+            cx = int(region[0] + card_fx * region[2])
+            cy = int(region[1] + card_fy * region[3])
             _pyautogui_click_guarded(cx, cy)
-            logger.info(f"[白荆回廊·日常] 尝试点击烙痕卡片 @ ({cx},{cy}) [{fx:.2f},{fy:.2f}]")
-            time.sleep(2.0)
-            if _on_memory_detail_page(logger, hwnd):
-                opened = True
-                break
-        if not opened:
-            logger.warning("[白荆回廊·日常] 未能进入烙痕详情页（候选点击位全部落空）")
-            _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-            return False
-    logger.info("[白荆回廊·日常] 已进入烙痕详情页")
-    # 2) 点「强化烙痕」开弹窗
-    btn = _template_center(logger, hwnd, MEMORY_ENHANCE_BUTTON_TPL, threshold=0.85)
-    if not btn:
-        ocr_btn = _ocr_best_match(
-            logger,
-            MEMORY_ENHANCE_TEXTS,
-            hwnd,
-            frac_region=MEMORY_ENHANCE_BTN_REGION,
-            min_conf=0.55,
-        )
-        if ocr_btn:
-            btn = (int(ocr_btn["center"][0]), int(ocr_btn["center"][1]))
-            logger.info(f"[白荆回廊·日常] 用 OCR 兜底定位「强化烙痕」@ {btn}")
-    if not btn:
-        logger.warning("[白荆回廊·日常] 详情页未找到「强化烙痕」按钮")
-        _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-        return False
-    _pyautogui_click_guarded(btn[0], btn[1])
-    logger.info(f"[白荆回廊·日常] 点击「强化烙痕」@ {btn}")
-    if not _wait_page_markers(logger, hwnd, MEMORY_DIALOG_MARKERS, timeout=6.0, stop_check=stop_check):
-        logger.warning("[白荆回廊·日常] 强化弹窗未打开")
-        _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-        return False
-    # 3) 重置 → +1 → 确认
-    reset = _ocr_best_match(
-        logger, ("重置",), hwnd, frac_region=MEMORY_RESET_REGION, min_conf=0.45
-    )
-    reset_anchor = None
-    if reset:
-        reset_anchor = (int(reset["center"][0]), int(reset["center"][1]))
-        _pyautogui_click_guarded(*reset["center"])
-        logger.info(f"[白荆回廊·日常] 点击「重置」@ {reset['center']}")
-        time.sleep(0.8)
-        # 2026-10-30 10:25 实测：点重置后强化弹窗消失（OCR 区域 34→30，
-        # 随后露出烙痕详情）。弹窗不在时绝不能按偏移盲点 +，否则点到详情页。
-        if not _wait_page_markers(
-            logger, hwnd, MEMORY_DIALOG_MARKERS, timeout=2.0, stop_check=stop_check
-        ):
-            logger.warning("[白荆回廊·日常] 重置后强化弹窗消失，停止（不盲点 +）")
-            _record_step_failure(
-                logger, hwnd, "记忆烙痕强化", "重置后强化弹窗消失（重置=%s）" % (reset_anchor,)
+            logger.info(
+                f"[白荆回廊·日常] 尝试点击烙痕卡片 #{attempt + 1} @ ({cx},{cy}) "
+                f"[{card_fx:.2f},{card_fy:.2f}]"
             )
+            time.sleep(2.0)
+            if not _on_memory_detail_page(logger, hwnd):
+                last_fail = f"点卡片 #{attempt + 1} 未进入烙痕详情页"
+                logger.warning(f"[白荆回廊·日常] {last_fail}")
+                continue
+            on_detail = True
+        # 3) 点「强化烙痕」开弹窗（模板 + OCR 兜底）
+        btn = _find_memory_enhance_button(logger, hwnd)
+        if not btn:
+            last_fail = "详情页未找到「强化烙痕」按钮"
+            logger.warning(f"[白荆回廊·日常] {last_fail}（换下一张）")
+            if not _back_to_memory_list(logger, hwnd):
+                last_fail = "换卡失败：详情页返回后未回到列表页（防同卡循环，终止）"
+                _record_step_failure(logger, hwnd, "记忆烙痕强化", last_fail)
+                _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+                return False
+            on_detail = False
+            continue
+        _pyautogui_click_guarded(btn[0], btn[1])
+        logger.info(f"[白荆回廊·日常] 点击「强化烙痕」@ {btn}")
+        if not _wait_page_markers(logger, hwnd, MEMORY_DIALOG_MARKERS, timeout=6.0, stop_check=stop_check):
+            last_fail = "强化弹窗未打开"
+            logger.warning(f"[白荆回廊·日常] {last_fail}（换下一张）")
+            on_detail = _back_to_memory_list(logger, hwnd)
+            continue
+        # 4) 突破拦截：整十级烙痕弹「等级提升」突破确认而非强化窗（#221 实锤）
+        if _is_breakthrough_dialog(logger, hwnd):
+            can_break = _pixel_is_blue(logger, hwnd, *MEMORY_BREAKTHROUGH_CONFIRM_SAMPLE)
+            logger.info(f"[白荆回廊·日常] 检测到突破弹窗（确认按钮可点={can_break}）")
+            if can_break:
+                confirm = _ocr_best_match(logger, ("确认",), hwnd, min_conf=0.5)
+                confirm_pos = confirm["center"] if confirm else _ratio_point(
+                    logger, hwnd, MEMORY_BREAKTHROUGH_CONFIRM
+                )
+                if not confirm_pos:
+                    last_fail = "突破弹窗未找到「确认」按钮"
+                    logger.warning(f"[白荆回廊·日常] {last_fail}（换下一张）")
+                    _click_ratio(logger, hwnd, MEMORY_BREAKTHROUGH_CANCEL, "突破弹窗取消")
+                    time.sleep(1.5)
+                    on_detail = _back_to_memory_list(logger, hwnd)
+                    continue
+                _pyautogui_click_guarded(*confirm_pos)
+                logger.info(f"[白荆回廊·日常] 突破确认 @ {confirm_pos}")
+                # 突破可能有「点击屏幕继续」过场；等突破弹窗特征消失再回详情页
+                if _wait_page_markers(logger, hwnd, ("点击屏幕继续",), timeout=6.0, stop_check=stop_check):
+                    hit = _ocr_best_match(logger, ("点击屏幕继续",), hwnd, min_conf=0.5)
+                    if hit:
+                        _pyautogui_click_guarded(*hit["center"])
+                        logger.info(f"[白荆回廊·日常] 突破过场点击屏幕继续 @ {hit['center']}")
+                    else:
+                        _click_ratio(logger, hwnd, (0.5, 0.5), "突破过场点屏幕中心")
+                    time.sleep(1.0)
+                # 不能用 MEMORY_DIALOG_MARKERS 判"弹窗已关"——详情页的「特质提升」
+                # 会被误判成弹窗还在；只认突破专属标记是否消失。
+                deadline = time.time() + 10.0
+                while time.time() < deadline and _is_breakthrough_dialog(logger, hwnd):
+                    time.sleep(0.5)
+                if _is_breakthrough_dialog(logger, hwnd):
+                    last_fail = "突破确认后弹窗未关闭"
+                    _record_step_failure(logger, hwnd, "记忆烙痕强化", last_fail)
+                    _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+                    return False
+                # 突破后回详情页：重新点「强化烙痕」做本次经验提升
+                btn2 = _find_memory_enhance_button(logger, hwnd)
+                if not btn2:
+                    last_fail = "突破后未找到「强化烙痕」按钮"
+                    logger.warning(f"[白荆回廊·日常] {last_fail}（换下一张）")
+                    if not _back_to_memory_list(logger, hwnd):
+                        last_fail = "换卡失败：详情页返回后未回到列表页（防同卡循环，终止）"
+                        _record_step_failure(logger, hwnd, "记忆烙痕强化", last_fail)
+                        _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+                        return False
+                    on_detail = False
+                    continue
+                _pyautogui_click_guarded(btn2[0], btn2[1])
+                logger.info(f"[白荆回廊·日常] 突破后点击「强化烙痕」@ {btn2}")
+                if not _wait_page_markers(logger, hwnd, MEMORY_DIALOG_MARKERS, timeout=6.0, stop_check=stop_check):
+                    last_fail = "突破后强化弹窗未打开"
+                    logger.warning(f"[白荆回廊·日常] {last_fail}（换下一张）")
+                    if not _back_to_memory_list(logger, hwnd):
+                        last_fail = "换卡失败：详情页返回后未回到列表页（防同卡循环，终止）"
+                        _record_step_failure(logger, hwnd, "记忆烙痕强化", last_fail)
+                        _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+                        return False
+                    on_detail = False
+                    continue
+            else:
+                # 材料不够不能突破（确认按钮置灰/取色读不出）：取消换一张。
+                # 误判方向安全：把能突破误判成不能，换一张卡照样完成任务；
+                # 反过来在置灰按钮上白点会把流程卡死。
+                cancel = _ocr_best_match(logger, ("取消",), hwnd, min_conf=0.5)
+                cancel_pos = cancel["center"] if cancel else _ratio_point(
+                    logger, hwnd, MEMORY_BREAKTHROUGH_CANCEL
+                )
+                if cancel_pos:
+                    _pyautogui_click_guarded(*cancel_pos)
+                    logger.info(f"[白荆回廊·日常] 突破弹窗取消 @ {cancel_pos}（换下一张烙痕）")
+                    time.sleep(1.5)
+                else:
+                    last_fail = "突破弹窗未找到「取消」按钮"
+                    logger.warning(f"[白荆回廊·日常] {last_fail}")
+                    _click_ratio(logger, hwnd, MEMORY_BREAKTHROUGH_CANCEL, "突破弹窗取消（比例兜底）")
+                if not _back_to_memory_list(logger, hwnd):
+                    last_fail = "换卡失败：详情页返回后未回到列表页（防同卡循环，终止）"
+                    _record_step_failure(logger, hwnd, "记忆烙痕强化", last_fail)
+                    _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+                    return False
+                on_detail = False
+                continue
+        # 5) 正常强化：重置 → +1 → 确认
+        reset = _ocr_best_match(
+            logger, ("重置",), hwnd, frac_region=MEMORY_RESET_REGION, min_conf=0.45
+        )
+        reset_anchor = None
+        if reset:
+            reset_anchor = (int(reset["center"][0]), int(reset["center"][1]))
+            _pyautogui_click_guarded(*reset["center"])
+            logger.info(f"[白荆回廊·日常] 点击「重置」@ {reset['center']}")
+            time.sleep(0.8)
+            # 2026-10-30 10:25 实测：点重置后强化弹窗消失（OCR 区域 34→30，
+            # 随后露出烙痕详情）。弹窗不在时绝不能按偏移盲点 +，否则点到详情页。
+            if not _wait_page_markers(
+                logger, hwnd, MEMORY_DIALOG_MARKERS, timeout=2.0, stop_check=stop_check
+            ):
+                logger.warning("[白荆回廊·日常] 重置后强化弹窗消失，停止（不盲点 +）")
+                _record_step_failure(
+                    logger, hwnd, "记忆烙痕强化", "重置后强化弹窗消失（重置=%s）" % (reset_anchor,)
+                )
+                _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+                return False
+        plus_pos = _find_plus_button(logger, hwnd, anchor=reset_anchor)
+        if not plus_pos:
+            logger.warning("[白荆回廊·日常] 未找到「+」按钮")
+            _record_step_failure(logger, hwnd, "记忆烙痕强化", "未找到「+」按钮（重置=%s）" % (reset_anchor,))
             _return_to_task_panel(logger, hwnd, stop_check=stop_check)
             return False
-    plus_pos = _find_plus_button(logger, hwnd, anchor=reset_anchor)
-    if not plus_pos:
-        logger.warning("[白荆回廊·日常] 未找到「+」按钮")
-        _record_step_failure(logger, hwnd, "记忆烙痕强化", "未找到「+」按钮（重置=%s）" % (reset_anchor,))
-        _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-        return False
-    _pyautogui_click_guarded(plus_pos[0], plus_pos[1])
-    logger.info(f"[白荆回廊·日常] 点击「+」@ {plus_pos}")
-    time.sleep(0.8)
-    confirm = _ocr_best_match(logger, ("确认",), hwnd, min_conf=0.55)
-    if not confirm:
-        logger.warning("[白荆回廊·日常] 未找到「确认」按钮")
-        _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-        return False
-    _pyautogui_click_guarded(*confirm["center"])
-    logger.info(f"[白荆回廊·日常] 点击「确认」@ {confirm['center']}")
-    # 4) 等级提升动画 → 点击屏幕继续
-    if _wait_page_markers(logger, hwnd, ("点击屏幕继续",), timeout=8.0, stop_check=stop_check):
-        hit = _ocr_best_match(logger, ("点击屏幕继续",), hwnd, min_conf=0.5)
-        if hit:
-            _pyautogui_click_guarded(*hit["center"])
-            logger.info(f"[白荆回廊·日常] 点击屏幕继续 @ {hit['center']}")
+        _pyautogui_click_guarded(plus_pos[0], plus_pos[1])
+        logger.info(f"[白荆回廊·日常] 点击「+」@ {plus_pos}")
+        time.sleep(0.8)
+        confirm = _ocr_best_match(logger, ("确认",), hwnd, min_conf=0.55)
+        if not confirm:
+            logger.warning("[白荆回廊·日常] 未找到「确认」按钮")
+            _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+            return False
+        _pyautogui_click_guarded(*confirm["center"])
+        logger.info(f"[白荆回廊·日常] 点击「确认」@ {confirm['center']}")
+        # 6) 等级提升动画 → 点击屏幕继续
+        if _wait_page_markers(logger, hwnd, ("点击屏幕继续",), timeout=8.0, stop_check=stop_check):
+            hit = _ocr_best_match(logger, ("点击屏幕继续",), hwnd, min_conf=0.5)
+            if hit:
+                _pyautogui_click_guarded(*hit["center"])
+                logger.info(f"[白荆回廊·日常] 点击屏幕继续 @ {hit['center']}")
+            else:
+                region = _window_region(hwnd)
+                if region:
+                    cx, cy = region[0] + region[2] // 2, region[1] + region[3] // 2
+                    _pyautogui_click_guarded(cx, cy)
+                    logger.info(f"[白荆回廊·日常] 动画点击屏幕中心 @ ({cx},{cy})")
+            time.sleep(1.5)
         else:
-            region = _window_region(hwnd)
-            if region:
-                cx, cy = region[0] + region[2] // 2, region[1] + region[3] // 2
-                _pyautogui_click_guarded(cx, cy)
-                logger.info(f"[白荆回廊·日常] 动画点击屏幕中心 @ ({cx},{cy})")
-        time.sleep(1.5)
-    else:
-        logger.warning("[白荆回廊·日常] 未检测到等级提升动画（可能已达上限或确认未生效）")
-    # 5) 返回日常任务面板
-    return _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+            logger.warning("[白荆回廊·日常] 未检测到等级提升动画（可能已达上限或确认未生效）")
+        # 7) 返回日常任务面板
+        return _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+    # 全部候选卡都没强化成（含逐张突破取消）：落证据交人工
+    _record_step_failure(logger, hwnd, "记忆烙痕强化", last_fail or "全部候选卡未完成强化")
+    _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+    return False
 
 
 def _click_ratio(logger: logging.Logger, hwnd, ratio: Tuple[float, float], label: str = ""):

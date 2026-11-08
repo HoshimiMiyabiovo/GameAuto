@@ -54,6 +54,7 @@ REGISTRY = {
     ("baijing_fitting.py", "_is_battle_page"): "「当前波次」AND 战术终端/后备队/暂停 ≥1",
     ("baijing_fitting.py", "_is_result_page"): "「作战完成」AND「达成波次」双证据",
     ("baijing_fitting.py", "_is_reward_page"): "「新物品已存入」AND「点击屏幕继续」双证据（后者单独会在别的过场出现）",
+    ("baijing_fitting.py", "_is_item_popup_page"): "物品详情浮层「获取方式」AND「库存」双证据（结构词不随物品名变；2026-11-08 实锤帧 ref_baijing_fitting_item_popup_20261108.jpg）",
 }
 
 FAILURES = []

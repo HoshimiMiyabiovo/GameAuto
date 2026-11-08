@@ -33,6 +33,13 @@ tests/suite_baijing_fitting_20261107.py。
 - 「作战开始」→ 布阵页加载较慢（第二轮连续点击间隔 7s 时第三下点空），
   每步都必须等页面特征出现再点下一步，绝不盲点一串。
 - 结算页没有任何按钮，点空白 (0.5,0.5) 才回活动页，中间有加载过场。
+- **本周已领完时点左下角里程碑不是"没反应"而是弹「物品详情」浮层**（2026-11-08
+  12:41 首跑实锤：11-07 实机已领完，点 (150,960) 弹出「秘银拓片」详情——「获取方式/
+  库存/前往」结构，活动页的「拟合开始/本周累积波次」被压暗读不到 → 旧逻辑等
+  reward/activity 都落空判 unknown 失败，且不写周标记 → 本周每批重试都炸）。
+  现在 `_is_item_popup_page` 用「获取方式 AND 库存」双证据识别（物品名会变，不能锚
+  「秘银拓片」），按"本周已领过"收口 + 按 ESC 尽力关浮层（ESC 是否恒有效未实机
+  验证，关不掉只告警不计失败）。
 - 活动页「返回」是**正常收尾动作**（用户 11-07 21:59 更正：实机最后游戏进程
   消失是用户主动关闭，不是切场景崩溃）。代码在 finally 里点一次返回把游戏退出
   拟合回归页；返回后落在外勤页还是主界面本次没拍到，因此不校验后续页面，
@@ -154,7 +161,19 @@ def _is_reward_page(items) -> bool:
     return _has(texts, "新物品已存入") and _has(texts, "点击屏幕继续")
 
 
+def _is_item_popup_page(items) -> bool:
+    """物品详情浮层（2026-11-08 实锤：本周奖励已领完时点左下角里程碑弹这个）。
+
+    双证据用「获取方式 AND 库存」——结构词不随物品名变（秘银拓片/错金拓片…），
+    其余页面的标记表都不含这两个词；压着活动页时「拟合开始/本周累积波次」会被
+    遮挡读不到，所以必须排在 PAGE_CHECKS 最前面优先归这里。
+    """
+    texts = _texts(items)
+    return _has(texts, "获取方式") and _has(texts, "库存")
+
+
 PAGE_CHECKS = (
+    ("item_popup", _is_item_popup_page),
     ("reward", _is_reward_page),
     ("result", _is_result_page),
     ("battle", _is_battle_page),
@@ -310,9 +329,15 @@ def _claim_wave_rewards(
     if not _click(logger, hwnd, P_WAVE_REWARD, "左下角波次奖励"):
         return False, "click_failed", []
     ok, page, items = _wait_page(logger, hwnd, "reward", WAIT_REWARD, stop_check,
-                                 also_ok=("activity",))
+                                 also_ok=("activity", "item_popup"))
     if not ok:
         return False, page, items
+    if page == "item_popup":
+        # 2026-11-08 实锤：本周奖励已领完时点里程碑弹「物品详情」浮层（不是没反应
+        # 也不是奖励页），属于「本周已领」的实锤形态——按 already 收口，不算失败
+        logger.info(f"{LOG_TAG} 左下角奖励已领过（点里程碑弹出物品详情浮层）")
+        _dismiss_item_popup(logger, hwnd)
+        return True, "already", items
     if page != "reward":
         # 图标已全是对勾时点击不会弹窗，属于「本周已领」，不是失败
         logger.info(f"{LOG_TAG} 左下角奖励已领过（未弹奖励页）")
@@ -324,6 +349,28 @@ def _claim_wave_rewards(
         return False, page2, items2
     logger.info(f"{LOG_TAG} 已领取左下角全部波次奖励")
     return True, "claimed", items2
+
+
+def _dismiss_item_popup(logger: logging.Logger, hwnd) -> None:
+    """尽力关掉物品详情浮层（按 ESC 一次 + OCR 复核）；结果不影响本轮结论。
+
+    ESC 能否恒关这个弹窗未实机验证：关不掉只 warning 留待后续步骤的页面判定
+    兜底（本轮主目标——确认"本周已领过"——已达成，`_leave_to_hub` 点「返回」的
+    坐标 (193,50) 在弹窗外，浮层残留不挡收尾）。
+    """
+    try:
+        from .foreground_flow_runner import press_key_scancode
+
+        press_key_scancode("escape")
+        time.sleep(1.0)
+        page, _items = _page_now(logger, hwnd)
+        if page == "item_popup":
+            logger.warning(f"{LOG_TAG} 物品详情浮层按 ESC 后仍在（不影响本轮结论，"
+                           "交由后续页面判定兜底；如频发请补实机关闭方式）")
+        else:
+            logger.info(f"{LOG_TAG} 物品详情浮层已关闭（当前页: {page}）")
+    except Exception as exc:  # noqa: BLE001 - 关浮层失败不改变"已领过"结论
+        logger.debug(f"{LOG_TAG} 关浮层异常（已忽略）: {exc}")
 
 
 def _leave_to_hub(logger: logging.Logger, hwnd) -> None:
