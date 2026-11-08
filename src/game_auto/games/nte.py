@@ -23,6 +23,9 @@ PROFILE = GameProfile(
     app_key="NevernessToEverness",
     display_name="异环",
     order=5,
+    # UE 打包路径 exe 在 <根>/Client/WindowsNoEditor/HT/Binaries/Win64/ 深处，
+    # 上溯 5 层到 NTE 专属安装根（NTELauncher 也在根上）；布局变了在 UI 里覆盖目录
+    disk_root_up_levels=5,
     aliases=("ok-nte", "nte"),
     sign_section="tajiduo_sign",
     daily_tool="ok-nte",

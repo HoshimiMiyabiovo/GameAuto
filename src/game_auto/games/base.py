@@ -255,6 +255,12 @@ class GameProfile:
     # 第三方脚本版本检测元数据（空 = 无第三方脚本，如白荆回廊）
     script_tools: Tuple[ScriptToolSpec, ...] = ()
 
+    # ── 磁盘统计 ─────────────────────────────────────────────
+    # 磁盘管理页扫描根 = game_exe_path 所在目录上溯 N 层。exe 深度因游戏而异：
+    # 原神/绝区零 exe 直接在游戏根（0），崩铁/鸣潮在 <根>/Game/ 下（1），
+    # NTE/暖暖埋在 UE Binaries 深处（3/4）；UI 里可按游戏覆盖目录，不必为此改代码
+    disk_root_up_levels: int = 0
+
     def latest_daily_log(self) -> Optional[Dict[str, Any]]:
         parser = load_ref(self.daily_parser)
         if parser is None:

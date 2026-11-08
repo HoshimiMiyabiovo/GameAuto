@@ -8,6 +8,8 @@ PROFILE = GameProfile(
     app_key="BaiJing",
     display_name="白荆回廊",
     order=7,
+    # exe 在 <安装根>/1.1.1.7/ 版本目录里，上溯 1 层把整个安装根计入
+    disk_root_up_levels=1,
     aliases=("bai_jing",),
     # 没有任何外部脚本日志：永远注入占位卡片，执行结果由内置流程写库
     always_placeholder=True,

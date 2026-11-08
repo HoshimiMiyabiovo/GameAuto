@@ -432,6 +432,13 @@ def update_global(data: Dict) -> None:
     save(cfg)
 
 
+def update_disk_scan_overrides(data: Dict) -> None:
+    """磁盘管理页按游戏覆盖扫描目录（{game_key: dir}）；空 dict = 全部回自动推导。"""
+    cfg = load()
+    cfg["disk_scan_overrides"] = data
+    save(cfg)
+
+
 def is_setup_completed() -> bool:
     return bool(load().get("setup_completed", False))
 

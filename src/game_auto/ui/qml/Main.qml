@@ -31,6 +31,7 @@ HusWindow {
     property bool clickSequenceEverLoaded: false
     property bool webUIEverLoaded: false
     property bool toolManagerEverLoaded: false
+    property bool diskManagerEverLoaded: false
     property bool staminaConfigEverLoaded: false
 
     // ── 重页面内存回收（2026-11-01）──
@@ -191,6 +192,7 @@ HusWindow {
                         { key: "automation",      label: "自动化运行",     iconSource: HusIcon.PlayCircleOutlined },
                         { key: "stamina_config",  label: "脚本刷本配置",   iconSource: HusIcon.SettingOutlined },
                         { key: "tool_manager",    label: "脚本管理",       iconSource: HusIcon.AppstoreOutlined },
+                        { key: "disk_manager",    label: "磁盘管理",       iconSource: HusIcon.HddOutlined },
                         { key: "wool",             label: "薅羊毛集合",     iconSource: HusIcon.WalletOutlined },
                         { key: "daily",            label: "每日进度",       iconSource: HusIcon.CalendarOutlined },
                         { key: "gacha",            label: "HoYo 抽卡分析",  iconSource: HusIcon.GiftOutlined },
@@ -342,6 +344,15 @@ HusWindow {
                 visible: bridge.currentView === "tool_manager"
                 source: "views/ToolManagerView.qml"
                 onLoaded: mainWindow.toolManagerEverLoaded = true
+            }
+            Loader {
+                id: diskManagerLoader
+                anchors.fill: parent
+                asynchronous: true
+                active: bridge.currentView === "disk_manager" || mainWindow.diskManagerEverLoaded
+                visible: bridge.currentView === "disk_manager"
+                source: "views/DiskManagerView.qml"
+                onLoaded: mainWindow.diskManagerEverLoaded = true
             }
             Loader {
                 id: webUILoader

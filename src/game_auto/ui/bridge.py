@@ -30,6 +30,7 @@ from .bridge_views.common import (
     logger,
 )
 from .bridge_views.daily import DailyView
+from .bridge_views.disk_manager import DiskManagerView
 from .bridge_views.gacha import GachaView
 from .bridge_views.scheduler import SchedulerView
 from .bridge_views.setup import SetupWizardView
@@ -47,6 +48,7 @@ class UiBridge(
     ClickSequenceView,
     SetupWizardView,
     ToolManagerView,
+    DiskManagerView,
     AutomationView,
     SchedulerView,
     DailyView,
@@ -102,6 +104,7 @@ class UiBridge(
     scriptVersionsChanged = Signal(str)
     scriptCheckRunningChanged = Signal()
     toolInstallChanged = Signal(str)
+    diskScanChanged = Signal(str)
 
     # ── 固定点击序列（录制 / 回放）──
     clickSeqRecordingChanged = Signal(bool)
@@ -197,6 +200,9 @@ class UiBridge(
         self._tool_install_json = "{}"
         self._tool_install_running = False
         self._tool_install_cancel = None
+        # ── 磁盘管理页：扫描任务状态（全局同时一个）──
+        self._disk_scan_running = False
+        self._disk_scan_cancel = None
 
         # ── 固定点击序列（录制 / 回放）──
         self._click_seq_recording = False
@@ -585,6 +591,7 @@ class UiBridge(
         valid = {
             "automation", "stamina_config", "wool", "daily", "gacha",
             "setup_wizard", "click_sequence", "webui", "tool_manager",
+            "disk_manager",
         } | set(view_keys())
         if view_key not in valid:
             logger.warning("[UI] 未知视图: %s", view_key)
@@ -816,6 +823,24 @@ class UiBridge(
                     data["message"] or "安装完成", "#2f7d4a")
             elif data["phase"] == "error":
                 self._request_toast(f"安装失败: {data['message']}", "#b04b44")
+            return
+        if kind == "disk_scan":
+            # 磁盘扫描的进度/结果回包（starting → item×N → done/idle/error）
+            data = {
+                "phase": payload.get("phase", ""),
+                "item": payload.get("item"),
+                "items": payload.get("items"),
+                "overview": payload.get("overview"),
+                "done": payload.get("done", 0),
+                "total": payload.get("total", 0),
+                "scanned_at": payload.get("scanned_at", ""),
+                "message": payload.get("message", ""),
+            }
+            self.diskScanChanged.emit(json.dumps(data, ensure_ascii=False))
+            if data["phase"] == "done":
+                self._request_toast("磁盘扫描完成", "#2f7d4a")
+            elif data["phase"] == "error":
+                self._request_toast(f"磁盘扫描失败: {data['message']}", "#b04b44")
             return
         if kind == "daily_progress":
             self._update_daily_progress(

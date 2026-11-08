@@ -8,6 +8,9 @@ PROFILE = GameProfile(
     app_key="ArknightsEndfield",
     display_name="终末地",
     order=4,
+    # exe 直接在游戏本体目录 Hypergryph Launcher/games/Endfield Game/ 里（0 层）；
+    # 官方启动器在上级 Hypergryph Launcher/（公共目录，可能装多个游戏，不计入）
+    disk_root_up_levels=0,
     aliases=("Endfield", "ok-ef"),
     sign_section="skendfield_sign",
     daily_tool="ok-ef",

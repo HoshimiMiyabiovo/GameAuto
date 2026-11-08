@@ -8,6 +8,9 @@ PROFILE = GameProfile(
     app_key="InfinityNikki",
     display_name="无限暖暖",
     order=6,
+    # UE 路径 exe 在 <安装根>/InfinityNikki/X6Game/Binaries/Win64/ 深处，
+    # 上溯 4 层到暖暖专属安装根（启动器也在根上）
+    disk_root_up_levels=4,
     aliases=("whimbox",),
     daily_tool="whimbox",
     daily_parser="game_auto.services.whimbox_daily_parser:parse_latest_whimbox_log",

@@ -8,6 +8,8 @@ PROFILE = GameProfile(
     app_key="WutheringWaves",
     display_name="鸣潮",
     order=3,
+    # exe 在 <安装根>/Wuthering Waves Game/ 下，扫描根上溯 1 层
+    disk_root_up_levels=1,
     aliases=("ok-ww",),
     sign_section="wuwa_kujiequ",
     daily_tool="ok-ww",

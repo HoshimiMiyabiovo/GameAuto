@@ -8,6 +8,8 @@ PROFILE = GameProfile(
     app_key="HonkaiStarRail",
     display_name="崩坏：星穹铁道",
     order=1,
+    # 游戏本体 exe 在 <安装根>/Game/ 下，扫描根上溯 1 层把启动器一并计入
+    disk_root_up_levels=1,
     aliases=("StarRail", "hsr"),
     sign_section="mihoyo_sign",
     daily_tool="March7th",
