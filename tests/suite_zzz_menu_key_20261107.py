@@ -162,11 +162,11 @@ def test_configs_and_wiring():
     for name in ("flow_configs.json", "flow_configs.example.json"):
         import json
         cfg = json.loads((PROJECT_ROOT / name).read_text(encoding="utf-8"))
-        s3 = cfg["ZZZ_LOGISTICS_MONTHLY"]["steps"][2]
-        check(f"{name} 后勤步骤3 = press_key esc",
-              s3.get("action") == "press_key" and s3.get("key") == "esc", s3)
-        check(f"{name} 后勤步骤3 不再点模板",
-              "template" not in s3 or not s3.get("template"), s3.get("template"))
+        s2 = cfg["ZZZ_LOGISTICS_MONTHLY"]["steps"][1]
+        check(f"{name} 后勤步骤2 = press_key esc",
+              s2.get("action") == "press_key" and s2.get("key") == "esc", s2)
+        check(f"{name} 后勤步骤2 不再点模板",
+              "template" not in s2 or not s2.get("template"), s2.get("template"))
         check(f"{name} 后勤流程仍是 6 步",
               len(cfg["ZZZ_LOGISTICS_MONTHLY"]["steps"]) == 6,
               [s["name"] for s in cfg["ZZZ_LOGISTICS_MONTHLY"]["steps"]])

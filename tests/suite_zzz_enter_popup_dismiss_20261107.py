@@ -273,12 +273,22 @@ def test_click_step_dismiss_then_optional_skip():
 
 def test_flow_configs():
     print("[5] 两份配置：三条 ZZZ 流程接线")
+    from game_auto.runtime import zzz_scene as zs
+
     for name in ("flow_configs.json", "flow_configs.example.json"):
         cfg = json.loads((PROJECT_ROOT / name).read_text(encoding="utf-8"))
         flows = cfg["ZZZ_MONTHLY"], cfg["ZZZ_LOGISTICS_MONTHLY"], cfg["ZZZ_NOTORIOUS_HUNT"]
         for flow in flows:
             tag = f"{name}/{flow['steps'][0] and flow.get('exe_from_app')}"
             s1, s2 = flow["steps"][0], flow["steps"][1]
+            # 2026-11-08 #219/#220：后台月/周流程开局改场景校正（月卡 dismiss
+            # 移进 zzz_scene.POPUP_MARKERS），日常流程保留原步骤 1/2
+            if s1.get("action") == "zzz_enter_main":
+                check(f"{tag} 开局=场景校正（月卡 dismiss 在场景表内）",
+                      s1.get("action") == "zzz_enter_main"
+                      and set(zs.POPUP_MARKERS) == {"今日到账", "惊喜补给", "月卡剩余"},
+                      s1.get("name"))
+                continue
             check(f"{tag} 步骤1/2 配了 dismiss_texts",
                   s1.get("dismiss_texts") == DISMISS and s2.get("dismiss_texts") == DISMISS,
                   (s1.get("dismiss_texts"), s2.get("dismiss_texts")))
@@ -286,11 +296,8 @@ def test_flow_configs():
                   s1.get("optional_if_missing") is True, s1.get("optional_if_missing"))
             check(f"{tag} 步骤2 仍是主界面等待",
                   s2.get("action") == "wait_template" and "电台" in str(s2.get("template")), s2)
-        guard = cfg["ZZZ_NOTORIOUS_HUNT"].get("start_from_main") or {}
-        check(f"{name} NOTORIOUS 补了 start_from_main（跳到恶名狩猎）",
-              guard.get("skip_to_step") == 3
-              and cfg["ZZZ_NOTORIOUS_HUNT"]["steps"][2].get("action") == "zzz_notorious_hunt",
-              guard)
+        check(f"{name} NOTORIOUS 无 start_from_main（场景表接管，不再跳步）",
+              "start_from_main" not in cfg["ZZZ_NOTORIOUS_HUNT"])
     tpl = PROJECT_ROOT / "assets/templates/绝区零-主界面-电台.png"
     check("电台模板存在", tpl.is_file(), tpl)
 

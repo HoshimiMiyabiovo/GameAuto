@@ -72,17 +72,17 @@ def test_config_split():
           len(logistics["steps"]) == 6
           and logistics["steps"][-1]["action"] == "zzz_shop_buy",
           [s["name"] for s in logistics["steps"]])
-    check("后勤流程 start_from_main 跳到「打开功能菜单」(第3步)",
-          logistics["start_from_main"]["skip_to_step"] == 3
-          and logistics["steps"][2]["name"] == "打开功能菜单")
+    check("后勤流程开局=场景校正，ESC 第 2 步（2026-11-08 场景表接管）",
+          logistics["steps"][0]["action"] == "zzz_enter_main"
+          and logistics["steps"][1]["name"] == "打开功能菜单")
     groups = logistics["steps"][-1]["shop_groups"]
     check("两组页签与清单完整",
           [g["name"] for g in groups] == ["哨站后勤", "协会物资"]
           and sum(len(g["items"]) for g in groups) == 6,
           [(g["name"], [i["name"] for i in g["items"]]) for g in groups])
-    check("两条都 close_process_on_finish（状态隔离）",
+    check("信源残响 close（状态隔离）；后勤不关（游戏留给紧随的周常）",
           signal.get("close_process_on_finish") is True
-          and logistics.get("close_process_on_finish") is True)
+          and logistics.get("close_process_on_finish") is False)
     k1 = btr.monthly_flow_meta_key("ZZZ_MONTHLY")
     k2 = btr.monthly_flow_meta_key("ZZZ_LOGISTICS_MONTHLY")
     check("月度门控键互相独立", k1 != k2 and k2 == "monthly_flow:ZZZ_LOGISTICS_MONTHLY",

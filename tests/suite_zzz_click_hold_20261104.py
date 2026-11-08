@@ -119,14 +119,22 @@ def test_configs():
     print("[5] 两个绝区零流程的进入游戏步骤")
     for name in ("flow_configs.json", "flow_configs.example.json"):
         cfg = json.loads((PROJECT_ROOT / name).read_text(encoding="utf-8"))
-        for flow in ("ZZZ_MONTHLY", "ZZZ_NOTORIOUS_HUNT"):
-            step = cfg[flow]["steps"][0]
-            check(f"{name}/{flow} 前台点击", step.get("background_click") is False, step)
-            check(f"{name}/{flow} 关掉 click_fallback", step.get("click_fallback") is False, step)
-            check(f"{name}/{flow} click_hold_sec=0.08",
-                  abs(float(step.get("click_hold_sec", 0)) - 0.08) < 1e-9, step)
-            check(f"{name}/{flow} 仍是消失型确认",
-                  step.get("confirm_type") == "disappear", step)
+        # 2026-11-08 #219/#220：NOTORIOUS 开局改场景校正（zzz_enter_main），
+        # 不再有步骤级 click 配置——点击纪律在场景表内部走 _pyautogui_click_guarded
+        step = cfg["ZZZ_MONTHLY"]["steps"][0]
+        check(f"{name}/ZZZ_MONTHLY 前台点击", step.get("background_click") is False, step)
+        check(f"{name}/ZZZ_MONTHLY 关掉 click_fallback", step.get("click_fallback") is False, step)
+        check(f"{name}/ZZZ_MONTHLY click_hold_sec=0.08",
+              abs(float(step.get("click_hold_sec", 0)) - 0.08) < 1e-9, step)
+        check(f"{name}/ZZZ_MONTHLY 仍是消失型确认",
+              step.get("confirm_type") == "disappear", step)
+        nt0 = cfg["ZZZ_NOTORIOUS_HUNT"]["steps"][0]
+        check(f"{name}/ZZZ_NOTORIOUS_HUNT 开局=场景校正",
+              nt0.get("action") == "zzz_enter_main", nt0.get("name"))
+        scene_src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "zzz_scene.py").read_text(
+            encoding="utf-8")
+        check(f"{name}/ZZZ_NOTORIOUS_HUNT 场景表点击走前台短按住收口",
+              "_pyautogui_click_guarded" in scene_src)
 
 
 def test_run_flow_wiring():

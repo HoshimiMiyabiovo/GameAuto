@@ -66,7 +66,12 @@ check(
 
 if len(steps) == 3 and len(log_steps) == 6:
     s0, s1, s2 = steps
-    s3, s4, s5, s6 = log_steps[2], log_steps[3], log_steps[4], log_steps[5]
+    # 2026-11-08 #219/#220 重构：后勤流程开局=场景校正（zzz_enter_main），
+    # ESC 第 2 步，新增「点击丽都城募」中间层（功能菜单里没有后勤商店入口）
+    check("后勤开局 为 场景校正到大世界(zzz_enter_main)",
+          log_steps[0].get("action") == "zzz_enter_main", log_steps[0].get("name"))
+    s3, s4, s5, s6 = log_steps[1], log_steps[2], log_steps[3], log_steps[4]
+    s_last = log_steps[5]
     check("步骤1 仍为 点击进入游戏(click_template)", s0.get("action") == "click_template" and s0.get("name") == "点击进入游戏")
     # 2026-11-03：点击无反应时不再傻等——后台 PostMessage 首发、失败后切前台，
     # 用「点击进入游戏」文字消失做校验，单次 30s×2，进入阶段整体 4~5 分钟内失败。
@@ -93,10 +98,11 @@ if len(steps) == 3 and len(log_steps) == 6:
         s2.get("action") == "monthly_exchange" and s2.get("name") == "信号残响每月兑换",
     )
     # 2026-11-07：···按钮模板点击开不出主菜单（#209），换成扫描码 ESC
-    check("步骤3 为 打开功能菜单(press_key 扫描码 esc)", s3.get("action") == "press_key" and s3.get("key") == "esc")
-    check("步骤5 为 点击后勤商店(click_template)", s4.get("action") == "click_template" and s4.get("name") == "点击后勤商店")
-    check("步骤6 为 等待商店界面(wait_template)", s5.get("action") == "wait_template" and s5.get("name") == "等待商店界面")
-    check("步骤7 为 后勤商店采购(zzz_shop_buy)", s6.get("action") == "zzz_shop_buy" and s6.get("name") == "后勤商店采购")
+    check("步骤2 为 打开功能菜单(press_key 扫描码 esc)", s3.get("action") == "press_key" and s3.get("key") == "esc")
+    check("步骤3 为 点击丽都城募(#219 补中间层)", s4.get("action") == "click_template" and s4.get("name") == "点击丽都城募")
+    check("步骤4 为 点击后勤商店(click_template)", s5.get("action") == "click_template" and s5.get("name") == "点击后勤商店")
+    check("步骤5 为 等待商店界面(wait_template)", s6.get("action") == "wait_template" and s6.get("name") == "等待商店界面")
+    check("步骤6 为 后勤商店采购(zzz_shop_buy)", s_last.get("action") == "zzz_shop_buy" and s_last.get("name") == "后勤商店采购")
 
     tpl = s1.get("template", "")
     check("步骤2 模板路径已锚定为绝对路径", os.path.isabs(tpl), tpl)
@@ -114,9 +120,9 @@ if len(steps) == 3 and len(log_steps) == 6:
     candidates = _resolve_target_text_candidates("assets/templates\\绝区零-主界面-电台.png", "星期")
     check("OCR 候选包含「星期」", "星期" in candidates, str(candidates))
 
-    # 采购步骤：确认模板 + 两组商品
-    check("采购步有确认模板且文件存在", os.path.isfile(str(s6.get("confirm_template", ""))), str(s6.get("confirm_template")))
-    groups = s6.get("shop_groups", []) or []
+    # 采购步骤：确认模板 + 两组商品（2026-11-08 起采购步是最后一步 s_last）
+    check("采购步有确认模板且文件存在", os.path.isfile(str(s_last.get("confirm_template", ""))), str(s_last.get("confirm_template")))
+    groups = s_last.get("shop_groups", []) or []
     check("shop_groups 为 2 组（哨站后勤/协会物资）", len(groups) == 2)
     if len(groups) == 2:
         g0, g1 = groups
@@ -174,14 +180,15 @@ check(
 )
 
 # 恶名狩猎共用同一套「进入游戏」步骤，快速失败口径必须一致
+# 2026-11-08：开局改为场景校正（zzz_enter_main），快速失败=on_fail fail 单次
 hunt = _load_flow_config("ZZZ_NOTORIOUS_HUNT")
 hunt_steps = (hunt or {}).get("steps", [])
 check(
     "恶名狩猎进入阶段同样失败即止",
     len(hunt_steps) >= 2
-    and hunt_steps[0].get("confirm_type") == "disappear"
-    and hunt_steps[1].get("timeout_sec") == 100
-    and hunt_steps[1].get("max_attempts") == 1,
+    and hunt_steps[0].get("action") == "zzz_enter_main"
+    and hunt_steps[0].get("on_fail") == "fail"
+    and hunt_steps[0].get("max_attempts") == 1,
     str([(s.get("name"), s.get("timeout_sec"), s.get("max_attempts")) for s in hunt_steps[:2]]),
 )
 

@@ -318,7 +318,7 @@ def case_config():
     steps = flow.get("steps", [])
     actions = [s.get("action") for s in steps]
     check("步骤含 zzz_notorious_hunt", "zzz_notorious_hunt" in actions, actions)
-    check("开局复用点击进入游戏", actions[0] == "click_template", actions[:3])
+    check("开局复用场景校正（zzz_enter_main）", actions[0] == "zzz_enter_main", actions[:3])
     tpl = PROJECT_ROOT / "assets/templates/绝区零-主界面-电台.png"
     check("主界面模板存在", tpl.is_file(), tpl)
     for name in ("绝区零-战斗-普通攻击.png", "绝区零-战斗-特殊技1.png", "绝区零-战斗-大招1.png"):

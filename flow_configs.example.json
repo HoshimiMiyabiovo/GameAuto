@@ -1053,10 +1053,6 @@
   },
   "ZZZ_LOGISTICS_MONTHLY": {
     "enabled": true,
-    "start_from_main": {
-      "template": "assets/templates\\绝区零-主界面-电台.png",
-      "skip_to_step": 3
-    },
     "exe_from_app": "ZenlessZoneZero",
     "window_title_keywords": [],
     "window_process_names": [
@@ -1075,51 +1071,16 @@
       0.84,
       0.8
     ],
-    "close_process_on_finish": true,
+    "close_process_on_finish": false,
     "steps": [
       {
-        "name": "点击进入游戏",
-        "action": "click_template",
-        "template": "",
-        "target_text": "点击进入游戏",
-        "enable_ocr_fallback": true,
-        "background_click": false,
-        "click_fallback": false,
-        "click_hold_sec": 0.08,
-        "_comment": "2026-11-04 提权实机：权限对齐后瞬时 pyautogui.click 仍点不动 Unity 启动器，必须前台 mouseDown 按住 80ms 再松开；后台 PostMessage 两种权限下都无效，故停用后台首发与 click_fallback。GUI 仍需用 00_START_HERE_GUI_ADMIN.bat 提权启动，否则 UIPI 会静默拦截点击。",
-        "confirm_type": "disappear",
-        "confirm_timeout_sec": 10,
-        "timeout_sec": 60,
-        "clicks": 1,
-        "post_delay_sec": 1.0,
-        "on_fail": "retry_step",
-        "max_attempts": 4,
-        "optional_if_missing": true,
-        "dismiss_texts": [
-          "今日到账",
-          "惊喜补给",
-          "月卡剩余"
-        ],
-        "_comment_dismiss": "2026-11-07 月卡弹窗（11-07 08:37/08:50 两轮卡死实录）：进入后弹「互联会员卡」月卡弹窗（今日到账×90/月卡剩余31天），把背景压暗，标题文字和主界面特征全部失效。dismiss_texts 与目标文字共用同一次 OCR 扫描，命中即前台点掉再继续找标题文字；配合 optional_if_missing，接管已在主世界的残留窗口时（弹窗点掉后没有标题文字）直接跳过本步交给下一步确认主界面。"
-      },
-      {
-        "name": "等待进入主界面",
-        "action": "wait_template",
-        "template": "assets/templates\\绝区零-主界面-电台.png",
-        "target_text": "星期",
-        "enable_ocr_fallback": true,
-        "confirm_type": "none",
+        "name": "场景校正到大世界",
+        "action": "zzz_enter_main",
         "timeout_sec": 240,
-        "post_delay_sec": 3.0,
-        "on_fail": "retry_prev",
-        "max_attempts": 3,
-        "_comment": "大世界特征：OneDragon normal_world/map 模板 + OCR 兜底「星期」。未匹配则回退上一步重试（客户端内可能还有第二层进入游戏按钮）。2026-11-03：点不上就快速失败——单轮等 100s、最多回退 1 次，整个进入阶段约 4~5 分钟。",
-        "dismiss_texts": [
-          "今日到账",
-          "惊喜补给",
-          "月卡剩余"
-        ],
-        "_comment_dismiss": "2026-11-07 月卡弹窗处理（11-07 08:37/08:50 ZZZ_LOGISTICS_MONTHLY 两轮卡死、11-06 ZZZ_NOTORIOUS_HUNT 同款）：进入后弹「互联会员卡」弹窗（OCR: 今日到账/月卡剩余31天/×90），压暗背景导致电台模板与「星期」OCR 全部失效，干等 240s 也等不到。dismiss_texts 与目标文字共用同一次 OCR 扫描，命中即前台短按住点击点掉（对齐 OneDragon enter_game 对「今日到账/惊喜补给」的处理），点掉后继续等主界面，不算步骤命中、不消耗重试次数。"
+        "post_delay_sec": 1.0,
+        "on_fail": "fail",
+        "max_attempts": 1,
+        "_comment": "2026-11-08 #219/#220：进入段不再假设冷启动登录态——场景登记表把画面从任意状态（登录页/月卡弹窗/功能菜单/商店页残留）校正到大世界（runtime/zzz_scene.py，参照白荆 recover_scene：单次 OCR 共享、按序认领、unknown 连续 2 轮落证据失败、绝不盲点）。游戏已在运行时配合 reuse_existing_window 直接接管，不再关了重开。"
       },
       {
         "name": "打开功能菜单",
@@ -1129,6 +1090,21 @@
         "post_delay_sec": 2.5,
         "timeout_sec": 10,
         "_comment": "2026-11-07 从模板点右下···按钮换成扫描码 ESC：12:09 实机模板命中(1777,967)并点击(按住0.06s)后主菜单根本没开出来——confirm_type:none 无验证默认成功，步骤4在主世界空找「后勤商店」4 轮失败（#209）。11-05 实机验证过扫描码 ESC 才被 Unity 接收（monthly_exchange._open_exchange_page 同款，当天 12:07 ZZZ_MONTHLY 实测开出商城买到母带页签）。后勤商店链路 11-06 拆分前从没实机跑过，···点击是 10-21 设计时写下的未验证路径。"
+      },
+      {
+        "name": "点击丽都城募",
+        "action": "click_template",
+        "template": "",
+        "target_text": "丽都城募",
+        "enable_ocr_fallback": true,
+        "click_hold_sec": 0.08,
+        "confirm_type": "none",
+        "timeout_sec": 30,
+        "clicks": 1,
+        "post_delay_sec": 2.5,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "_comment": "2026-11-08 #219 实锤：功能菜单（ESC）里没有「后勤商店」入口——模板+OCR 70s 未命中、重试把活动横幅文字误当入口点掉。04-game-flows 记录的已验证链路是 菜单→丽都城募→丽都菜单→后勤商店，补上中间层；丽都菜单内布局未实拍，首跑看取证校准。"
       },
       {
         "name": "点击后勤商店",
@@ -1217,7 +1193,10 @@
       }
     ],
     "_comment_independent": "2026-11-06 从 ZZZ_MONTHLY 步骤4-7 拆出的独立月流程：打开功能菜单 → 点击后勤商店 → 等待商店界面 → 后勤商店采购（哨站后勤 / 协会物资两个页签）。独立月度标记 monthly_flow:ZZZ_LOGISTICS_MONTHLY，与信号残响互不影响。",
-    "_comment_start_from_main": "已在主世界（电台图标命中）就直接跳到第 3 步「打开功能菜单」，不再点「点击进入游戏」。"
+    "_comment_start_from_main": "已在主世界（电台图标命中）就直接跳到第 3 步「打开功能菜单」，不再点「点击进入游戏」。",
+    "reuse_existing_window": true,
+    "close_process_on_fail": false,
+    "_comment_scene_gate": "2026-11-08 #219/#220 重构：①第一步 zzz_enter_main 场景表校正（不假设冷启动）；②reuse_existing_window 接管运行中游戏；③close_process_on_finish/close_process_on_fail=false——游戏留给紧随其后的恶名狩猎周常（调度顺序月在前周在后），周常跑完才关，月→周不再杀进程冷启动。"
   },
   "ZZZ_NOTORIOUS_HUNT": {
     "enabled": true,
@@ -1239,48 +1218,13 @@
     ],
     "steps": [
       {
-        "name": "点击进入游戏",
-        "action": "click_template",
-        "template": "",
-        "target_text": "点击进入游戏",
-        "enable_ocr_fallback": true,
-        "background_click": false,
-        "click_fallback": false,
-        "click_hold_sec": 0.08,
-        "_comment": "2026-11-04 提权实机：权限对齐后瞬时 pyautogui.click 仍点不动 Unity 启动器，必须前台 mouseDown 按住 80ms 再松开；后台 PostMessage 两种权限下都无效，故停用后台首发与 click_fallback。GUI 仍需用 00_START_HERE_GUI_ADMIN.bat 提权启动，否则 UIPI 会静默拦截点击。",
-        "confirm_type": "disappear",
-        "confirm_timeout_sec": 10,
-        "timeout_sec": 30,
-        "clicks": 1,
+        "name": "场景校正到大世界",
+        "action": "zzz_enter_main",
+        "timeout_sec": 240,
         "post_delay_sec": 1.0,
-        "on_fail": "retry_step",
-        "max_attempts": 2,
-        "dismiss_texts": [
-          "今日到账",
-          "惊喜补给",
-          "月卡剩余"
-        ],
-        "optional_if_missing": true,
-        "_comment_dismiss": "2026-11-07 月卡弹窗（11-07 08:37/08:50 两轮卡死实录）：进入后弹「互联会员卡」月卡弹窗（今日到账×90/月卡剩余31天），把背景压暗，标题文字和主界面特征全部失效。dismiss_texts 与目标文字共用同一次 OCR 扫描，命中即前台点掉再继续找标题文字；配合 optional_if_missing，接管已在主世界的残留窗口时（弹窗点掉后没有标题文字）直接跳过本步交给下一步确认主界面。"
-      },
-      {
-        "name": "等待进入主界面",
-        "action": "wait_template",
-        "template": "assets/templates\\绝区零-主界面-电台.png",
-        "target_text": "星期",
-        "enable_ocr_fallback": true,
-        "confirm_type": "none",
-        "timeout_sec": 100,
-        "post_delay_sec": 3.0,
-        "on_fail": "retry_prev",
+        "on_fail": "fail",
         "max_attempts": 1,
-        "_comment": "大世界特征：OneDragon normal_world/map 模板 + OCR 兜底「星期」。2026-11-03：点不上就快速失败——单轮等 100s、最多回退 1 次，整个进入阶段约 4~5 分钟。",
-        "dismiss_texts": [
-          "今日到账",
-          "惊喜补给",
-          "月卡剩余"
-        ],
-        "_comment_dismiss": "2026-11-07 月卡弹窗处理（11-07 08:37/08:50 ZZZ_LOGISTICS_MONTHLY 两轮卡死、11-06 ZZZ_NOTORIOUS_HUNT 同款）：进入后弹「互联会员卡」弹窗（OCR: 今日到账/月卡剩余31天/×90），压暗背景导致电台模板与「星期」OCR 全部失效，干等 240s 也等不到。dismiss_texts 与目标文字共用同一次 OCR 扫描，命中即前台短按住点击点掉（对齐 OneDragon enter_game 对「今日到账/惊喜补给」的处理），点掉后继续等主界面，不算步骤命中、不消耗重试次数。"
+        "_comment": "2026-11-08 #219/#220：进入段不再假设冷启动登录态——场景登记表把画面从任意状态（登录页/月卡弹窗/功能菜单/商店页残留）校正到大世界（runtime/zzz_scene.py，参照白荆 recover_scene：单次 OCR 共享、按序认领、unknown 连续 2 轮落证据失败、绝不盲点）。游戏已在运行时配合 reuse_existing_window 直接接管，不再关了重开。"
       },
       {
         "name": "恶名狩猎每周挑战",
@@ -1301,12 +1245,11 @@
         "switch_key": "space"
       }
     ],
-    "close_process_on_finish": false,
-    "start_from_main": {
-      "template": "assets/templates\\绝区零-主界面-电台.png",
-      "skip_to_step": 3
-    },
-    "_comment_start_from_main": "2026-11-07 补守卫（对齐 ZZZ_MONTHLY）：11-06 08:13 实锤，ZZZ_MONTHLY 失败后游戏留在主世界（close_process_on_fail=false 保留进程），本流程接管窗口后没有主界面守卫，步骤1对主世界空找「点击进入游戏」3 次失败。已在主世界（电台命中）直接从第 3 步恶名狩猎开始。"
+    "close_process_on_finish": true,
+    "_comment_start_from_main": "2026-11-07 补守卫（对齐 ZZZ_MONTHLY）：11-06 08:13 实锤，ZZZ_MONTHLY 失败后游戏留在主世界（close_process_on_fail=false 保留进程），本流程接管窗口后没有主界面守卫，步骤1对主世界空找「点击进入游戏」3 次失败。已在主世界（电台命中）直接从第 3 步恶名狩猎开始。",
+    "reuse_existing_window": true,
+    "close_process_on_fail": true,
+    "_comment_scene_gate": "2026-11-08 #220 重构：第一步 zzz_enter_main 场景表校正（接管运行中游戏或冷启动后统一拉回大世界）；close_process_on_finish=true——本流程是 ZZZ 槽最后一个任务，跑完关游戏。"
   },
   "GENSHIN_MONTHLY": {
     "enabled": true,
@@ -1626,7 +1569,7 @@
         4
       ]
     },
-    "_comment": "异环每月商店：官方启动器进主界面 → ESC 二级菜单 → 商城 → 集市兑换 → 迷迭兑换。2026-11-01 用户确认清单：质感骰子×5、捏造骰子×5、三重钥匙×20（50%off，买满本月库存）。**页签与商品都用固定比例坐标**：RapidOCR 把「迷迭兑换」认成「迷送兑换」，红/蓝骰子转灰度后互相匹配 0.976，模板和 OCR 都不可靠；坐标点完仍用「资深猎人攻略」等四种养成材料做页签内容校验。",
+    "_comment": "异环每月商店：官方启动器进主界面 → ESC 二级菜单 → 商城 → 集市兑换 → 迷迭兑换。2026-11-01 用户确认清单：质感骰子×5、三重钥匙×20（50%off，买满本月库存；捏造骰子不换，16:06 明确）。**页签用固定比例坐标**（RapidOCR 把「迷迭兑换」认成「迷送兑换」），点完用「资深猎人攻略」等四种养成材料做页签内容校验；**商品禁止固定坐标盲点（2026-11-08 起）**，只认彩色模板/OCR 商品名，找不到就失败落证据——11-07 布局变化时旧坐标把捏造骰子买光过。",
     "exe_path": "E:\\Program Files\\Game\\Neverness To Everness\\NTELauncher.exe",
     "window_title_keywords": [
       "neverness",
@@ -1741,7 +1684,7 @@
         },
         "_comment_purchase_verify": "异环商店页 OCR 是「本月库存：x/y」（data/artifacts/nte_stage1.log 实机帧），签名口径同绝区零；读不到就跳过，不误伤。",
         "log_label": "迷迭兑换",
-        "item_scroll_search": false,
+        "item_scroll_search": true,
         "shop_entry_template": "assets/templates\\异环-商城入口.png",
         "shop_entry_text": "商城",
         "nav_text": "集市兑换",
@@ -1769,20 +1712,14 @@
             "name": "质感骰子",
             "template": "assets/templates\\异环-质感骰子.png",
             "color_match": true,
-            "point_frac": [
-              0.256,
-              0.371
-            ],
+            "ocr_text": "质感骰子",
             "count": 5
           },
           {
             "name": "三重钥匙",
             "template": "assets/templates\\异环-三重钥匙.png",
             "color_match": true,
-            "point_frac": [
-              0.573,
-              0.371
-            ],
+            "ocr_text": "三重钥匙",
             "count": 20
           }
         ],
@@ -1790,7 +1727,7 @@
         "post_delay_sec": 3.0,
         "on_fail": "fail",
         "max_attempts": 1,
-        "_comment": "2026-11-01 用户确认：只换**质感骰子（限定抽卡道具）5 个 + 三重钥匙 20 个**，捏造骰子不换（2026-11-01 16:06 明确）。页签按固定比例坐标点（RapidOCR 把「迷迭兑换」认成「迷送兑换」）；商品用**彩色模板**（color_match）：红/蓝骰子灰度互匹配 0.976、彩色 0.689，模板未命中再退固定比例坐标。点完商品仍要等「购买」弹窗。"
+        "_comment": "2026-11-01 用户确认：只换**质感骰子（限定抽卡道具）5 个 + 三重钥匙 20 个**，捏造骰子不换（2026-11-01 16:06 明确）。页签按固定比例坐标点（RapidOCR 把「迷迭兑换」认成「迷送兑换」），页签点完用 tab_content_markers 内容校验；商品只认**彩色模板 / OCR 商品名**（color_match：红/蓝骰子灰度互匹配 0.976、彩色 0.689）。**2026-11-08 起废除 item point_frac 盲点购买**：11-07 月初布局变化，质感骰子旧坐标 (0.256,0.371) 落到第一格捏造骰子上，5 连击买光捏造骰子 + 缀缀棉花 3 个，报告假成功「质感骰子 5/5」——迷迭是抽卡兑换货币，模板/OCR 找不到就失败落证据，绝不按旧布局盲点。质感骰子/三重钥匙 11-07 起不在首屏，item_scroll_search 开翻页找，找到哪屏算哪屏。点完商品仍要等「购买」弹窗。"
       }
     ]
   }

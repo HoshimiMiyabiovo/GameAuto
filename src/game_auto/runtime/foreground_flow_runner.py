@@ -1896,6 +1896,7 @@ _BUILTIN_ACTIONS = (
     "monthly_exchange",
     "hsr_resin_craft",
     "zzz_notorious_hunt",
+    "zzz_enter_main",
     "nikki_enter_game",
     "nikki_calendar",
     "starrail_enter_main",
@@ -2076,6 +2077,27 @@ def _dispatch_step_action(
         if not wool_ok:
             return False, f"[{flow_key}] 步骤失败: {name} ({wool_msg})", hwnd, pid
         logger.info(f"[{flow_key}] 步骤{step_no}日志确认成功: {wool_msg}")
+    elif action == "zzz_enter_main":
+        # 绝区零：场景登记表校正——把画面从任意状态（登录页/月卡弹窗/功能菜单/
+        # 商店页残留）拉回大世界（2026-11-08 #219/#220：后台月/周任务假设冷启动
+        # 登录态，异常收尾的画面状态下进入段语义全面失效）。
+        from .zzz_scene import enter_main_interface
+
+        zzz_ok, zzz_msg, game_hwnd, game_pid = enter_main_interface(
+            logger,
+            hwnd,
+            step,
+            scales,
+            confidences,
+            stop_check=stop_check,
+            flow_key=flow_key,
+        )
+        if not zzz_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({zzz_msg})", hwnd, pid
+        if game_hwnd:
+            hwnd = game_hwnd
+            pid = game_pid or pid
+        logger.info(f"[{flow_key}] 步骤{step_no}场景校正完成: {zzz_msg}")
     elif action == "starrail_enter_main":
         # 崩铁：复刻 March7th 的进入方法（点击进入 → 主界面特征连续命中）
         from .starrail_launcher import enter_main_interface
