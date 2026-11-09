@@ -73,7 +73,10 @@ This file mirrors important repository-level development notes inside the projec
 
 #### 后勤商店采购（2026-10-21 接入；2026-11-01 清单定稿）
 
-主界面之后链路：**点右下角"···"（OneDragon message 模板）→ 丽都菜单点「后勤商店」→ 等「哨站后勤」页签出现 → `zzz_shop_buy` 采购 → 按 ESC 回主世界**。清单在 flow_configs.json 的 `shop_groups`，交互在 `runtime/zzz_monthly_shop.py`。
+大世界之后链路（用户 2026-11-09 拍板纠错）：**按数字 1 左边的「·」/`~` 键（VK_OEM_3=0xC0）打开手机 → 手机菜单里点「后勤商店」→ 等「哨站后勤」页签出现 → `zzz_shop_buy` 采购 → 按 ESC 回主世界**。清单在 flow_configs.json 的 `shop_groups`，交互在 `runtime/zzz_monthly_shop.py`。
+
+- **「丽都菜单」≠「丽都城募」（11-09 事故根因）**：前者是手机/快捷菜单（粉色「后勤商店 / 攻略」卡片，`绝区零-后勤商店入口.png` 模板就裁自这一页），后者是 NEW ERIDU CITY FUND 活动页。11-08 把两者混为一谈，加了「点击丽都城募」中间层；11-09 22:28 实跑取证停在活动页、步骤「点击后勤商店」4 轮全未匹配。ESC 功能菜单里同样没有后勤商店入口，整条旧链路作废。
+- **按键与防假成功**：`press_key` 的 `key=oem3` 依赖 `foreground_flow_runner._SCANCODE_VK_ALIASES`（Unity 只认扫描码 `keybd_event`）。手机是 toggle 菜单，配置必须 `max_attempts=1`——重按会把刚打开的手机又关掉；配 `verify_texts=["后勤商店"]` 要求按下后 OCR 见到入口文字才算成功，没见就诚实失败、下次重试，绝不盲点。
 
 - **2026-11-01 用户定稿清单**：哨站后勤 **音擎残芯×6 + 原装母带×2 + 日常业绩×10**；
   协会物资 **调律校音器×1 + 「仓鼠笼」访问器×1 + 日常业绩×10**。两个页签的日常业绩是独立售卖
@@ -110,8 +113,19 @@ This file mirrors important repository-level development notes inside the projec
   → 点命中词关掉，11-07 dismiss 实机同款）→ 功能菜单（底部功能栏词 ≥2 → 扫描码
   ESC，11-05 实机）→ 登录页（点「点击进入游戏」）→ 商店页残留（哨站后勤页签 → ESC
   退出）。月卡词与功能菜单词无交集（「等级提升」式教训）。
-- **链路修正**：功能菜单里没有「后勤商店」入口——按 04 记录的已验证链路补
-  「点击丽都城募」中间层（丽都菜单内布局未实拍，首跑看取证校准）。
+- **链路修正（2026-11-09 更正，原 11-08「补点击丽都城募」结论作废）**：后勤商店
+  入口不在 ESC 功能菜单、也不在丽都城募活动页，而在大世界按「·」打开的手机菜单里。
+  配置已删「点击丽都城募」整步，第 2 步改 `press_key key=oem3` 带
+  `verify_texts=["后勤商店"]`，流程 6 步 → 5 步。场景登记表仍保留「功能菜单 → ESC
+  退回大世界」规则（那是校正任意残留态，不是找商店入口），两条不冲突。
+- **丽都城募活动页登记（2026-11-09 22:28 取证帧）**：旧链路失败后画面停在
+  NEW ERIDU CITY FUND 活动页（顶部页签 选择奖励/兑换商店/等级回馈/成长任务/城募赠礼，
+  词表任 2 即认领；与功能菜单词表无交集防串扰——「丽都城募」一词活动页 OCR 里不出现，
+  页签是「城募赠礼」）。用户拍板：点返回图标即可返回（ESC 也行）。登记表规则 2.5
+  点左上红色返回箭头（窗口宽/高各 12% 区的中心，图标无文字 OCR 认不出只能按位置点），
+  点完 OCR 复核页签词消失才算退出；图标点不掉按 ESC 兜底；两者都失败落证据返回。
+  `_wait_loading_scene` 的可认领场景也补了活动页（logo 过场后直接落活动页时不再空等
+  90s cap）。回归 `tests/suite_zzz_cityfund_exit_20261109.py` 15 项。
 - **进程接力**：LOGISTICS `close_process_on_finish/fail=false`（游戏留给紧随其后的
   周常）+ `reuse_existing_window=true`（进程在跑就接管，不再冷启动）；NOTORIOUS
   `close_process_on_finish=true`（ZZZ 槽最后一个任务，跑完关）。月→周不再杀进程。

@@ -60,18 +60,18 @@ steps = (cfg or {}).get("steps", [])
 log_cfg = _load_flow_config("ZZZ_LOGISTICS_MONTHLY")
 log_steps = (log_cfg or {}).get("steps", [])
 check(
-    "两条独立月流程：主流程 3 步 + 后勤流程 6 步",
-    len(steps) == 3 and len(log_steps) == 6, f"实际 {len(steps)} + {len(log_steps)}",
+    "两条独立月流程：主流程 3 步 + 后勤流程 5 步",
+    len(steps) == 3 and len(log_steps) == 5, f"实际 {len(steps)} + {len(log_steps)}",
 )
 
-if len(steps) == 3 and len(log_steps) == 6:
+if len(steps) == 3 and len(log_steps) == 5:
     s0, s1, s2 = steps
-    # 2026-11-08 #219/#220 重构：后勤流程开局=场景校正（zzz_enter_main），
-    # ESC 第 2 步，新增「点击丽都城募」中间层（功能菜单里没有后勤商店入口）
+    # 2026-11-09 纠错：后勤流程开局=场景校正（zzz_enter_main），第 2 步按 ·
+    # 打开手机（oem3），手机菜单里直接点「后勤商店」；丽都城募中间层已删。
     check("后勤开局 为 场景校正到大世界(zzz_enter_main)",
           log_steps[0].get("action") == "zzz_enter_main", log_steps[0].get("name"))
-    s3, s4, s5, s6 = log_steps[1], log_steps[2], log_steps[3], log_steps[4]
-    s_last = log_steps[5]
+    s3, s4, s5 = log_steps[1], log_steps[2], log_steps[3]
+    s_last = log_steps[4]
     check("步骤1 仍为 点击进入游戏(click_template)", s0.get("action") == "click_template" and s0.get("name") == "点击进入游戏")
     # 2026-11-03：点击无反应时不再傻等——后台 PostMessage 首发、失败后切前台，
     # 用「点击进入游戏」文字消失做校验，单次 30s×2，进入阶段整体 4~5 分钟内失败。
@@ -97,12 +97,17 @@ if len(steps) == 3 and len(log_steps) == 6:
         "步骤3 为 信号残响每月兑换(monthly_exchange)",
         s2.get("action") == "monthly_exchange" and s2.get("name") == "信号残响每月兑换",
     )
-    # 2026-11-07：···按钮模板点击开不出主菜单（#209），换成扫描码 ESC
-    check("步骤2 为 打开功能菜单(press_key 扫描码 esc)", s3.get("action") == "press_key" and s3.get("key") == "esc")
-    check("步骤3 为 点击丽都城募(#219 补中间层)", s4.get("action") == "click_template" and s4.get("name") == "点击丽都城募")
-    check("步骤4 为 点击后勤商店(click_template)", s5.get("action") == "click_template" and s5.get("name") == "点击后勤商店")
-    check("步骤5 为 等待商店界面(wait_template)", s6.get("action") == "wait_template" and s6.get("name") == "等待商店界面")
-    check("步骤6 为 后勤商店采购(zzz_shop_buy)", s_last.get("action") == "zzz_shop_buy" and s_last.get("name") == "后勤商店采购")
+    # 2026-11-09 用户拍板：后勤商店入口在手机里，大世界按 ·（VK_OEM_3）打开；
+    # ESC 功能菜单 → 丽都城募活动页是错误链路，整步删除。手机是 toggle 故不重按。
+    check("步骤2 为 打开手机(press_key 扫描码 oem3)", s3.get("action") == "press_key" and s3.get("key") == "oem3")
+    check("步骤2 带 verify_texts 且 max_attempts=1（toggle 不重按）",
+          s3.get("verify_texts") == ["后勤商店"] and s3.get("max_attempts") == 1, s3)
+    check("不再有丽都城募中间层",
+          not any(x.get("target_text") == "丽都城募" for x in log_steps),
+          [x.get("name") for x in log_steps])
+    check("步骤3 为 点击后勤商店(click_template)", s4.get("action") == "click_template" and s4.get("name") == "点击后勤商店")
+    check("步骤4 为 等待商店界面(wait_template)", s5.get("action") == "wait_template" and s5.get("name") == "等待商店界面")
+    check("步骤5 为 后勤商店采购(zzz_shop_buy)", s_last.get("action") == "zzz_shop_buy" and s_last.get("name") == "后勤商店采购")
 
     tpl = s1.get("template", "")
     check("步骤2 模板路径已锚定为绝对路径", os.path.isabs(tpl), tpl)

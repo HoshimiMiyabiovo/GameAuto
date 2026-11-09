@@ -834,6 +834,11 @@ def _focus_window(hwnd: int):
 _SCANCODE_VK_ALIASES = {
     "esc": 27, "escape": 27, "enter": 13, "return": 13, "tab": 9,
     "space": 32, "backspace": 8,
+    # 数字 1 左边的 ·/`/~ 物理键（VK_OEM_3）：绝区零大世界用它打开「手机」，
+    # 后勤商店入口就在手机菜单里（用户 2026-11-09 拍板纠错，原先误走 ESC 功能菜单
+    # →「丽都城募」活动页）。中文输入法下该键显示为「·」，别名都收进来方便配置改写。
+    "oem3": 0xC0, "grave": 0xC0, "tilde": 0xC0,
+    "~": 0xC0, "`": 0xC0, "·": 0xC0,
     # 修饰键：恶名狩猎闪避键 = shift（2026-11-07 恶名狩猎换扫描码时补，
     # 否则 press_key_scancode("shift") 直接 ValueError）
     "shift": win32con.VK_SHIFT, "ctrl": win32con.VK_CONTROL, "alt": win32con.VK_MENU,

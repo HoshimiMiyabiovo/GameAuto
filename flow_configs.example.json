@@ -1083,28 +1083,16 @@
         "_comment": "2026-11-08 #219/#220：进入段不再假设冷启动登录态——场景登记表把画面从任意状态（登录页/月卡弹窗/功能菜单/商店页残留）校正到大世界（runtime/zzz_scene.py，参照白荆 recover_scene：单次 OCR 共享、按序认领、unknown 连续 2 轮落证据失败、绝不盲点）。游戏已在运行时配合 reuse_existing_window 直接接管，不再关了重开。"
       },
       {
-        "name": "打开功能菜单",
+        "name": "打开手机",
         "action": "press_key",
-        "key": "esc",
+        "key": "oem3",
         "presses": 1,
+        "verify_texts": ["后勤商店"],
+        "verify_timeout_sec": 8,
+        "max_attempts": 1,
         "post_delay_sec": 2.5,
-        "timeout_sec": 10,
-        "_comment": "2026-11-07 从模板点右下···按钮换成扫描码 ESC：12:09 实机模板命中(1777,967)并点击(按住0.06s)后主菜单根本没开出来——confirm_type:none 无验证默认成功，步骤4在主世界空找「后勤商店」4 轮失败（#209）。11-05 实机验证过扫描码 ESC 才被 Unity 接收（monthly_exchange._open_exchange_page 同款，当天 12:07 ZZZ_MONTHLY 实测开出商城买到母带页签）。后勤商店链路 11-06 拆分前从没实机跑过，···点击是 10-21 设计时写下的未验证路径。"
-      },
-      {
-        "name": "点击丽都城募",
-        "action": "click_template",
-        "template": "",
-        "target_text": "丽都城募",
-        "enable_ocr_fallback": true,
-        "click_hold_sec": 0.08,
-        "confirm_type": "none",
-        "timeout_sec": 30,
-        "clicks": 1,
-        "post_delay_sec": 2.5,
-        "on_fail": "retry_step",
-        "max_attempts": 2,
-        "_comment": "2026-11-08 #219 实锤：功能菜单（ESC）里没有「后勤商店」入口——模板+OCR 70s 未命中、重试把活动横幅文字误当入口点掉。04-game-flows 记录的已验证链路是 菜单→丽都城募→丽都菜单→后勤商店，补上中间层；丽都菜单内布局未实拍，首跑看取证校准。"
+        "timeout_sec": 20,
+        "_comment": "用户 2026-11-09 拍板纠错：后勤商店入口在「手机」里，大世界按数字 1 左边的 ·/~ 键（VK_OEM_3=0xC0）打开，不在 ESC 功能菜单、更不是「丽都城募」活动页。11-09 22:28 实跑取证：ESC→点丽都城募后停在 NEW ERIDU CITY FUND 活动页，后续「点击后勤商店」4 轮全未匹配。按键走扫描码（Unity 只认 keybd_event）；verify_texts 要求按下后 OCR 见到「后勤商店」才算成功。手机菜单是 toggle，max_attempts 必须为 1——重按会把刚打开的手机又关掉；按下没见到文字直接诚实失败、下次重试，绝不盲点。"
       },
       {
         "name": "点击后勤商店",
@@ -1117,7 +1105,8 @@
         "clicks": 1,
         "post_delay_sec": 4.0,
         "on_fail": "retry_step",
-        "max_attempts": 3
+        "max_attempts": 3,
+        "_comment": "模板是手机菜单里的粉色「后勤商店 / 攻略」卡片，10-21 裁图来源正是这一页；按 · 打开手机后直接点它即可，不再经过任何「丽都」中间层。"
       },
       {
         "name": "等待商店界面",

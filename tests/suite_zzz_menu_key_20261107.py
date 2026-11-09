@@ -11,8 +11,9 @@
 改法：
 - runner 新增通用 `press_key` action（press_key_scancode 扫描码，可选
   verify_texts 按下后等 OCR 见到页面特征才算成功、没见重按）；
-- ZZZ_LOGISTICS 步骤3 换成 `{"action":"press_key","key":"esc"}`（11-05 实机
-  验证过扫描码 ESC 开主菜单，当天 12:07 ZZZ_MONTHLY 实测可用）；
+- ZZZ_LOGISTICS 步骤2 换成 `{"action":"press_key","key":"oem3"}`（用户
+  2026-11-09 拍板：后勤商店入口在「手机」里，大世界按 ·/~ 键即 VK_OEM_3 打开；
+  ESC 功能菜单 →「丽都城募」活动页是错误链路，已整步删除）；
 - zzz_notorious_hunt 的 `_press_key`/`_hold_key` 全部换 press_key_scancode。
 
 覆盖：
@@ -162,14 +163,21 @@ def test_configs_and_wiring():
     for name in ("flow_configs.json", "flow_configs.example.json"):
         import json
         cfg = json.loads((PROJECT_ROOT / name).read_text(encoding="utf-8"))
-        s2 = cfg["ZZZ_LOGISTICS_MONTHLY"]["steps"][1]
-        check(f"{name} 后勤步骤2 = press_key esc",
-              s2.get("action") == "press_key" and s2.get("key") == "esc", s2)
-        check(f"{name} 后勤步骤2 不再点模板",
-              "template" not in s2 or not s2.get("template"), s2.get("template"))
-        check(f"{name} 后勤流程仍是 6 步",
-              len(cfg["ZZZ_LOGISTICS_MONTHLY"]["steps"]) == 6,
-              [s["name"] for s in cfg["ZZZ_LOGISTICS_MONTHLY"]["steps"]])
+        steps = cfg["ZZZ_LOGISTICS_MONTHLY"]["steps"]
+        s2 = steps[1]
+        check(f"{name} 后勤步骤2 = press_key oem3（· 打开手机）",
+              s2.get("action") == "press_key" and s2.get("key") == "oem3", s2)
+        check(f"{name} 手机是 toggle：max_attempts=1 + verify_texts 见到后勤商店",
+              s2.get("max_attempts") == 1
+              and s2.get("verify_texts") == ["后勤商店"], s2)
+        check(f"{name} 已删丽都城募中间层",
+              not any(s.get("target_text") == "丽都城募" for s in steps),
+              [s.get("name") for s in steps])
+        check(f"{name} 后勤流程 5 步且末步采购",
+              len(steps) == 5 and steps[-1]["action"] == "zzz_shop_buy",
+              [s["name"] for s in steps])
+    check("_scancode_vk 支持 oem3（· 键 = VK_OEM_3）",
+          ff._scancode_vk("oem3") == 0xC0, ff._scancode_vk("oem3"))
     src = Path(ff.__file__).read_text(encoding="utf-8")
     check("_BUILTIN_ACTIONS 注册 press_key", '"press_key"' in src, None)
     src_nh = Path(nh.__file__).read_text(encoding="utf-8")

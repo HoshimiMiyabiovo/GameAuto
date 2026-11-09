@@ -2,7 +2,7 @@
 
 由 NikkiLauncher 流程的 action=nikki_enter_game 驱动：
 叠纸启动器「启动游戏/更新/运行中」→ 游戏登录页「点击进入游戏/确认/登录」
-→ 加载与月卡/道具弹窗 → 主界面特征（聊天气泡模板或主世界 HUD 热键 OCR）连续出现。
+→ 加载与月卡/道具弹窗 → 左下角聊天气泡（主界面特征）连续出现。
 
 主界面模板来自 whimbox 2.5.6 的 IconPageMainFeature 二值化裁剪
 （GPL-3.0，本地自用）；启动器/登录页靠 RapidOCR，不依赖固定坐标。
@@ -28,11 +28,12 @@ MAIN_TEMPLATE = str(TEMPLATES_DIR / "暖暖-主界面.png")
 LOGIN_HINT_TEXTS = ("点击进入游戏", "占土进入游戏", "点击进入")
 CONFIRM_TEXTS = ("确认", "同意")
 LOGIN_TEXTS = ("登录", "注册\\登录")
-# 副本/大世界里右上角 ESC 旁的退出标志文案（2026-11-08 用户实机指认）。
-# 命中即说明游戏已在副本里没回主界面，_wait_main 读到这里就按 ESC 退出。
-INSTANCE_EXIT_TEXTS = ("退出", "离开", "返回")
-# 11-09 取证帧：主世界聊天气泡不再出现，但 F12/F10/CapsLock/TAB/L.Shift 全 1.00；顶栏菜单行主世界独有
-MAIN_HUD_HOTKEYS = ("F12", "F10", "CapsLock", "TAB", "L.Shift")
+# 副本/大世界「确认返回」弹窗特征文案（2026-11-08 用户截图实机指认：
+# 标题「确认返回」、正文「是否要返回书外?」、按钮「取消/确认」）。
+INSTANCE_CONFIRM_TEXTS = ("确认返回", "返回书外", "是否要返回")
+# 门形退出图标模板（右上，11-09 20:19 取证帧二值化裁剪）；OCR 漏读 Esc 标签时靠它触发
+INSTANCE_EXIT_TEMPLATE = str(TEMPLATES_DIR / "暖暖-副本退出图标.png")
+INSTANCE_CONFIRM_BUTTON = "确认"
 
 
 def _stop(stop_check: Optional[Callable[[], bool]]) -> bool:
@@ -238,24 +239,6 @@ def _launch_game_from_launcher(logger, hwnd: int, step, stop_check):
     return False, "未找到启动器按钮"
 
 
-def _hud_signature(items) -> bool:
-    """主世界 HUD 热键签名：≥3 种热键且含 F12/F10（副本 HUD 无顶栏菜单行，防误判）。"""
-    keys = set()
-    for item in items or []:
-        try:
-            conf = float(item.get("confidence") or 0)
-        except (TypeError, ValueError):
-            conf = 0.0
-        if conf < 0.8:
-            continue
-        text = str(item.get("text") or "")
-        for key in MAIN_HUD_HOTKEYS:
-            if key in text:
-                keys.add(key)
-                break
-    return len(keys) >= 3 and bool(keys & {"F12", "F10"})
-
-
 def _has_main(hwnd: int, scales, confidences) -> bool:
     from .foreground_flow_runner import _locate_template_on_screen
 
@@ -270,11 +253,9 @@ def _has_main(hwnd: int, scales, confidences) -> bool:
         max(1, int(height * 0.30)),
     )
     try:
-        if _locate_template_on_screen(MAIN_TEMPLATE, region, scales, confidences):
-            return True
+        return bool(_locate_template_on_screen(MAIN_TEMPLATE, region, scales, confidences))
     except Exception:
-        pass
-    return _hud_signature(_ocr(LOGGER, hwnd))
+        return False
 
 
 def _login_region(hwnd: int):
@@ -326,6 +307,57 @@ def _enter_login(logger, hwnd: int, scales, confidences, step, stop_check):
     return "timeout", "等待登录页超时"
 
 
+def _instance_exit_icon(hwnd: int, scales, confidences) -> bool:
+    from .foreground_flow_runner import _locate_template_on_screen
+
+    rect = _window_rect(hwnd)
+    if not rect:
+        return False
+    left, top, width, height = rect
+    region = (
+        left + int(width * 0.90),
+        top,
+        max(1, int(width * 0.10)),
+        max(1, int(height * 0.10)),
+    )
+    try:
+        return bool(_locate_template_on_screen(INSTANCE_EXIT_TEMPLATE, region, scales, confidences))
+    except Exception:
+        return False
+
+
+def _pick_exact(items, text: str, min_conf: float = 0.45):
+    """整行精确匹配（去空白）；「确认返回」标题含「确认」子串，子串匹配会点中标题。"""
+    for item in items or []:
+        if "".join(str(item.get("text") or "").split()) != text:
+            continue
+        try:
+            conf = float(item.get("confidence") or 0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        if conf >= min_conf and item.get("center"):
+            return item
+    return None
+
+
+def _exit_instance_dialog(logger, hwnd: int) -> bool:
+    """ESC 后等「确认返回」弹窗点「确认」；按钮精确匹配，标题也含「确认」不能点。"""
+    _press_esc()
+    end = time.time() + 8
+    while time.time() < end:
+        time.sleep(0.5)
+        items = _ocr(logger, hwnd)
+        if not any(t in str(i.get("text") or "") for i in items for t in INSTANCE_CONFIRM_TEXTS):
+            continue
+        btn = _pick_exact(items, INSTANCE_CONFIRM_BUTTON, min_conf=0.5)
+        if btn:
+            _click(btn["center"])
+            logger.info("[暖暖] 副本退出：「确认返回」弹窗已点「确认」@ %s", btn["center"])
+            return True
+    logger.warning("[暖暖] 副本退出：按 ESC 后 8s 未见「确认返回」弹窗，继续等主界面")
+    return False
+
+
 def _wait_main(logger, hwnd: int, scales, confidences, step, stop_check):
     """返回 (phase, message)，phase: ok/closed/stopped/timeout。"""
     timeout = int(step.get("loading_timeout_sec", 240))
@@ -333,6 +365,7 @@ def _wait_main(logger, hwnd: int, scales, confidences, step, stop_check):
     start = time.time()
     hits = 0
     last_ocr = 0.0
+    last_exit = 0.0
     while time.time() < end:
         if _stop(stop_check):
             return "stopped", "用户请求停止"
@@ -347,6 +380,13 @@ def _wait_main(logger, hwnd: int, scales, confidences, step, stop_check):
             continue
         hits = 0
         rect = _window_rect(hwnd)
+        # 门形退出图标命中 → 完整退出序列；冷却 6s 防连按 ESC
+        if rect and time.time() - last_exit >= 6 and _instance_exit_icon(hwnd, scales, confidences):
+            last_exit = time.time()
+            logger.info("[暖暖] 右上门形退出图标命中，执行 ESC → 确认返回 → 确认")
+            _exit_instance_dialog(logger, hwnd)
+            time.sleep(1.0)
+            continue
         if rect:
             left, top, width, height = rect
             # 底部中央点掉小月卡/道具过期弹窗；加载早期再点顶部中央推进提示
@@ -360,18 +400,25 @@ def _wait_main(logger, hwnd: int, scales, confidences, step, stop_check):
                 _click(hit[2]["center"])
                 logger.info("[暖暖] 加载中回到登录页，已重新点击「%s」", hit[2].get("text"))
             else:
-                # 副本/大世界特征：右上角 ESC 旁的「退出」标志。读到说明游戏
-                # 已进副本但没回主界面，ESC 退回一层再继续等主界面模板
-                # （2026-11-08 实机：重进游戏直接进上次副本，IconPageMainFeature
-                # 不出现，死等 240s 超时；ESC 退出后回主界面即命中）。
-                # region 限定右上角（ESC 旁），避免误命中其他位置的「返回」文案。
-                exit_region = (left + int(width * 0.6), top, int(width * 0.4), int(height * 0.2))
-                exit_hit = _pick(items, INSTANCE_EXIT_TEXTS, min_conf=0.5, region=exit_region)
-                if exit_hit:
-                    _press_esc()
-                    logger.info(
-                        "[暖暖] 检测到副本/大世界「%s」标志，已按 ESC 退出，等回主界面",
-                        exit_hit[2].get("text"))
+                # 副本退出链路（11-08/11-09 实机）：右上门形图标/Esc 标签 → ESC →
+                # 「确认返回/是否要返回书外?」→ 点「确认」→ 回主界面。
+                esc_hit = None
+                if rect:
+                    esc_region = (left + int(width * 0.6), top, int(width * 0.4), int(height * 0.2))
+                    esc_hit = _pick(items, ("Esc", "ESC", "esc"), min_conf=0.5, region=esc_region)
+                confirm_dialog = _pick(items, INSTANCE_CONFIRM_TEXTS, min_conf=0.4)
+                if confirm_dialog:
+                    # 弹窗已在：精确点「确认」按钮（标题含子串，不能子串匹配）
+                    btn = _pick_exact(items, INSTANCE_CONFIRM_BUTTON, min_conf=0.5)
+                    if btn:
+                        _click(btn["center"])
+                        logger.info("[暖暖] 「确认返回」弹窗已点确认（@ %s），等回主界面",
+                                    btn["center"])
+                        time.sleep(1.5)
+                elif esc_hit and time.time() - last_exit >= 6:
+                    last_exit = time.time()
+                    logger.info("[暖暖] 右上角检测到「Esc」退出标志，执行 ESC → 确认返回 → 确认")
+                    _exit_instance_dialog(logger, hwnd)
                 else:
                     hit = _pick(items, CONFIRM_TEXTS, min_conf=0.45)
                     if hit:

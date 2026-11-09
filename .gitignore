@@ -93,3 +93,11 @@ storage/cache/
 
 # ZCode 会话工作目录（agent 运行时产物，不入库）
 .zcode/
+
+# Perch MCP 项目笔记（工具自动生成，不入库）
+.perch/
+
+# SQLite WAL/SHM 运行时残留（主库 *.sqlite3 已在 /data/ 忽略；-wal/-shm 是
+# 连字符后缀而非点号，/data/*.sqlite3.* 匹配不到，补一刀兜住任意位置）
+*.sqlite3-wal
+*.sqlite3-shm

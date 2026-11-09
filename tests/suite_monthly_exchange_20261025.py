@@ -543,10 +543,10 @@ zzz = load_step("ZZZ_MONTHLY", "信号残响每月兑换")
 check("绝区零主流程：等主界面 → 信号残响（且为末步）",
       zzz_names.index("信号残响每月兑换") == zzz_names.index("等待进入主界面") + 1
       and zzz_names[-1] == "信号残响每月兑换", f"{zzz_names}")
-check("后勤商店独立流程：场景校正 → 打开功能菜单 → 丽都城募 → … → 采购",
+check("后勤商店独立流程：场景校正 → 按 · 打开手机 → 后勤商店 → … → 采购",
       log_names[0] == "场景校正到大世界"
-      and log_names.index("打开功能菜单") == 1
-      and "点击丽都城募" in log_names
+      and log_names[1] == "打开手机"
+      and "点击丽都城募" not in log_names
       and log_names[-1] == "后勤商店采购", f"{log_names}")
 check("绝区零 action=monthly_exchange", zzz.get("action") == "monthly_exchange", zzz.get("action"))
 check("绝区零清单：加密母带×5 + 原装母带×5",

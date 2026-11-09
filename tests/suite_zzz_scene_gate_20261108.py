@@ -196,8 +196,9 @@ def test_configs_and_wiring():
         check(f"[{path}] LOGISTICS 复用运行中窗口", lg.get("reuse_existing_window") is True)
         check(f"[{path}] LOGISTICS 第一步是场景校正",
               lg["steps"][0]["action"] == "zzz_enter_main", lg["steps"][0]["name"])
-        check(f"[{path}] LOGISTICS 补了丽都城募中间层",
-              any(s.get("target_text") == "丽都城募" for s in lg["steps"]),
+        check(f"[{path}] LOGISTICS 不再经过丽都城募（按 · 开手机直进）",
+              not any(s.get("target_text") == "丽都城募" for s in lg["steps"])
+              and lg["steps"][1].get("key") == "oem3",
               [s.get("name") for s in lg["steps"]])
         check(f"[{path}] LOGISTICS 删了 start_from_main", "start_from_main" not in lg)
         check(f"[{path}] NOTORIOUS 跑完关游戏",

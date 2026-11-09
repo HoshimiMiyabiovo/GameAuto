@@ -7,7 +7,7 @@
 
 改法（不动其它三个游戏）：
 - flow_configs: ZZZ_MONTHLY 只留信号残响 3 步；新增 ZZZ_LOGISTICS_MONTHLY
-  6 步（启动→主界面→功能菜单→后勤商店→商店页→采购）。
+  5 步（场景校正→按 · 打开手机→后勤商店→商店页→采购）。
 - background_template_runner: 新增 run_zzz_logistics_monthly_background，
   独立写 monthly_flow:ZZZ_LOGISTICS_MONTHLY。
 - task_batch_runner: _EXTRA_MONTHLY_FLOWS / _EXTRA_MONTHLY_RUNNERS；
@@ -68,13 +68,17 @@ def test_config_split():
           [s["name"] for s in signal["steps"]])
     check("信号残响流程不含 zzz_shop_buy",
           all(s.get("action") != "zzz_shop_buy" for s in signal["steps"]))
-    check("后勤流程 6 步且末步是 zzz_shop_buy",
-          len(logistics["steps"]) == 6
+    check("后勤流程 5 步且末步是 zzz_shop_buy",
+          len(logistics["steps"]) == 5
           and logistics["steps"][-1]["action"] == "zzz_shop_buy",
           [s["name"] for s in logistics["steps"]])
-    check("后勤流程开局=场景校正，ESC 第 2 步（2026-11-08 场景表接管）",
+    check("后勤流程开局=场景校正，第 2 步按 · 打开手机（2026-11-09 纠错）",
           logistics["steps"][0]["action"] == "zzz_enter_main"
-          and logistics["steps"][1]["name"] == "打开功能菜单")
+          and logistics["steps"][1]["name"] == "打开手机"
+          and logistics["steps"][1]["key"] == "oem3")
+    check("后勤流程不再经过丽都城募活动页",
+          not any(s.get("target_text") == "丽都城募" for s in logistics["steps"]),
+          [s["name"] for s in logistics["steps"]])
     groups = logistics["steps"][-1]["shop_groups"]
     check("两组页签与清单完整",
           [g["name"] for g in groups] == ["哨站后勤", "协会物资"]

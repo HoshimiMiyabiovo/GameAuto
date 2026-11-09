@@ -116,9 +116,15 @@ def test_recheck_no_flip():
 def test_real_log():
     print("[4] 真实日志端到端")
     data = zp.parse_latest_zzz_log()
-    if data is None:
-        # 跨天/今天还没跑绝区零时没有当日日志；这是环境依赖，不算回归失败
-        print("  SKIP 今天没有 OneDragon 日志（跨天或今天未运行），跳过真实日志端到端")
+    if data is None or not data.get("tasks"):
+        # 跨天/今天还没跑绝区零时没有当日日志；手动启动/更新也会留下 tasks=[]
+        # 的当日日志（11-09 用户手动收尾 OneDragon 更新实锤），同属环境依赖
+        print("  SKIP 今天没有 OneDragon 任务日志（跨天/未运行/仅启动），跳过真实日志端到端")
+        return
+    if not data.get("is_all_success") and not data.get("has_failed"):
+        # 链还在跑（11-09 21:47 实锤：日志只有 3 任务、无收口标记）时活跃度可能
+        # 还没轮到；收口后仍缺活跃度任务才算真回归
+        print("  SKIP 当日链未收口（无成功/失败标记），真实日志端到端等收口后再验")
         return
     act = next((t for t in data["tasks"] if t["task_name"] == "活跃度奖励"), None)
     check("解析出活跃度奖励任务", act is not None, data["tasks"][:3])

@@ -29,6 +29,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 
 from game_auto.runtime import baijing_fitting as bf  # noqa: E402
 from game_auto.runtime import baijing_flow as flow  # noqa: E402
+from game_auto.runtime.background_template_runner import weekly_flow_week_key  # noqa: E402
 
 ART = PROJECT_ROOT / "data" / "artifacts"
 FAILURES = []
@@ -346,7 +347,10 @@ def test_weekly_gate():
 
     def run(already, ok):
         fake_db.reset_mock()
-        fake_db.get_task_meta.return_value = "2026-W45" if already else ""
+        # 周键必须与生产 weekly_flow_week_key() 同口径（ISO 周+4h 后移），
+        # 硬编码 "2026-W45" 跨周即失效（11-10 复跑实锤：W46 时门控把假标记
+        # 当"上周"真去跑了拟合回归）。动态取当前周键，套件永不过期。
+        fake_db.get_task_meta.return_value = weekly_flow_week_key() if already else ""
         with mock.patch("game_auto.storage.workflow_db.WorkflowDB", return_value=fake_db), \
              mock.patch.object(flow, "_record_baijing_task"), \
              mock.patch.object(flow, "_ensure_baijing_window_valid", return_value=1), \
