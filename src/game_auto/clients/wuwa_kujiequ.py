@@ -227,6 +227,10 @@ def fetch_dashboard(profile: WuwaKujiequProfile, auto_sign: bool = False) -> Dic
 
 
 def fetch_daily_data(profile: WuwaKujiequProfile) -> Dict[str, Any]:
+    return _with_fresh_token_on_stale(profile, lambda: _fetch_daily_data_impl(profile))
+
+
+def _fetch_daily_data_impl(profile: WuwaKujiequProfile) -> Dict[str, Any]:
     _ensure_profile_ready(profile)
     access_token = _get_access_token(profile)
     refresh_daily_data(profile, access_token=access_token)
@@ -322,6 +326,10 @@ def refresh_daily_data(profile: WuwaKujiequProfile, access_token: Optional[str] 
 
 
 def fetch_base_data(profile: WuwaKujiequProfile) -> Dict[str, Any]:
+    return _with_fresh_token_on_stale(profile, lambda: _fetch_base_data_impl(profile))
+
+
+def _fetch_base_data_impl(profile: WuwaKujiequProfile) -> Dict[str, Any]:
     _ensure_profile_ready(profile)
     access_token = _get_access_token(profile)
     content_type, body = _encode_multipart_form(
@@ -495,6 +503,26 @@ def get_public_ip() -> str:
     _public_ip_cache = "127.127.127.127"
     _public_ip_cache_time = now
     return _public_ip_cache
+
+
+# B-At 过期/登录态失效类关键字：命中即清 token 缓存重取一次（审计 P2-3）。
+# 旧实现缓存命中即返回且无任何失效路径，GUI 长驻时令牌过期后每 300s 刷新
+# 与重试全部撞旧缓存，只能重启 GUI 恢复。
+_TOKEN_STALE_KEYWORDS = ("令牌", "登录", "过期", "身份", "未授权", "token")
+
+
+def _with_fresh_token_on_stale(profile: WuwaKujiequProfile, run):
+    """令牌疑似失效时清缓存重取并重试一次；非登录类错误原样上抛。"""
+    try:
+        return run()
+    except WuwaKujiequError as exc:
+        msg = str(exc)
+        if not any(k in msg for k in _TOKEN_STALE_KEYWORDS):
+            raise
+        cache_key = str(profile.user_id or "")
+        _access_token_cache.pop(cache_key, None)
+        LOGGER.info("[鸣潮库街区] B-At 令牌疑似失效，已清缓存重取重试: %s", msg[:80])
+        return run()
 
 
 def _get_access_token(profile: WuwaKujiequProfile) -> str:

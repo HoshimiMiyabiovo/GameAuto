@@ -118,15 +118,21 @@ def _is_cloaked(hwnd: int) -> bool:
         return False
 
 
-_EXE_CACHE: Dict[int, str] = {}
+# pid → (exe 基名, 写入时间)。带 TTL：GUI 长驻数周时 Windows 会复用 PID，
+# 永久缓存会返回已死进程的名字（目标窗口下拉显示错误归属，审计 P2）；
+# 条目随过期访问淘汰，不再只进不出。
+_EXE_CACHE: Dict[int, tuple] = {}
+_EXE_CACHE_TTL_SEC = 300.0
 
 
 def _query_process_exe(pid: Optional[int]) -> str:
-    """取进程可执行文件基名（如 Game.exe），失败返回空串。带 pid 级缓存。"""
+    """取进程可执行文件基名（如 Game.exe），失败返回空串。带 pid 级 TTL 缓存。"""
     if not pid:
         return ""
-    if pid in _EXE_CACHE:
-        return _EXE_CACHE[pid]
+    now = time.time()
+    cached = _EXE_CACHE.get(pid)
+    if cached is not None and now - cached[1] < _EXE_CACHE_TTL_SEC:
+        return cached[0]
     exe = ""
     try:
         import ctypes
@@ -149,7 +155,11 @@ def _query_process_exe(pid: Optional[int]) -> str:
                 ctypes.windll.kernel32.CloseHandle(handle)
     except Exception:
         exe = ""
-    _EXE_CACHE[pid] = exe
+    _EXE_CACHE[pid] = (exe, now)
+    # 顺带清过期条目，缓存不再无界增长
+    if len(_EXE_CACHE) > 256:
+        for k in [k for k, (_, ts) in _EXE_CACHE.items() if now - ts >= _EXE_CACHE_TTL_SEC]:
+            _EXE_CACHE.pop(k, None)
     return exe
 
 

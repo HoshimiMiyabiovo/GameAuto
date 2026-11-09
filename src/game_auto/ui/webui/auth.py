@@ -40,8 +40,16 @@ def _load_section() -> dict:
     return sec
 
 def _save_section(sec: dict):
-    cfg = cfg_manager.load(force=True)
-    # 加密 password_hash 落盘
+    # 2026-11-09 收敛：改走 update_config 锁内原子读改写（审计 P1-1 旁路），
+    # 与 GUI/任务线程的并发写不再互相整文档覆盖。
+    def _apply(cfg) -> None:
+        cfg[WEBUI_SECTION] = _encrypted(sec)
+
+    cfg_manager.update_config(_apply)
+
+
+def _encrypted(sec: dict) -> dict:
+    """password_hash 未加密则 DPAPI 加密后返回副本。"""
     to_save = dict(sec)
     if to_save.get("password_hash") and not str(to_save["password_hash"]).startswith("dpapi:"):
         if sec_available():
@@ -49,8 +57,7 @@ def _save_section(sec: dict):
                 to_save["password_hash"] = protect(str(to_save["password_hash"]))
             except Exception as exc:
                 LOGGER.warning("[WebUI][Auth] password_hash 加密失败，将按明文 hash 落盘: %s", exc)
-    cfg[WEBUI_SECTION] = to_save
-    cfg_manager.save(cfg)
+    return to_save
 
 def has_account() -> bool:
     sec = _load_section()
@@ -117,6 +124,11 @@ def create_session(username: str) -> str:
     for k in list(_sessions.keys()):
         if _sessions[k].get("exp", 0) < now:
             _sessions.pop(k, None)
+    # 容量上限（审计 P3）：单用户本机场景正常只有个位数会话；上限防异常
+    # 累积（改密清会话之外的唯一泄漏面是进程长期不重启+反复登录）
+    if len(_sessions) > 64:
+        for k, _ in sorted(_sessions.items(), key=lambda kv: kv[1].get("exp", 0))[: len(_sessions) - 64]:
+            _sessions.pop(k, None)
     return token
 
 def verify_token(token: str) -> Optional[str]:
@@ -142,6 +154,10 @@ def check_rate_limit(ip: str) -> bool:
         return False
     lst.append(now)
     _login_attempts[ip] = lst
+    # 容量上限（审计 P3）：只保留最近活跃的 IP 桶，防伪造源 IP 灌爆 dict
+    if len(_login_attempts) > 256:
+        for k in list(_login_attempts.keys())[: len(_login_attempts) - 256]:
+            _login_attempts.pop(k, None)
     return True
 
 def get_token_from_request(request: Request) -> str:

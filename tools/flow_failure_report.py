@@ -33,6 +33,7 @@ def main() -> int:
     ap.add_argument("--verbose", action="store_true", help="明细里带当帧 OCR 文字")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
     ap.add_argument("--purge", type=int, default=0, help="清理 N 天前的失败记录（0=不清理）")
+    ap.add_argument("--yes", action="store_true", help="跳过 --purge 的交互确认（供脚本调用）")
     ap.add_argument("--output", default="", help="报告写入文件（默认打印到控制台）")
     args = ap.parse_args()
 
@@ -41,7 +42,14 @@ def main() -> int:
     from game_auto.storage.workflow_db import WorkflowDB
 
     if args.purge:
-        purge_old_records(None, keep_days=args.purge)
+        # 破坏性操作加确认（审计 P3）：--purge 直接清失败记录+截图，此前无交互
+        if not args.yes and sys.stdin.isatty():
+            reply = input(f"将删除 {args.purge} 天前的失败记录与截图，确认？[y/N] ").strip().lower()
+            if reply not in ("y", "yes"):
+                print("已取消清理")
+                args.purge = 0
+        if args.purge:
+            purge_old_records(None, keep_days=args.purge)
 
     db = WorkflowDB(str(WORKFLOW_DB_PATH))
     summary = db.summarize_flow_failures(days=args.days, group_limit=args.top)

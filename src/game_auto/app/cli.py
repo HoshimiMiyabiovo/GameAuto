@@ -24,9 +24,32 @@ from ..services.utils import (
 )
 
 def require_admin():
-    if not ctypes.windll.shell32.IsUserAnAdmin():
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
-        sys.exit(0)
+    """非管理员启动时自提权重启。
+
+    2026-11-09 审计 P1-6：旧实现 `ShellExecuteW(..., " ".join(sys.argv))` 以
+    脚本路径直跑重启后的 cli.py——`__package__` 为空，顶部相对导入必抛
+    ImportError（提权窗口闪退）；且参数不加引号，路径含空格会切错。
+    现改为 `python -m game_auto.app.cli <args>` 形式重启：能执行到本函数
+    说明包本就可导入（脚本直跑在相对导入处就死了），-m 重启继承同样的
+    PYTHONPATH 环境；参数逐个走 list2cmdline 加引号。
+    """
+    if ctypes.windll.shell32.IsUserAnAdmin():
+        return
+    import subprocess as _sp
+    args = _sp.list2cmdline(sys.argv[1:]) if len(sys.argv) > 1 else ""
+    params = ("-m game_auto.app.cli " + args).strip()
+    ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
+    if ret <= 32:
+        # 提权被用户取消/失败：给出可行动出口而不是无提示闪退
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "CLI 需要管理员权限运行（合成点击受 UIPI 拦截）。\n"
+            "自提权失败（可能取消了 UAC 弹窗）——请右键管理员运行，"
+            "或使用 scripts\\launchers\\start_cli_admin.bat。",
+            "需要管理员权限",
+            0x10,
+        )
+    sys.exit(0)
 
 def main():
     require_admin()
@@ -77,8 +100,18 @@ def main():
                 print("="*50 + "\n游戏自动化助手 - 任务选择\n" + "="*50)
                 target_apps = get_user_selection()
         else:
+            # 未知 app key 直接退出并打印合法清单（审计 P3）：旧口径
+            # resolve_app_key 原样透传，靠批处理内部兜错
+            raw_key = sys.argv[1]
+            resolved = resolve_app_key(raw_key)
+            from ..games import registry as _reg
+            if resolved == str(raw_key) and str(raw_key) not in {k.lower() for k in _reg.app_keys()} and str(raw_key) not in _reg.app_keys():
+                print(f"未知应用: {raw_key}")
+                print("可用应用: " + ", ".join(
+                    f"{k}({get_app_display_name(k)})" for k in APP_ORDER))
+                sys.exit(2)
             script_choice = sys.argv[2] if len(sys.argv) > 2 else None
-            target_apps = [(resolve_app_key(sys.argv[1]), script_choice)] if len(sys.argv) > 1 else [(app, None) for app in APP_ORDER]
+            target_apps = [(resolved, script_choice)]
 
         if force_rerun:
             print('[强制重跑] 已启用，跳过"今日已完成"检查')

@@ -69,6 +69,18 @@ def _labeled_entry(parent, label: str, value: str = "", width: int = 45,
 # 启动参数编辑弹窗
 # ──────────────────────────────────────────────────────────────
 
+
+def _builtin_app_keys() -> set:
+    """注册表内置游戏 key（用于禁用删除按钮，见 _del_app）。"""
+    try:
+        from game_auto.games import registry as _reg
+        return set(_reg.app_keys())
+    except Exception:
+        return set()
+
+
+_BUILTIN_APP_KEYS = _builtin_app_keys()
+
 class _ParamsEditor(tk.Toplevel):
     """弹出窗口：逐行编辑启动参数列表。"""
 
@@ -400,6 +412,10 @@ class _GlobalSettingsPanel(ttk.Frame):
 
     def _save(self):
         try:
+            # 跨进程陈旧快照缩窗（审计 P1-1）：本进程 manager 缓存自首次 load 后
+            # 不再自动刷新，主 GUI 在此期间写入的一切（凭据/签到状态）会被本进程
+            # 的旧快照整文档回滚。保存前先从盘上重读一次；进程级互斥另议。
+            cm.load(force=True)
             cm.update_qbittorrent({
                 "path": self._e_qbt_path.get().strip(),
                 "process_name": self._e_qbt_proc.get().strip(),
@@ -557,7 +573,24 @@ class _AppsListPanel(ttk.Frame):
         if not key:
             messagebox.showinfo("提示", "请先选中一行", parent=self)
             return
-        display = cm.get_app(key).get("display_name", key)
+        app_cfg = cm.get_app(key)
+        display = (app_cfg or {}).get("display_name", key)
+        if app_cfg is None:
+            # 列表与配置失配窗口（审计 P3）：条目只在列表里，直接刷新列表
+            messagebox.showwarning("提示", f"「{key}」已不在配置中，列表已刷新", parent=self)
+            self._refresh()
+            return
+        if key in _BUILTIN_APP_KEYS:
+            # 内置游戏删除永远不生效（审计 P2-3）：remove_app pop 掉的 key 在
+            # _extract_overrides 里表达不了"删除"，重启后 apply_runtime_config
+            # 又从默认模板补回、带着默认配置重新参与批次。内置条目只能禁用
+            messagebox.showwarning(
+                "不支持删除内置游戏",
+                f"「{display}」（{key}）是注册表内置游戏，删除后重启会自动恢复。\n"
+                "请在主 GUI 的任务列表里取消勾选（enabled）来停用它。",
+                parent=self,
+            )
+            return
         if messagebox.askyesno("确认删除", f"删除脚本「{display}」（{key}）？\n此操作不可撤销。", parent=self):
             cm.remove_app(key)
             self._refresh()

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
 import time
 from pathlib import Path
 from typing import List
@@ -12,6 +14,8 @@ from game_auto.services.daily_progress_tracker import get_tracker
 from game_auto.settings.paths import BASE_DIR, BAIJING_VERIFY_DIR, FLOW_FAILURE_DIR, WORKFLOW_DB_PATH
 from game_auto.settings import resolve_game_key
 from game_auto.settings.defaults import GAME_KEYS
+
+logger = logging.getLogger("GameAutomation.WebUI")
 
 router = APIRouter(prefix="/api/daily", tags=["daily"])
 
@@ -91,25 +95,52 @@ def progress():
 
 @router.post("/check")
 def check(payload: dict):
+    # 2026-11-09 审计 P2：check_games_progress 逐游戏打外部 API（桌面端按
+    # 120s 口径设计），sync 端点直跑会长时间占用 uvicorn 线程池令牌，多击
+    # 拖死 /api/apps/status 轮询。改后台线程跑，响应立即返回当前快照，
+    # 进度经轮询 /api/daily/progress 看到（桌面 GUI 同款模式）。
     games = payload.get("games")
-    # 复用桌面逻辑：check_games_progress + 持久化
+    threading.Thread(
+        target=_run_progress_check,
+        args=(games,),
+        daemon=True,
+    ).start()
+    return _load_snapshot()
+
+
+def _run_progress_check(games):
+    """后台执行每日进度查询并写库；异常只记日志不外抛。"""
     try:
         from game_auto.clients.daily_checker import check_games_progress
         tracker = get_tracker(str(WORKFLOW_DB_PATH))
-        result = check_games_progress(game_keys=games if games else None, tracker=tracker)
-        # check_games_progress 已写入 tracker，直接返回最新快照
-        return _load_snapshot()
+        check_games_progress(game_keys=games if games else None, tracker=tracker)
     except Exception as exc:
-        return {"error": str(exc), **_load_snapshot()}
+        logger.warning("[WebUI][每日] check_games_progress 失败: %s", exc)
+
+
+def _safe_image_path(base_dir, name: str):
+    """白名单目录内的文件路径；非法名/越界返回 None。
+
+    2026-11-09 审计 P2：仅过滤 / \\ .. 挡不住 pathlib 的盘符相对路径
+    语义——`WindowsPath(...) / "C:bootmgr"` 整体替换为盘根。读出前统一
+    `resolve().is_relative_to(base)` 校验（桌面端 openFlowFailureImage 同款）。
+    """
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return None
+    p = Path(base_dir) / name
+    try:
+        resolved = p.resolve()
+        if not resolved.is_relative_to(Path(base_dir).resolve()):
+            return None
+    except OSError:
+        return None
+    return resolved
+
 
 @router.get("/verify-image/{name}")
 def verify_image(name: str):
-    # 仅允许 jpg/png，避免路径穿越
-    if "/" in name or "\\" in name or ".." in name:
-        return {"error": "invalid name"}
-    p = BAIJING_VERIFY_DIR / name
-    if not p.exists():
-        # 尝试按日期前缀模糊
+    p = _safe_image_path(BAIJING_VERIFY_DIR, name)
+    if p is None or not p.is_file():
         return {"error": "not found"}
     return FileResponse(str(p), media_type="image/jpeg")
 
@@ -147,9 +178,7 @@ def failures(days: int = 7, limit: int = 50, flow: str = ""):
 @router.get("/failure-image/{name}")
 def failure_image(name: str):
     """失败当刻截图（artifacts/flow_failures/）。"""
-    if "/" in name or "\\" in name or ".." in name:
-        return {"error": "invalid name"}
-    p = FLOW_FAILURE_DIR / name
-    if not p.exists():
+    p = _safe_image_path(FLOW_FAILURE_DIR, name)
+    if p is None or not p.is_file():
         return {"error": "not found"}
     return FileResponse(str(p), media_type="image/jpeg")

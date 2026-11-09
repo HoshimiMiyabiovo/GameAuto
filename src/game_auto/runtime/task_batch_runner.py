@@ -457,7 +457,6 @@ class TaskBatchHooks:
 
 
 @dataclass
-@dataclass
 class TaskBatchResult:
     """整批执行结果：report 为汇总报告行（邮件/UI 共用），warnings 为非致命提示，
     startup_lines 为启动前签到的输出段。"""
@@ -841,14 +840,26 @@ def _run_single_task(
         )
         success, message, duration = ok_script_attempt.success, ok_script_attempt.message, ok_script_attempt.duration
     else:
+        # 监控 start() 含初始化（读现有日志/建快照），异常绝不能穿透烧掉整批
+        # ——旧代码这两处裸露在 try 外，_matching_files 竞态炸掉就是整批不跑
+        # （2026-11-09 审计 P2-1）。启动失败降级为"监控不可用"：原神走
+        # fail-closed 判定（log_found=False），暖暖走 monitor 超时兜底。
         if app_key == "GenshinImpact":
-            bettergi_monitor = start_bettergi_log_monitor(app_config, controller.logger)
+            try:
+                bettergi_monitor = start_bettergi_log_monitor(app_config, controller.logger)
+            except Exception as exc:
+                controller.logger.error(f"[GI监控] BetterGI 日志监控启动失败（按监控不可用处理）: {exc}", exc_info=True)
+                bettergi_monitor = None
         if app_key == "InfinityNikki":
-            nikki_completion_monitor = start_infinity_nikki_log_monitor(
-                app_config,
-                controller.logger,
-                stop_game_on_completion=True,
-            )
+            try:
+                nikki_completion_monitor = start_infinity_nikki_log_monitor(
+                    app_config,
+                    controller.logger,
+                    stop_game_on_completion=True,
+                )
+            except Exception as exc:
+                controller.logger.error(f"[CJ流程] 奇想盒日志监控启动失败（完成回调不可用）: {exc}", exc_info=True)
+                nikki_completion_monitor = None
 
         try:
             success, message, duration = controller.execute_task(app_key, script_choice)
@@ -917,7 +928,6 @@ def _run_single_task(
         if _verify_msg:
             success = False
             message = _verify_msg
-            daily_failed = True
             controller.logger.warning("[%s] 日志复核不通过，改判失败: %s", display_name, message)
 
     time_str = format_duration(duration)
@@ -1143,7 +1153,8 @@ def run_task_batch(
             xm_result["msg"] = msg
             if not ok:
                 warnings.append(msg or "XM 前台流程失败")
-            time.sleep(5)
+            # 与同文件 _interruptible_sleep 口径一致：停止时不再硬睡 5s
+            _interruptible_sleep(controller, 5)
 
         result = _run_single_task(
             controller,

@@ -3432,6 +3432,10 @@ class FletGameAutoApp(FletAutomationMixin):
                             "source_hash": "",
                             "total_records": len(db_records),
                         })
+                        # 先删 uid 再整表重插（审计 P2-1，与 bridge pool.json 路径
+                        # 同口径）：record_id 是迭代下标，导出键序位移会让旧记录
+                        # 拿到新 id、UNIQUE 失配整库翻倍；全量导入删了重插即可
+                        self.preference_db.delete_gacha_records_by_uid("nikki", uid)
                         self.preference_db.upsert_gacha_records("nikki", uid, import_id, db_records)
                         self.controller.logger.info("[抽卡分析] 无限暖暖记录已写入数据库：%d 条", len(db_records))
                 except Exception as db_exc:
@@ -4391,6 +4395,9 @@ class FletGameAutoApp(FletAutomationMixin):
                         "source_hash": "",
                         "total_records": len(db_records),
                     })
+                    # 先删 uid 再整表重插（审计 P2-1，与 bridge pool.json 路径同口径，
+                    # 理由同上：xlsx 平铺下标 id 在重导/改 sheet 序时会整库翻倍）
+                    self.preference_db.delete_gacha_records_by_uid("wuwa", uid)
                     self.preference_db.upsert_gacha_records("wuwa", uid, import_id, db_records)
                     self.controller.logger.info("[抽卡分析] 鸣潮记录已写入数据库：%d 条", len(db_records))
                 except Exception as db_exc:

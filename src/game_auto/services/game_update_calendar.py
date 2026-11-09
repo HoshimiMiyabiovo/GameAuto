@@ -499,7 +499,13 @@ def get_update_info(
     now: Optional[datetime] = None,
     refresh_if_stale: bool = True,
 ) -> Optional[Dict[str, Any]]:
-    """返回某游戏最近一次版本更新的信息（带 *_dt 字段）。"""
+    """返回某游戏最近一次版本更新的信息（带 *_dt 字段）。
+
+    2026-11-09 审计 P2：网络拉取移出 `_LOCK`——旧实现持锁调 `_fetch_game`
+    （每源超时 12s），缓存过期后第一个触发的线程（通常是任务启动前的维护
+    检查）持锁联网最长 1-2 分钟，此后所有游戏的维护检查全部排队。现在锁
+    只护缓存读写；并发过期时其他线程读旧缓存或等下轮，不再互相钉死。
+    """
     game = _normalize_app_key(app_key)
     if not game:
         return None
@@ -511,16 +517,20 @@ def get_update_info(
             return _with_dt(info)
         if not refresh_if_stale:
             return _with_dt(info) if info else None
-        try:
-            fresh = _fetch_game(game)
-            if fresh:
-                cache.setdefault("games", {})[game] = fresh
-                # 用真实拉取时间，不能用调用方传入的 now（测试/模拟时间会写到未来）
-                cache["fetched_at"] = datetime.now(CN_TZ).isoformat(timespec="seconds")
-                _save_cache(cache)
-                info = fresh
-        except Exception as e:
-            logger.warning("[更新日历] 拉取 %s 公告失败（使用旧缓存）: %s", game, e)
+    # 锁外拉网络；期间其他线程继续读旧缓存
+    fresh = None
+    try:
+        fresh = _fetch_game(game)
+    except Exception as e:
+        logger.warning("[更新日历] 拉取 %s 公告失败（使用旧缓存）: %s", game, e)
+    with _LOCK:
+        if fresh:
+            cache = _load_cache()
+            cache.setdefault("games", {})[game] = fresh
+            # 用真实拉取时间，不能用调用方传入的 now（测试/模拟时间会写到未来）
+            cache["fetched_at"] = datetime.now(CN_TZ).isoformat(timespec="seconds")
+            _save_cache(cache)
+            info = fresh
         return _with_dt(info) if info else None
 
 
@@ -558,18 +568,23 @@ def is_under_maintenance(app_key: str, *, now: Optional[datetime] = None) -> boo
 
 
 def refresh_all() -> Dict[str, Any]:
-    """强制刷新三款游戏公告，返回缓存内容。GUI 启动时可后台预热。"""
+    """强制刷新三款游戏公告，返回缓存内容。GUI 启动时可后台预热。
+
+    网络拉取在锁外串行（与 get_update_info 同口径），只在读写缓存时持锁。
+    """
     now = datetime.now(CN_TZ)
+    fetched: Dict[str, Any] = {}
+    for game in _SOURCES:
+        try:
+            info = _fetch_game(game)
+            if info:
+                fetched[game] = info
+        except Exception as e:
+            logger.warning("[更新日历] 刷新 %s 失败: %s", game, e)
     with _LOCK:
         cache = _load_cache()
         cache.setdefault("games", {})
-        for game in _SOURCES:
-            try:
-                info = _fetch_game(game)
-                if info:
-                    cache["games"][game] = info
-            except Exception as e:
-                logger.warning("[更新日历] 刷新 %s 失败: %s", game, e)
+        cache["games"].update(fetched)
         cache["fetched_at"] = now.isoformat(timespec="seconds")
         _save_cache(cache)
         return cache

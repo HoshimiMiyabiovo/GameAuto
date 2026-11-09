@@ -701,11 +701,18 @@ def main() -> int:
     parser.add_argument("--okww-root", required=True, help="ok-ww working directory")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
-    parser.add_argument("--token", required=True)
+    # token 走环境变量优先（审计 P3）：命令行参数对同用户的其他进程可读
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("GAMEAUTO_OKWW_TOKEN", ""),
+        help="控制 token；未传时读环境变量 GAMEAUTO_OKWW_TOKEN")
+    parser.add_argument("--allow-empty-token", action="store_true")
     parser.add_argument("--ready-file", required=True)
     parser.add_argument("--log", required=True)
     parser.add_argument("--humanize-config", default="")
     args = parser.parse_args()
+    if not args.token and not args.allow_empty_token:
+        parser.error("--token 未提供且环境变量 GAMEAUTO_OKWW_TOKEN 为空")
 
     runner = ModuleRunner(
         okww_root=args.okww_root,

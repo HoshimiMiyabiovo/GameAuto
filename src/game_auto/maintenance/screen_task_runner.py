@@ -59,6 +59,11 @@ class ScreenTaskRunner:
         pyautogui.PAUSE = 0.1
 
     def run(self, profile: TaskProfile, screenshot_dir: str) -> bool:
+        # 维护执行器互斥锁（审计 P2-5），同 generic_workflow_runner
+        from ..services.instance_lock import acquire_aux_lock
+        if not acquire_aux_lock("maintenance"):
+            self.logger.error("已有自动化任务在运行（生产 GUI 或其他维护脚本），拒绝并发执行任务")
+            return False
         os.makedirs(screenshot_dir, exist_ok=True)
         self.logger.info(f"[{profile.name}] 启动自动页面任务")
 

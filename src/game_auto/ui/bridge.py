@@ -105,6 +105,7 @@ class UiBridge(
     scriptCheckRunningChanged = Signal()
     toolInstallChanged = Signal(str)
     diskScanChanged = Signal(str)
+    flowFailuresChanged = Signal(str)
 
     # ── 固定点击序列（录制 / 回放）──
     clickSeqRecordingChanged = Signal(bool)

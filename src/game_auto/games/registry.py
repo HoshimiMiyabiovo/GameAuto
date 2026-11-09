@@ -36,11 +36,20 @@ def _discover() -> None:
     global _LOADED
     if _LOADED:
         return
+    # 失败时回滚标记重试（2026-11-09 审计 P2-2）：先置位后 import 的话，任一
+    # games 模块顶层抛错（新模块有 bug/可选依赖缺失）会让注册表停留在半
+    # 初始化状态且永不重试，消费方在宽 except 里降级成"部分游戏悄无声息
+    # 消失"。回滚后下次访问重新尝试导入并显式报错。已成功的模块
+    # importlib 会命中 sys.modules 缓存，重试不会重复执行顶层代码。
+    try:
+        for mod in pkgutil.iter_modules(importlib.import_module(_PACKAGE).__path__):
+            if mod.name.startswith("_") or mod.name in _MODULE_EXCLUDES:
+                continue
+            importlib.import_module(f"{_PACKAGE}.{mod.name}")
+    except Exception:
+        _LOADED = False
+        raise
     _LOADED = True
-    for mod in pkgutil.iter_modules(importlib.import_module(_PACKAGE).__path__):
-        if mod.name.startswith("_") or mod.name in _MODULE_EXCLUDES:
-            continue
-        importlib.import_module(f"{_PACKAGE}.{mod.name}")
 
 
 def _ensure_loaded() -> None:

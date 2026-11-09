@@ -74,8 +74,10 @@ def resolve(value: str, legacy_protect_flag: str = "") -> str:
         try:
             return unprotect(value)
         except Exception as exc:
-            LOGGER.warning("[SecureStore] DPAPI 解密失败，回退明文: %s", exc)
-            return value
+            # 解密失败返回空串（审计 P3）：把 dpapi:... 密文当值用，下游拿它
+            # 当 token 请求必然失败且难排查；空串让上层走"未配置"分支
+            LOGGER.error("[SecureStore] DPAPI 解密失败，返回空串（原值是密文，不得当明文用）: %s", exc)
+            return ""
     # 兼容 email 旧式：base64 无前缀 + password_protect 标记
     if legacy_protect_flag == _LEGACY_PROTECT_VALUE:
         # 尝试按 email 旧式解密（纯 base64）

@@ -78,14 +78,22 @@ def apply_runtime_config(config: Optional[Dict] = None) -> Dict:
 
     APP_ORDER[:] = list(app_order)
 
+    # deepcopy 先行、clear+update 相邻：模块全局 dict 是被各处 `from ... import
+    # APPS` 持引用消费的，不能整体换引用，只能原地替换。把耗时的深拷贝放
+    # clear 之前，把"读者可能看到空/半新 dict"的窗口压到两条相邻 C 级 dict
+    # 操作之间（2026-11-09 审计 P2；此前 deepcopy 在 clear 之后，空窗秒级）。
+    new_apps = copy.deepcopy(apps)
+    new_qbt = copy.deepcopy(qbittorrent)
+    new_st = copy.deepcopy(script_tools)
+
     QBITTORRENT.clear()
-    QBITTORRENT.update(copy.deepcopy(qbittorrent))
+    QBITTORRENT.update(new_qbt)
 
     SCRIPT_TOOLS.clear()
-    SCRIPT_TOOLS.update(copy.deepcopy(script_tools))
+    SCRIPT_TOOLS.update(new_st)
 
     APPS.clear()
-    APPS.update(copy.deepcopy(apps))
+    APPS.update(new_apps)
     return runtime_config
 
 

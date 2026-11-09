@@ -1056,7 +1056,13 @@ def login_by_qrcode_genshin() -> Dict[str, Any]:
             if isinstance(body_data, dict) and body_data:
                 LOGGER.info("[米游社] queryQRLoginStatus data 字段: %s", sorted(body_data.keys()))
                 tokens_raw = body_data.get("tokens")
-                LOGGER.info("[米游社] tokens 字段原始值: type=%s, value=%s", type(tokens_raw).__name__, repr(tokens_raw)[:500])
+                # 不打 tokens 原始值（stoken 等长效凭据，审计 P1-3 同族）；
+                # 只报类型与个数辅助排障
+                LOGGER.info(
+                    "[米游社] tokens 字段: type=%s, count=%s",
+                    type(tokens_raw).__name__,
+                    len(tokens_raw) if hasattr(tokens_raw, "__len__") else "n/a",
+                )
                 token_fields = _extract_qr_login_tokens(body_data)
                 if token_fields:
                     for key, value in token_fields.items():
@@ -1094,7 +1100,18 @@ def login_by_qrcode_genshin() -> Dict[str, Any]:
                 if extracted_tokens.get("game_token"):
                     LOGGER.info("[米游社] game_token 已获取")
                 else:
-                    LOGGER.warning("[米游社] tokens 字段中未找到 game_token: %s", repr(tokens_raw)[:300])
+                    # 只打结构不打值：tokens 元素里是 stoken/game_token 等长效凭据，
+                    # 原值进日志=凭据泄漏（2026-11-09 审计 P1-3 同族）
+                    if isinstance(tokens_raw, list):
+                        shapes = [type(it).__name__ for it in tokens_raw]
+                        keys = sorted({k for it in tokens_raw if isinstance(it, dict) for k in it})
+                        LOGGER.warning(
+                            "[米游社] tokens 字段中未找到 game_token: n=%d shapes=%s keys=%s",
+                            len(tokens_raw), shapes[:5], keys)
+                    else:
+                        LOGGER.warning(
+                            "[米游社] tokens 字段中未找到 game_token: type=%s",
+                            type(tokens_raw).__name__)
                 break
             await asyncio.sleep(1)
 

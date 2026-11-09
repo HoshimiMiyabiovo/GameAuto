@@ -245,6 +245,16 @@ class JsonConfigAdapter:
                 raise ConfigError(f"读取 {path.name} 失败: {exc}")
         return out
 
+    @staticmethod
+    def _prune_backups(dest_dir: Path, keep: int = 50) -> None:
+        """按数量留顶备份（审计 P2-11）：每份 45KB 级低频写入，仅防以年计累积。"""
+        try:
+            baks = sorted(dest_dir.glob("*.bak"), key=lambda f: f.stat().st_mtime, reverse=True)
+            for old in baks[keep:]:
+                old.unlink(missing_ok=True)
+        except OSError:
+            pass  # 清理失败不影响主流程（备份本体已写成功）
+
     def _backup(self, path: Path) -> str:
         try:
             dest_dir = CONFIG_BACKUP_DIR / self.game_key
@@ -252,6 +262,7 @@ class JsonConfigAdapter:
             stamp = time.strftime("%Y%m%d_%H%M%S")
             dest = dest_dir / f"{path.name}.{stamp}.bak"
             shutil.copy2(path, dest)
+            self._prune_backups(dest_dir)
             LOGGER.info("[刷本配置] 已备份 %s → %s", path, dest)
             return str(dest)
         except Exception as exc:

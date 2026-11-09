@@ -59,11 +59,14 @@ def acquire_instance_lock() -> Optional[int]:
     lock_path = get_lock_path()
     current_pid = os.getpid()
 
-    # 确保锁文件存在
+    # 确保锁文件存在。创建失败时 fail-open 放行，但这是单例保护的静默失效
+    # （审计 P2）：临时目录不可写往往伴随更大的环境问题，必须 ERROR 留痕，
+    # 不允许降级成 debug 后无声继续。
     try:
         lock_path.touch(exist_ok=True)
     except OSError as exc:
-        _logger.error("[实例锁] 创建锁文件失败: %s", exc)
+        _logger.error(
+            "[实例锁] 创建锁文件失败，单实例保护失效，放行启动: %s (%s)", lock_path, exc)
         return None
 
     # 读取已有 PID（用于错误消息）
@@ -97,7 +100,13 @@ def acquire_instance_lock() -> Optional[int]:
 
 
 def _release_instance_lock(lock_path: Path) -> None:
-    """释放单例锁。"""
+    """释放单例锁。
+
+    2026-11-09 审计 P2：不再 unlink 锁文件。旧顺序（解锁 → 删文件）有双实例
+    窗口：实例 C 在 A unlink 前已 open 旧文件，A 删除后 C 对孤儿 inode 加锁
+    成功，实例 D 再新建文件加锁也成功 → C/D 双实例并发跑任务。锁语义绑
+    inode，文件留在临时目录（字节级，无碍）；下次启动直接锁同一文件。
+    """
     global _lock_handle
     try:
         if _lock_handle:
@@ -108,8 +117,52 @@ def _release_instance_lock(lock_path: Path) -> None:
                 _logger.debug("[实例锁] 解锁失败（进程退出时会自动释放）: %s", exc)
             _lock_handle.close()
             _lock_handle = None
-        existing_pid = _read_existing_pid(lock_path)
-        if existing_pid == os.getpid():
-            lock_path.unlink(missing_ok=True)
     except OSError as exc:
         _logger.warning("[实例锁] 释放锁文件失败: %s", exc)
+
+_AUX_HANDLES: dict = {}
+
+
+def acquire_aux_lock(name: str) -> bool:
+    """获取一个命名的辅助互斥锁（msvcrt 文件锁，与主实例锁同目录）。
+
+    返回 True=拿到；False=已被占用（调用方应拒绝执行）。维护执行器
+    （generic_workflow_runner / screen_task_runner）用它与生产 GUI 批处理
+    互斥——两边都是实点击抢前台，并发会互相把对方的窗口切到前台、点击
+    落进对方流程的界面（2026-11-09 审计 P2-5）。句柄进程存活期间保持，
+    退出由 OS 回收；atexit 只做解锁不删文件（同 _release_instance_lock 口径）。
+    """
+    key = str(name)
+    if key in _AUX_HANDLES and _AUX_HANDLES[key] is not None:
+        return True  # 本进程已持有
+    lock_path = get_lock_path().parent / f"game_auto_aux_{key}.lock"
+    try:
+        lock_path.touch(exist_ok=True)
+        handle = open(lock_path, "r+")
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        try:
+            if "handle" in dir():
+                handle.close()
+        except Exception:
+            pass
+        return False
+    _AUX_HANDLES[key] = handle
+    return True
+
+
+def release_aux_lock(name: str) -> None:
+    handle = _AUX_HANDLES.pop(str(name), None)
+    if handle is None:
+        return
+    try:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+    finally:
+        try:
+            handle.close()
+        except OSError:
+            pass

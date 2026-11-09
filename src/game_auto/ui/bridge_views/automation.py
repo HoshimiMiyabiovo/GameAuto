@@ -55,6 +55,15 @@ class AutomationView:
                 busy = False
                 self._is_running = True
                 self._run_generation += 1
+                # 审计 P1-4：WebUI 共享状态此前要等后台线程跑到 backend 里才
+                # 置位，中间隔着秒级维护预检——这段时间 WebUI /run 的空闲检查
+                # 仍会通过，双通道并发双开。现在锁内同步占位（队列细节由
+                # backend 稍后覆盖），失败只降级不阻断本批。
+                try:
+                    from game_auto.ui.webui.state import set_running as _ws_set_running_early
+                    _ws_set_running_early(True, source="gui")
+                except Exception as exc:
+                    logger.debug("[Bridge] 提前同步 WebUI 运行状态失败: %s", exc)
         if busy:
             self._request_toast("已有任务在运行中", "#b66f1f")
             return
@@ -233,19 +242,20 @@ class AutomationView:
         return json.dumps(flows, ensure_ascii=False)
 
     def _save_wool_flow_field(self, flow_key: str, field: str, value: bool, log_label: str):
-        """写本地 flow_configs.json 中薅羊毛子流程的布尔字段。"""
+        """写本地 flow_configs.json 中薅羊毛子流程的布尔字段（读改写全程持锁）。"""
         try:
-            from ...settings.paths import ensure_flow_config_path
+            from ...settings.paths import ensure_flow_config_path, FLOW_CONFIG_LOCK
             from ...settings.manager import atomic_write_json
             path = ensure_flow_config_path()
-            with open(path, encoding="utf-8") as f:
-                all_cfg = json.load(f)
-            section = all_cfg.get(flow_key)
-            if not isinstance(section, dict):
-                self.emit_event("toast", message=f"未知流程: {flow_key}", color="#b04b44")
-                return
-            section[field] = bool(value)
-            atomic_write_json(path, all_cfg)
+            with FLOW_CONFIG_LOCK:
+                with open(path, encoding="utf-8") as f:
+                    all_cfg = json.load(f)
+                section = all_cfg.get(flow_key)
+                if not isinstance(section, dict):
+                    self.emit_event("toast", message=f"未知流程: {flow_key}", color="#b04b44")
+                    return
+                section[field] = bool(value)
+                atomic_write_json(path, all_cfg)
             logger.info("[Bridge] 薅羊毛流程 %s %s: %s", flow_key, log_label, value)
         except Exception as exc:
             logger.exception("[Bridge] 保存薅羊毛流程%s失败", log_label)
@@ -263,16 +273,32 @@ class AutomationView:
 
     @Slot()
     def runWoolCollection(self):
-        """运行薅羊毛集合（后台线程，仅执行启用的子流程）。"""
-        if self._is_running:
-            self.emit_event("toast", message="有任务正在运行，请先等待完成", color="#b66f1f")
-            return
-        threading.Thread(target=self._run_wool_backend, daemon=True).start()
+        """运行薅羊毛集合（后台线程，仅执行启用的子流程）。
 
-    def _run_wool_backend(self):
+        审计 P1-4 同款修复：旧实现「无锁查 _is_running → spawn 线程 → 线程内
+        才置位」，双击（或与正式批次）都能穿过检查；finally 又无条件清
+        isRunning，wool 先结束会把正在跑的批次"关掉"。现在锁内进入即占位 +
+        代际号持有者校验，只有自己仍是最新一轮时才复位。
+        """
+        with self._run_lock:
+            if self._is_running:
+                self.emit_event("toast", message="有任务正在运行，请先等待完成", color="#b66f1f")
+                return
+            self._is_running = True
+            self._run_generation += 1
+            wool_generation = self._run_generation
+        self.isRunningChanged.emit(True)
+        threading.Thread(
+            target=self._run_wool_backend,
+            args=(wool_generation,),
+            daemon=True,
+        ).start()
+
+    def _run_wool_backend(self, wool_generation: int):
         try:
             self.emit_event("status", title="正在运行", body="薅羊毛集合执行中", tone=TONE_RUNNING)
-            self.isRunning = True
+            # isRunning 属性与 _is_running 同源：runWoolCollection 已在锁内置位并
+            # 发过 isRunningChanged，这里不再重复置位（双击竞态的根因就是置位太晚）
             try:
                 from game_auto.ui.webui.state import set_running as _ws_set_running_w, logger as _ws_logger_w
                 _ws_set_running_w(True, queue=[{"app_key": "WoolFlow", "display_name": "薅羊毛集合", "script_choice": "", "state": "running"}], source="gui")
@@ -296,9 +322,9 @@ class AutomationView:
                 color="#2f7d4a" if ok else "#b04b44",
             )
             try:
-                from game_auto.ui.webui.state import set_running as _ws_set_running_w2, set_last_result as _ws_set_last_w2
+                from game_auto.ui.webui.state import release_running as _ws_release_w2, set_last_result as _ws_set_last_w2
                 _ws_set_last_w2([msg], [])
-                _ws_set_running_w2(False)
+                _ws_release_w2("gui")
             except Exception as exc:
                 logger.debug("[Bridge] 同步 WebUI 薅羊毛结果失败: %s", exc)
         except Exception as exc:
@@ -306,19 +332,26 @@ class AutomationView:
             self.emit_event("status", title="运行失败", body=str(exc), tone=TONE_DANGER)
             self.emit_event("toast", message=f"薅羊毛集合失败: {exc}", color="#b04b44")
             try:
-                from game_auto.ui.webui.state import set_running as _ws_set_running_w3, set_last_result as _ws_set_last_w3
+                from game_auto.ui.webui.state import release_running as _ws_release_w3, set_last_result as _ws_set_last_w3
                 _ws_set_last_w3([f"薅羊毛失败: {exc}"], [])
-                _ws_set_running_w3(False)
+                _ws_release_w3("gui")
             except Exception as sync_exc:
                 logger.debug("[Bridge] 同步 WebUI 薅羊毛失败状态失败: %s", sync_exc)
         finally:
-            self.isRunning = False
+            # 持有者校验复位（审计 P1-4）：若 wool 期间有新批次启动（代际号已
+            # 前进），绝不把别人的运行态清掉——旧实现无条件清 isRunning，
+            # wool 先结束会把正在跑的批次"关掉"
+            with self._run_lock:
+                is_owner = self._run_generation == wool_generation
+                if is_owner:
+                    self._is_running = False
+            if is_owner:
+                self.isRunningChanged.emit(False)
             try:
-                from game_auto.ui.webui.state import set_running as _ws_set_running_w4
-                # 确保 WebUI 也释放运行锁（若之前已在 try 中释放则重复调用无害）
-                import game_auto.ui.webui.state as _ws_state
-                if _ws_state.is_running():
-                    _ws_set_running_w4(False)
+                from game_auto.ui.webui.state import release_running as _ws_release_w4
+                # 仅当 WebUI 运行态仍归属本 GUI 会话时才清（source=webui 的
+                # 批次不受影响）
+                _ws_release_w4("gui")
             except Exception as exc:
                 logger.debug("[Bridge] 复位 WebUI 运行状态失败: %s", exc)
 

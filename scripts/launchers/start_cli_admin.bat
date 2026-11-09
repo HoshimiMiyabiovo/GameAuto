@@ -20,7 +20,7 @@ if /I "%GAME_AUTO_DRY_RUN%"=="1" (
 
 net session >nul 2>&1
 if not "%errorlevel%"=="0" (
-    powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    powershell -Command "Start-Process -FilePath \"%~f0\" -Verb RunAs"
     exit /b
 )
 

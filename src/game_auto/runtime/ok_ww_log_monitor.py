@@ -12,13 +12,14 @@ from PIL import Image
 
 from .foreground_flow_runner import (
     _find_window_by_filters,
+    _heartbeat_beat,
     _locate_template_on_screen,
     _locate_with_ocr_fallback,
     _ocr_locate_in_window,
     _window_rect,
 )
 from .process_supervisor import ProcessSupervisor
-from ..services.utils import read_file_with_timeout
+from ..services.utils import read_file_with_timeout, safe_mtime_key
 from ..settings.paths import TEMPLATES_DIR
 
 
@@ -217,6 +218,8 @@ def _run_nte_ocr_click(
         hwnd = None
         wait_end = time.monotonic() + window_find_timeout_sec
         while time.monotonic() < wait_end:
+            # NTE 启动后点击链跑在任务线程（看门狗已武装），长等待每轮续命
+            _heartbeat_beat()
             fallback = _find_window_by_filters(process_names=window_process_names or None)
             if fallback:
                 hwnd, _ = fallback
@@ -422,7 +425,8 @@ class OkScriptErrorMonitor:
         if not self.log_dir.exists():
             return []
         files = [path for path in self.log_dir.glob(self.file_pattern) if path.is_file()]
-        return sorted(files, key=lambda item: (item.stat().st_mtime, item.name))
+        # 容错排序 key：glob 与 stat 之间日志被轮转/删除时不炸线程（审计 P2-1）
+        return sorted(files, key=safe_mtime_key)
 
     def _snapshot_offsets(self) -> dict[str, int]:
         offsets: dict[str, int] = {}

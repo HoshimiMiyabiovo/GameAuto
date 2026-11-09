@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
 from .process_supervisor import ProcessSupervisor
+from ..services.utils import read_file_with_timeout, safe_mtime_key
 
 
 WRAPPER_PROCESS_NAMES = {
@@ -54,6 +55,7 @@ class FileCompletionMonitor:
         *,
         poll_interval: float = 2.0,
         encoding: str = "utf-8",
+        read_timeout: float = 10.0,
         on_complete: Optional[Callable[["FileCompletionMonitor"], None]] = None,
     ):
         self.logger = logger
@@ -62,6 +64,9 @@ class FileCompletionMonitor:
         self.completion_markers = [str(marker) for marker in completion_markers if str(marker).strip()]
         self.poll_interval = max(0.5, float(poll_interval))
         self.encoding = encoding or "utf-8"
+        # 读超时：IO 卡住时放弃本轮，绝不死等（2026-10-15 三层防护第 2 条；
+        # 此前只覆盖 script_error/ok_ww 两套监控，whimbox 漏接，审计 P2 补课）
+        self.read_timeout = max(1.0, float(read_timeout))
         self.on_complete = on_complete
 
         self.stop_event = threading.Event()
@@ -115,7 +120,7 @@ class FileCompletionMonitor:
             if not path.is_file():
                 continue
             files.append(path)
-        return sorted(files, key=lambda item: (item.stat().st_mtime, item.name))
+        return sorted(files, key=safe_mtime_key)
 
     def _snapshot_offsets(self) -> dict[str, int]:
         offsets: dict[str, int] = {}
@@ -190,47 +195,59 @@ class FileCompletionMonitor:
     def _watch_loop(self):
         missing_dir_warned = False
         while not self.stop_event.is_set():
-            if not self.log_dir.exists():
-                if not missing_dir_warned:
-                    self.logger.warning(f"[CJ流程] 奇想盒日志目录不存在，继续等待: {self.log_dir}")
-                    missing_dir_warned = True
-                self.stop_event.wait(self.poll_interval)
+            # 守护线程兜底：任何一轮异常都不能让线程静默死亡——否则完成
+            # 回调（自动结束暖暖切 CJ）全失效且无日志痕迹（审计 P2-1）
+            try:
+                missing_dir_warned = self._watch_once(missing_dir_warned)
+            except Exception as exc:
+                self.logger.error(f"[CJ流程] 监控轮询异常（继续下一轮）: {exc}", exc_info=True)
+            self.stop_event.wait(self.poll_interval)
+
+    def _watch_once(self, missing_dir_warned: bool) -> bool:
+        """单轮轮询；返回 missing_dir_warned 的新值。"""
+        if not self.log_dir.exists():
+            if not missing_dir_warned:
+                self.logger.warning(f"[CJ流程] 奇想盒日志目录不存在，继续等待: {self.log_dir}")
+                return True
+            return missing_dir_warned
+
+        for path in self._matching_files():
+            file_key = str(path)
+            previous_offset = self._offsets.get(file_key, 0)
+            try:
+                current_size = path.stat().st_size
+            except OSError:
                 continue
 
-            for path in self._matching_files():
-                file_key = str(path)
-                previous_offset = self._offsets.get(file_key, 0)
-                try:
-                    current_size = path.stat().st_size
-                except OSError:
+            if current_size < previous_offset:
+                previous_offset = 0
+
+            if current_size == previous_offset:
+                self._offsets[file_key] = previous_offset
+                continue
+
+            # 与 script_error_log_monitor 同口径：read 带超时，盘 IO 挂起时
+            # 放弃本轮、offset 不退、下轮重试
+            chunk, exc = read_file_with_timeout(path, previous_offset, self.encoding, self.read_timeout)
+            if chunk is None and exc is None:
+                self.logger.warning(
+                    f"[CJ流程] 读取超时({self.read_timeout:.0f}s)，本轮跳过: {path.name}")
+                continue
+            if exc is not None:
+                self.logger.debug(f"[CJ流程] 读取奇想盒日志失败 {path}: {str(exc)}")
+                continue
+
+            self._offsets[file_key] = current_size
+            if not chunk:
+                continue
+
+            for raw_line in chunk.splitlines():
+                line = raw_line.strip()
+                if not line:
                     continue
+                self._process_line(path, line)
 
-                if current_size < previous_offset:
-                    previous_offset = 0
-
-                if current_size == previous_offset:
-                    self._offsets[file_key] = previous_offset
-                    continue
-
-                try:
-                    with open(path, "r", encoding=self.encoding, errors="ignore") as handle:
-                        handle.seek(previous_offset)
-                        chunk = handle.read()
-                except OSError as exc:
-                    self.logger.debug(f"[CJ流程] 读取奇想盒日志失败 {path}: {str(exc)}")
-                    continue
-
-                self._offsets[file_key] = current_size
-                if not chunk:
-                    continue
-
-                for raw_line in chunk.splitlines():
-                    line = raw_line.strip()
-                    if not line:
-                        continue
-                    self._process_line(path, line)
-
-            self.stop_event.wait(self.poll_interval)
+        return missing_dir_warned
 
 
 def format_whimbox_task_summary(monitor: Optional[FileCompletionMonitor]) -> List[str]:
@@ -308,5 +325,6 @@ def start_infinity_nikki_log_monitor(
         completion_markers=markers,
         poll_interval=float(monitor_config.get("poll_interval", 2.0) or 2.0),
         encoding=str(monitor_config.get("encoding", "utf-8") or "utf-8"),
+        read_timeout=float(monitor_config.get("read_timeout", 10.0) or 10.0),
         on_complete=_handle_complete,
     ).start()

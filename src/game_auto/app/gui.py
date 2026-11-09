@@ -223,6 +223,20 @@ def _launch_qml_ui(dep_report=None) -> None:
             ui_logger.info("[退出] 已释放实例锁")
         except Exception as exc:
             ui_logger.warning("[退出] 释放实例锁失败: %s", exc)
+        # os._exit 同样会跳过下面这两个 atexit 钩子（审计 P2/P3）：不 unpin 的
+        # 话录制中退出会让目标窗口永久 topmost（历史事故形态）；不停
+        # QueueListener 的话队列里最后几行日志（含"[退出]"）会丢
+        try:
+            bridge._unpin_all_on_exit()
+            ui_logger.info("[退出] 已复位置顶窗口")
+        except Exception as exc:
+            ui_logger.debug("[退出] 复位置顶窗口失败: %s", exc)
+        try:
+            from ..runtime.automation_controller import _stop_log_listener
+            _stop_log_listener()
+            ui_logger.info("[退出] 已停止日志 QueueListener")
+        except Exception as exc:
+            ui_logger.debug("[退出] 停止日志 listener 失败: %s", exc)
 
     app.aboutToQuit.connect(_cleanup_on_quit)
 

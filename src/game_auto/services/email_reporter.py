@@ -246,12 +246,16 @@ def save_email_section(section: dict) -> tuple[bool, str]:
     """覆盖写入 email 段。section 是 dict，会替换原 email 段但保留其他顶层字段。
 
     返回 (成功, 错误信息)。
+    2026-11-09 收敛：旧实现 _load_raw_config 后直写整份文件（manager 锁外
+    读改写，审计 P1-1 旁路），现走 manager.update_config 锁内原子写。
     """
     try:
-        root_cfg = _load_raw_config()
-        root_cfg["email"] = section
-        from ..settings.manager import atomic_write_json
-        atomic_write_json(_APP_CONFIG_PATH, root_cfg)
+        from ..settings import manager as _cm
+
+        def _apply(root_cfg: dict) -> None:
+            root_cfg["email"] = section
+
+        _cm.update_config(_apply)
         return True, ""
     except Exception as exc:
         LOGGER.exception("[email] 写回 app_config.json 失败")

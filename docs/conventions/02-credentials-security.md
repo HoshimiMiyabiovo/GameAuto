@@ -7,6 +7,10 @@
 - `settings/manager.py` 的 `_SENSITIVE_SUBSTRINGS` 决定哪些键落盘自动 DPAPI 加密（token / cookie / password / secret / api_key / **phone**）。登录手机号是 PII（塔吉多、库街区都靠它自动重登），曾以明文落盘，2026-10-25 已纳入清单并自动迁移为密文。
 - `load()` 内置自愈迁移：检出盘上明文敏感值 → `save()` 重写为密文，读取方无需兼容分支（`secure_store.resolve` 对无前缀明文原样返回）。新增敏感字段直接让键名命中清单即可，**不要自建加密逻辑**，也不要把新键加进 `_SENSITIVE_EXCLUDE`。
 - 注意：运行中的旧 GUI 进程保存配置会把新纳入清单的字段写回明文——重启 GUI 后首次 load 自动再加密，属自愈场景，但改完清单应重启 GUI。
+- **`.bak` 参与恢复（2026-11-09 起）**：`save()` 落盘前先写加密副本到 `.bak`；`load()` 遇主文件 JSONDecodeError/OSError 时先读 `.bak` 恢复并回写主文件，恢复不了才回退默认值——直接回退的话下一次任意 save() 会把仅存于 config 的凭据（cookie/token/邮箱密码）用默认值洗掉（审计 P1-7）。`.bak` 内容=加密后的 overrides（02 篇原有约定不变）。
+- **凭据值永不进日志（2026-11-09 补两处）**：nikki `_request_bytes` 失败日志只打 `path.split("?",1)[0]`（verify 接口把 Momo Token 拼在 query，401 时曾整串落日志）；mihoyo QR 轮询失败分支只打 tokens 的类型/个数/键名，禁止 `repr(tokens_raw)`（元素含 stoken/game_token 原值）。新增带密 query 的接口一律照 nikki 口径处理，或改 POST body。
+- **DPAPI 解密失败返回空串（2026-11-10 起）**：`secure_store.resolve` 解密失败不再把 `dpapi:...` 密文当值返回（下游拿它当 token 请求必败且难排查），改为 ERROR 留痕 + 返回空串，让上层走"未配置"分支。
+- **工具脚本凭据传递**：控制 token 类参数走环境变量（如 okww runner 的 `GAMEAUTO_OKWW_TOKEN`），命令行参数对同用户其他进程可读；`debug_github` 等带 token 的工具读 `GITHUB_TOKEN` 环境变量，禁止在源码里留 token 占位模板（诱导提交真值）。
 ## Mihoyo Cookie Notes
 
 - browser_cookie3 access to Edge cookies may require administrator privileges on this Windows environment.

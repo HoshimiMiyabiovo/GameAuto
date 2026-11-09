@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from game_auto.ui.webui.auth import has_account, verify_token, get_token_from_request
-from game_auto.ui.webui.state import ensure_log_handler, get_recent_logs, logger
+from game_auto.ui.webui.state import ensure_log_handler, get_log_cursor, get_logs_since, get_recent_logs, logger
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -130,19 +130,16 @@ async def ws_logs(ws: WebSocket):
     for line in get_recent_logs(30):
         await ws.send_text(line)
     import asyncio
-    # 轻量增量：基于缓冲长度，避免大 limit 拷贝
-    last_len = len(get_recent_logs(500))
+    # 增量拉取基于单调 seq（get_logs_since）：旧实现拿"缓冲长度"当游标，
+    # 内存缓冲 <50 行回填文件行/回绕时两个列表组成不同，漏发或重发（审计 P3）
+    last_seq = get_log_cursor()
     try:
         while True:
             await asyncio.sleep(1.5)
-            cur = get_recent_logs(500)
-            if len(cur) > last_len:
-                for line in cur[last_len:]:
-                    await ws.send_text(line)
-                last_len = len(cur)
-            elif len(cur) < last_len:
-                # 缓冲被清空或回绕
-                last_len = len(cur)
+            lines, cursor = get_logs_since(last_seq, limit=100)
+            for line in lines:
+                await ws.send_text(line)
+            last_seq = cursor
     except WebSocketDisconnect:
         # 客户端正常断开
         pass

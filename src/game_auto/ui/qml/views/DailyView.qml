@@ -73,6 +73,14 @@ Item {
                 root.statsData = { ok: false, days: root.statsDays, stats: [], message: "解析失败" }
             }
         }
+        function onFlowFailuresChanged(jsonStr) {
+            try {
+                root.failuresData = JSON.parse(jsonStr || "{}")
+            } catch(e) {
+                root.failuresData = { days: root.failuresDays, summary: [], items: [], error: "解析失败: " + e }
+            }
+            root.failuresLoading = false
+        }
         function onStatusTitleChanged() {
             if (bridge.statusTone === "running") {
                 root.isLoading = true
@@ -150,17 +158,13 @@ Item {
     property bool failuresLoading: false
     property double _lastFailuresTs: 0
 
+    // 2026-11-09 审计 P1-5：改纯异步——槽立即返回（不再同步等 3s 冻结主线程），
+    // 数据经 bridge.flowFailuresChanged 事件推送（下方 Connections 接收）。
     function loadFailures() {
         if (root.failuresLoading) return
         root.failuresLoading = true
         root._lastFailuresTs = Date.now()
-        var raw = bridge.getRecentFlowFailures(root.failuresDays)
-        try {
-            root.failuresData = raw ? JSON.parse(raw) : { days: root.failuresDays, summary: [], items: [], error: "" }
-        } catch (e) {
-            root.failuresData = { days: root.failuresDays, summary: [], items: [], error: "解析失败: " + e }
-        }
-        root.failuresLoading = false
+        bridge.loadRecentFlowFailures(root.failuresDays)
     }
 
     Component.onCompleted: {

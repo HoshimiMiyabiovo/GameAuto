@@ -29,6 +29,7 @@ exe 路径写回缓存，越用越准。**包装器识别**：第三方脚本常
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -58,6 +59,11 @@ WRAPPER_PROCESS_NAMES = {
 }
 LOG_DIR_NAMES = ("log", "logs")
 FILE_SEARCH_DEPTH = 4   # 全盘找 exe 的最大深度（相对搜索根）
+
+# 未命中负缓存：候选名集合 -> 最近一次全盘扫空的 monotonic 时间。
+# TTL 内重复未命中直接返回空串，不再每次任务启动都重扫四盘（审计 P2）。
+_SEARCH_MISS_CACHE: dict = {}
+_SEARCH_MISS_TTL_SEC = 600.0
 DIR_SEARCH_DEPTH = 3    # 找日志目录的最大深度（相对基准目录）
 
 
@@ -202,10 +208,23 @@ def _search_file_by_names(file_names: Iterable[str], hints: Iterable[object]) ->
 
     只匹配文件名（大小写不敏感），不读内容；os.walk 限深 FILE_SEARCH_DEPTH，
     跳过隐藏目录与 .git/.venv/node_modules。搜索根顺序即命中优先级。
+
+    未命中负缓存（2026-11-09 审计 P2）：脚本被卸载/路径失效时第 1-3 层瀑布
+    全 miss，此前每次任务启动前都同步重扫四个盘根（HDD 数十秒到分钟）。
+    未命中结果按"候选名集合"缓存 `_SEARCH_MISS_TTL_SEC`，期内直接返回空串；
+    用户手动改路径走的是第 1-2 层显式配置，不受缓存影响，装回脚本后 TTL
+    到期自动恢复发现能力。
     """
     targets = {name.lower() for name in file_names if _as_str(name)}
     if not targets:
         return ""
+
+    cache_key = ",".join(sorted(targets))
+    now = time.monotonic()
+    cached_ts = _SEARCH_MISS_CACHE.get(cache_key)
+    if cached_ts is not None and now - cached_ts < _SEARCH_MISS_TTL_SEC:
+        return ""
+    _SEARCH_MISS_CACHE.pop(cache_key, None)
 
     ignored_dirs = {".git", ".venv", "node_modules"}
     for root in _search_roots(hints):
@@ -227,6 +246,7 @@ def _search_file_by_names(file_names: Iterable[str], hints: Iterable[object]) ->
                         return str(current_path / filename)
         except OSError:
             continue
+    _SEARCH_MISS_CACHE[cache_key] = now
     return ""
 
 

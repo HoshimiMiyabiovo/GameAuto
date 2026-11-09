@@ -335,41 +335,23 @@ def _register_device_to_account(cookie: str, device: Dict[str, Any],
 
 
 def _persist_device_cache(device: Dict[str, Any]) -> None:
-    """把生成的 device_id/fp 等缓存写回 app_config.json，保证跨次运行稳定。"""
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    config_path = os.path.join(repo_root, "app_config.json")
+    """把生成的 device_id/fp 等缓存写回 app_config.json，保证跨次运行稳定。
+
+    2026-11-09 收敛：旧实现自管"读盘→解密→改→加密→tmp+replace"整条链，
+    与 settings.manager 的缓存/其他写线程互踩丢更新（审计 P2-4）。现走
+    manager.update_config 锁内原子写，加密/归一化由 manager 统一负责。
+    """
     try:
-        with open(config_path, encoding="utf-8") as f:
-            config = json.load(f)
-        # 解密后修改再加密回写，避免把已解密的敏感字段以明文落盘
-        try:
-            from ..settings.manager import decrypt_config, encrypt_config_for_persist
-            config = decrypt_config(config)
-        except Exception:
-            try:
-                from game_auto.settings.manager import decrypt_config as _dec, encrypt_config_for_persist as _enc
-                config = _dec(config)
-            except Exception:
-                _enc = None  # type: ignore
-        section = config.get("mihoyo_sign")
-        if not isinstance(section, dict):
-            section = {}
-            config["mihoyo_sign"] = section
-        section["device"] = device
-        # 加密后再落盘
-        try:
-            from ..settings.manager import encrypt_config_for_persist as _enc2
-            to_write = _enc2(config)
-        except Exception:
-            try:
-                from game_auto.settings.manager import encrypt_config_for_persist as _enc2
-                to_write = _enc2(config)
-            except Exception:
-                to_write = config
-        tmp_path = config_path + ".tmp_device"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(to_write, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, config_path)
+        from ..settings import manager as _cm
+
+        def _apply(cfg: Dict[str, Any]) -> None:
+            section = cfg.get("mihoyo_sign")
+            if not isinstance(section, dict):
+                section = {}
+                cfg["mihoyo_sign"] = section
+            section["device"] = device
+
+        _cm.update_config(_apply)
     except Exception as exc:
         LOGGER.warning("[设备绑定] 缓存写入 app_config.json 失败（不影响本次查询）：%s", str(exc)[:160])
 
@@ -1088,6 +1070,13 @@ class DailyCheckResult:
         return [g for g in self.games if g.is_daily_completed]
 
     @property
+    def failed_games(self) -> List[GameDailyStatus]:
+        """未完成每日的游戏（2026-11-09 补：CLI --success-check 一直在引用
+        这个不存在的属性，有游戏未完成时必抛 AttributeError，成功分支恰好
+        掩盖了它）。"""
+        return [g for g in self.games if not g.is_daily_completed]
+
+    @property
     def progress_percent(self) -> int:
         if not self.games:
             return 0
@@ -1662,7 +1651,10 @@ def _qr_login_and_update_config() -> bool:
     """扫码登录获取 stoken 并更新 app_config.json。"""
     import json as _json
     from pathlib import Path
-    from clients.mihoyo_sign import complete_qrcode_login
+    # 包内相对导入（审计 P2-6）：旧写法 `from clients.mihoyo_sign import ...`
+    # 只有从 src/game_auto 目录裸跑脚本才成立，`python -m game_auto.clients.
+    # daily_checker --qr-login` 必 ModuleNotFoundError
+    from .mihoyo_sign import complete_qrcode_login
 
     print("=" * 50)
     print("米游社扫码登录 - 获取 stoken")

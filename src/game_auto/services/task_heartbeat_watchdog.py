@@ -29,6 +29,35 @@ from typing import Callable, Optional
 MAX_DUMP_BYTES = 5 * 1024 * 1024
 
 
+# ── 任务线程心跳 thread-local 桥（2026-11-09 审计 P1-2） ──────────────
+# execute_task 在任务线程入口把 watchdog.beat 挂进 thread-local，该线程内
+# 所有长等待循环（run_flow 步骤匹配/窗口等待/确认策略、启动后 OCR 点击链
+# 等）调 beat_thread_heartbeat() 续命即可，不用把 watchdog 实例层层透传。
+# 历史教训：11-05 异环事故只给 _wait_for_game_process_snapshot 补了心跳，
+# prelaunch 链路（本机实测 WuwaLauncher 等待模板 3600s）超 600s 阈值被
+# 误判卡死强杀；run_flow 全函数 0 处 beat 同病。新增长等待循环时也调这里。
+# 非任务线程（wool 后台等，未武装看门狗）调用是空操作。
+_HB_TLS = threading.local()
+
+
+def set_thread_heartbeat(cb: Optional[Callable[[], None]]) -> None:
+    """在当前线程挂载/清除心跳回调（cb=None 清除）。任务线程入口/收尾调用。"""
+    _HB_TLS.cb = cb
+
+
+def beat_thread_heartbeat() -> None:
+    """透传心跳到当前线程挂载的回调；未挂载（非任务线程）是空操作。"""
+    cb = getattr(_HB_TLS, "cb", None)
+    if cb is None:
+        return
+    try:
+        cb()
+    except Exception as exc:
+        # 心跳失败绝不能打断业务等待循环；记 debug 便于排查回调自身异常
+        logging.getLogger("GameAutomation").debug(
+            "[任务看门狗] thread-local 心跳回调异常: %s", exc)
+
+
 class TaskHeartbeatWatchdog:
     """任务线程心跳监控（单任务周期：start -> beat... -> stop）。"""
 
@@ -52,6 +81,10 @@ class TaskHeartbeatWatchdog:
         self._task_label = ""
         self._stall_callback: Optional[Callable[[str, str], None]] = None
         self._fired = False
+        # 代际号：start() 递增。止损回调 dump 全线程栈可能耗时数秒，期间若
+        # stop()+新任务 start()，旧线程的回调绝不能再执行——否则会按旧任务
+        # 的止损逻辑误杀新任务的进程树（2026-11-09 审计 P2）
+        self._generation = 0
 
     # ── 任务线程调用 ──
     def beat(self) -> None:
@@ -73,6 +106,7 @@ class TaskHeartbeatWatchdog:
             self._task_label = str(task_label or task_key or "")
             self._stall_callback = on_stall
             self._fired = False
+            self._generation += 1
             self._last_beat = time.monotonic()
         self._stop_event.clear()
         self._thread = threading.Thread(
@@ -97,6 +131,7 @@ class TaskHeartbeatWatchdog:
                 task_key = self._task_key
                 task_label = self._task_label
                 callback = self._stall_callback
+                generation = self._generation
             if fired:
                 continue
             stall = time.monotonic() - last_beat
@@ -106,7 +141,7 @@ class TaskHeartbeatWatchdog:
                 if self._fired:
                     continue
                 self._fired = True
-            self._on_stall(task_key, task_label, stall, callback)
+            self._on_stall(task_key, task_label, stall, callback, generation)
 
     def _on_stall(
         self,
@@ -114,6 +149,7 @@ class TaskHeartbeatWatchdog:
         task_label: str,
         stall: float,
         callback: Optional[Callable[[str, str], None]],
+        generation: int,
     ) -> None:
         self.logger.error(
             "[任务看门狗] %s 任务线程已 %.0f 秒无心跳（阈值 %.0f 秒），"
@@ -146,7 +182,16 @@ class TaskHeartbeatWatchdog:
                 faulthandler.dump_traceback(fh, all_threads=True)
         except Exception as exc:  # 转储失败绝不能影响看门狗本身
             self.logger.warning("[任务看门狗] 线程栈转储失败: %s", exc)
-        if callback is not None:
+        # dump 可能耗时数秒（线程多/杀软扫描 dump 文件），执行回调前重验代际：
+        # 期间 stop()+新任务 start() 时放弃旧止损，绝不误杀新任务
+        with self._lock:
+            if self._generation != generation:
+                self.logger.info(
+                    "[任务看门狗] 旧任务(%s)止损放弃：看门狗已切换到新任务（代际 %s -> %s）",
+                    task_label or task_key or "?", generation, self._generation,
+                )
+                return
+        if callback is not None:  # noqa: SIM108 - 保持原顺序便于对照 dump 现场读日志
             try:
                 callback(task_key, task_label)
             except Exception as exc:

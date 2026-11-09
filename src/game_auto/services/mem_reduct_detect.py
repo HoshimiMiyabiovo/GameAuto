@@ -25,7 +25,7 @@ def _enum_processes() -> list[Tuple[int, str]]:
     if sys.platform != "win32":
         return []
 
-    Psapi = ctypes.WinDLL("Psapi.dll")
+    # Psapi.dll 加载已删（审计 P3）：枚举实际走 Toolhelp32，从未用到
     Kernel32 = ctypes.Windll.kernel32
 
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000

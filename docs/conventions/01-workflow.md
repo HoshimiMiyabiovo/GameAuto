@@ -24,6 +24,14 @@
 
 - Startup sign behavior should be shared through startup_sign_runner.py rather than duplicated separately in QML and CLI flows.
 - Keep project-visible notes like this file concise and focused on repeated engineering pitfalls.
+
+## 配置写入规则（2026-11-09 审计 P1-1 起）
+
+- **app_config.json 的所有读-改-写必须走 `settings.manager` 锁内入口**：单键/单段写用 `update_*` 系列，任意段的复合读改写用 `update_config(mutator)`（mutator 直接改传入 dict）。模块自带线程锁，`load()` 返回深拷贝（改返回值不影响缓存）。
+- **禁止** `cfg = load(); cfg[...] = ...; save(cfg)` 两段式（两次持锁之间会放锁，跨线程后写者用旧快照整文档覆盖先写者）；**禁止**绕过 manager 直接 `atomic_write_json(APP_CONFIG_PATH, ...)` / 自管加解密链——startup_sign_runner / daily_checker / email_reporter / webui.auth / scheduler 曾各自绕行，2026-11-09 已全部收敛，新代码别开新洞。
+- `flow_configs.json` 的读-改-写（GUI `_save_wool_flow_field` / WebUI `api/wool.toggle`）全程持 `settings.paths.FLOW_CONFIG_LOCK`，新写方同样要持锁。
+- 跨进程（`maintenance/settings_gui.py`）保存前必须 `cm.load(force=True)` 从盘重读，否则本进程陈旧快照整文档回滚主 GUI 的写入；进程级互斥（msvcrt 文件锁）尚未实现，settings_gui 只改 qbittorrent/log/global 段，别扩到 scheduled_tasks/凭据段。
+- **维护执行器必须取互斥锁**（2026-11-10 起）：`generic_workflow_runner` / `screen_task_runner` 入口调 `services.instance_lock.acquire_aux_lock("maintenance")`，拿不到即拒绝执行——两边都是实点击抢前台，与生产 GUI 批处理并发会互相把对方窗口切到前台、点击落进对方流程。新增同类"实操作"维护脚本一律先取锁。
 ## 代码注释规范（2026-10-24 起分阶段补全）
 
 分阶段给自有代码补详细注释，**只加注释不改任何逻辑**，每文件完成后 py_compile 验证。

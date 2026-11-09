@@ -34,6 +34,12 @@ class GenericWorkflowRunner:
         pyautogui.PAUSE = 0.1
 
     def run_workflow(self, workflow_name: str, screenshot_dir: str) -> bool:
+        # 维护执行器互斥锁（审计 P2-5）：与生产 GUI 批处理/其他维护脚本
+        # 互斥——实点击抢前台的窗口并发会互相干扰、误点
+        from ..services.instance_lock import acquire_aux_lock
+        if not acquire_aux_lock("maintenance"):
+            self.logger.error("已有自动化任务在运行（生产 GUI 或其他维护脚本），拒绝并发执行流程")
+            return False
         wf = self.db.get_workflow_by_name(workflow_name)
         if not wf:
             self.logger.error(f"未找到可用流程: {workflow_name}")

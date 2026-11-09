@@ -265,6 +265,17 @@ $("#btnSeqRestore").onclick = async ()=>{
 let ws;
 let logMode = "all"; // all | login
 let wsConnected = false;
+const LOG_DOM_MAX_LINES = 2000; // 审计 P2：前端日志 DOM 无上限会随挂机时长膨胀
+function appendLogLines(v, text){
+  v.textContent += text;
+  // 超上限截尾重渲染（保留最近 N 行），浏览器内存与文本节点不再无界增长
+  const lines = v.textContent.split("\n");
+  if (lines.length > LOG_DOM_MAX_LINES) {
+    v.textContent = lines.slice(-LOG_DOM_MAX_LINES).join("\n");
+  }
+  v.scrollTop = v.scrollHeight;
+}
+
 function connectWS(){
   try{
     const tok = authToken ? `?token=${encodeURIComponent(authToken)}` : "";
@@ -272,7 +283,7 @@ function connectWS(){
     ws.onopen = ()=>{ wsConnected = true; };
     ws.onmessage = e=>{
       if(logMode==="login" && !e.data.includes("[WebUI][登录]") && !e.data.includes("[WebUI][登出]")) return;
-      const v=$("#logView"); v.textContent += e.data+"\n"; v.scrollTop=v.scrollHeight;
+      const v=$("#logView"); appendLogLines(v, e.data+"\n");
     };
     ws.onclose = ()=>{ wsConnected = false; setTimeout(connectWS, 3000); };
     ws.onerror = ()=>{ wsConnected = false; };
@@ -295,8 +306,7 @@ async function pollLogs(){
     if(logCursor && j.cursor && j.logs && j.logs.length){
       // 增量追加
       if(j.logs.length) {
-        v.textContent += (v.textContent ? "\n" : "") + j.logs.join("\n");
-        v.scrollTop=v.scrollHeight;
+        appendLogLines(v, (v.textContent ? "\n" : "") + j.logs.join("\n"));
       }
       return;
     }

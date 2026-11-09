@@ -45,6 +45,8 @@ PROVIDER_APP_CODE = {
 }
 
 MAX_PAGE_RETRY = 3
+# 翻页硬上限（审计 P2-5）：正常库远达不到；防服务端异常时死循环+内存无界
+MAX_PAGES_HARD_LIMIT = 200
 DEFAULT_LANG = "zh-cn"
 
 
@@ -278,9 +280,26 @@ class EndfieldGachaClient:
                 break
 
             # 取最后一条的 seqId 作为下一页游标
-            next_seq_id = str(lst[-1].get("seqId") or "")
-            if not next_seq_id:
+            new_seq_id = str(lst[-1].get("seqId") or "")
+            if not new_seq_id:
                 break
+
+            # 双熔断（审计 P2-5）：游标不前进说明服务端忽略翻页参数/网关劫持
+            # 返回固定页，继续翻=死循环+内存无界+对服务端无限请求；页数上限
+            # 兜底任何未知协议异常。正常库一页 20 条，200 页远超任何真实体量。
+            if next_seq_id and new_seq_id == next_seq_id:
+                LOGGER.warning(
+                    "[终末地抽卡] %s 第 %d 页游标未前进（seqId=%s），按服务端异常终止，已获取 %d 条",
+                    pool_label, page, new_seq_id, len(all_data),
+                )
+                break
+            if page >= MAX_PAGES_HARD_LIMIT:
+                LOGGER.warning(
+                    "[终末地抽卡] %s 达到页数硬上限 %d，终止翻页（已获取 %d 条）",
+                    pool_label, MAX_PAGES_HARD_LIMIT, len(all_data),
+                )
+                break
+            next_seq_id = new_seq_id
 
             _delay(500, 1000)
 

@@ -5,10 +5,14 @@ from urllib.request import Request, urlopen
 
 logging.basicConfig(level=logging.DEBUG)
 
+import os as _os
+
+# token 从环境变量读（审计 P3）：硬编码占位模板会诱导把真 token 填进来随仓库提交
+_GITHUB_TOKEN = _os.environ.get("GITHUB_TOKEN", "").strip()
 headers = {
     "Accept": "application/vnd.github.v3+json",
     "User-Agent": "GameAuto-Leak-Searcher/1.0",
-    "Authorization": "token YOUR_GITHUB_TOKEN_HERE"
+    **({"Authorization": f"token {_GITHUB_TOKEN}"} if _GITHUB_TOKEN else {}),
 }
 
 url = "https://api.github.com/search/code?q=sk-&per_page=5"

@@ -279,6 +279,47 @@ def is_running() -> bool:
     with _run_lock:
         return bool(_run_state["running"])
 
+
+def try_acquire_running(source: str, queue: List[Dict] | None = None) -> bool:
+    """锁内原子完成「检查空闲 → 置运行中」，返回是否抢占成功。
+
+    修复 /api/apps/run、/api/wool/run 的 check-then-act TOCTOU（审计 P1-4）：
+    旧实现 is_running() 检查与 set_running(True) 之间无锁，sync 端点跑在
+    uvicorn 线程池，两个并发请求都能通过检查 → 双批任务并发抢前台/重复签到。
+    抢占后、后台线程起来前的失败路径必须调 release_running(source) 归还。
+    """
+    import time as _time
+    with _run_lock:
+        if _run_state["running"]:
+            return False
+        _run_state["running"] = True
+        _run_state["started_at"] = _time.time()
+        if queue is not None:
+            _run_state["queue"] = [dict(q) for q in queue]
+        _run_state["current"] = None
+        _run_state["source"] = source or _run_state.get("source", "")
+        return True
+
+
+def release_running(expected_source: str = "") -> None:
+    """仅当当前运行态归属 expected_source（空串=不校验）时清 running 标志。
+
+    GUI 侧 wool 与正式批次共用 running 态（source 都是 "gui"），但 GUI 的
+    _is_running 闸门已保证两者不并发，此校验主要防「 wool 收尾误清 WebUI
+    发起的批次状态」。不匹配时不动状态并留 debug 日志。
+    """
+    with _run_lock:
+        if not _run_state["running"]:
+            return
+        cur = str(_run_state.get("source") or "")
+        if expected_source and cur and cur != expected_source:
+            logger.debug(
+                "[WebUI][运行] 跳过释放：当前运行归属 %s，释放方 %s", cur, expected_source)
+            return
+        _run_state["running"] = False
+        _run_state["started_at"] = None
+        _run_state["current"] = None
+
 def set_queue(queue: List[Dict]):
     with _run_lock:
         _run_state["queue"] = [dict(q) for q in queue]

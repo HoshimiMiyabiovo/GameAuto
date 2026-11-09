@@ -18,6 +18,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from .utils import load_app_config_json_cached, read_text_tail
 
 LOGGER = logging.getLogger("GameAutomation")
 RESET_HOUR = 4
@@ -52,7 +53,7 @@ def _starrail_log_dir() -> Optional[Path]:
     try:
         if not _APP_CONFIG_PATH.is_file():
             return None
-        config = json.loads(_APP_CONFIG_PATH.read_text(encoding="utf-8"))
+        config = load_app_config_json_cached(_APP_CONFIG_PATH)
         apps = config.get("apps") or {}
         hsr_cfg = apps.get("HonkaiStarRail") or {}
         discovery = hsr_cfg.get("_discovery") or {}
@@ -80,7 +81,7 @@ def find_today_starrail_log() -> Optional[Path]:
 def parse_starrail_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
     """解析单个星铁日志文件，返回每日进度数据结构。"""
     try:
-        content = Path(file_path).read_text(encoding="utf-8", errors="ignore")
+        content = read_text_tail(file_path)  # 尾部限读（审计 P2-4）
     except Exception as exc:
         LOGGER.warning("[starrail] 读取日志失败: %s", exc)
         return None

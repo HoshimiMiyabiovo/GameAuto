@@ -87,20 +87,23 @@ _wgc_latest = None       # 最新一帧 BGRA numpy（来自 WGC）
 _wgc_control = None
 _wgc_running = False
 _wgc_failed = False      # 首次失败则禁用，避免反复尝试拖慢循环
+_wgc_frame_ts = 0.0      # 最近一帧到达的 wall 时间（陈旧帧判定，审计 P2-4）
+_wgc_lock = threading.Lock()  # ensure_started 串行化：并发首调会开两个常驻会话
 
 
 def _wgc_on_frame(frame, control):
-    global _wgc_latest, _wgc_control
+    global _wgc_latest, _wgc_control, _wgc_frame_ts
     try:
         _wgc_latest = frame.frame_buffer
         _wgc_control = control
+        _wgc_frame_ts = time.time()
     except Exception:
         # 帧回调失败只丢失当前帧，下一次回调会继续，不能刷日志
         pass
 
 
 def _wgc_thread_main():
-    global _wgc_running
+    global _wgc_running, _wgc_latest, _wgc_control, _wgc_frame_ts
     try:
         import windows_capture as wc
         cap = wc.WindowsCapture(cursor_capture=False, draw_border=False, monitor_index=1)
@@ -117,7 +120,12 @@ def _wgc_thread_main():
     except Exception as e:
         logging.getLogger("GameAutomation").warning(f"[WGC] 捕获线程异常，回退 pyautogui: {e}")
     finally:
+        # 退出必须清帧（审计 P2-4）：不清的话下次 ensure_started 会被旧帧
+        # 秒过判定"已就绪"，OCR 拿死会话的陈旧屏幕内容做匹配点击
         _wgc_running = False
+        _wgc_latest = None
+        _wgc_control = None
+        _wgc_frame_ts = 0.0
 
 
 def _wgc_ensure_started() -> bool:
@@ -125,26 +133,30 @@ def _wgc_ensure_started() -> bool:
     global _wgc_thread, _wgc_running, _wgc_failed
     if _wgc_failed:
         return False
-    if _wgc_running and _wgc_latest is not None:
+    with _wgc_lock:
+        if _wgc_running and _wgc_latest is not None:
+            return True
+        try:
+            import windows_capture  # noqa: F401  未安装则直接回退
+        except ImportError:
+            _wgc_failed = True
+            return False
+        start_ts = time.time()
+        t = threading.Thread(target=_wgc_thread_main, daemon=True)
+        t.start()
+        # 等待"晚于本次启动"的首帧（最多 ~2.5s）：只判 _wgc_latest 非空会被
+        # 上个死会话的残留帧骗过
+        for _ in range(50):
+            if _wgc_latest is not None and _wgc_frame_ts >= start_ts:
+                break
+            time.sleep(0.05)
+        if _wgc_latest is None or _wgc_frame_ts < start_ts:
+            _wgc_failed = True
+            _wgc_running = False
+            return False
+        _wgc_running = True
+        _wgc_thread = t
         return True
-    try:
-        import windows_capture  # noqa: F401  未安装则直接回退
-    except ImportError:
-        _wgc_failed = True
-        return False
-    t = threading.Thread(target=_wgc_thread_main, daemon=True)
-    t.start()
-    for _ in range(50):            # 等待首帧（最多 ~2.5s）
-        if _wgc_latest is not None:
-            break
-        time.sleep(0.05)
-    if _wgc_latest is None:
-        _wgc_failed = True
-        _wgc_running = False
-        return False
-    _wgc_running = True
-    _wgc_thread = t
-    return True
 
 
 def grab_screen(region=None):

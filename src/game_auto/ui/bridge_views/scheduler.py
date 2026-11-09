@@ -49,18 +49,21 @@ class SchedulerView:
 
     def _load_scheduled_tasks(self) -> List[Dict]:
         from ...settings import manager as cfg_manager
-        # force=True 绕过内存缓存：定时器每 30s 读一次（文件小，开销可忽略），
-        # 否则 save 后 load 仍返回旧缓存，导致到点任务永远读不到
-        cfg = cfg_manager.load(force=True)
+        # 2026-11-09：配置写路径已全部收敛进 manager 锁内（update_config），
+        # 进程内缓存与磁盘保持一致，不再需要 force=True 每 30s 全量重读 +
+        # DPAPI 解密（审计 P2-6）。跨进程写（settings_gui）只动 qbittorrent/
+        # log/global 段，不碰 scheduled_tasks。
+        cfg = cfg_manager.load()
         tasks = cfg.get("scheduled_tasks") or []
         return tasks if isinstance(tasks, list) else []
 
     def _save_scheduled_tasks(self, tasks: List[Dict]) -> bool:
         from ...settings import manager as cfg_manager
         try:
-            root_cfg = cfg_manager.load(force=True)
-            root_cfg["scheduled_tasks"] = tasks
-            cfg_manager.save(root_cfg)
+            # 锁内原子读改写：30s 定时器与签到回写等并发写者不再互相覆盖
+            def _apply(root_cfg) -> None:
+                root_cfg["scheduled_tasks"] = tasks
+            cfg_manager.update_config(_apply)
             return True
         except Exception as exc:
             logger.exception("[Bridge] 保存定时任务失败")
@@ -536,14 +539,15 @@ class SchedulerView:
 
     @Slot(bool, bool)
     def savePostRunPrefs(self, email_on_finish: bool, shutdown_on_finish: bool):
-        """保存"完成后操作"偏好到 app_config.json。"""
+        """保存"完成后操作"偏好到 app_config.json（锁内原子读改写）。"""
         try:
             from ...settings import manager as cfg_manager
-            cfg = cfg_manager.load(force=True)
-            cfg["post_run"] = {
-                "email_on_finish": bool(email_on_finish),
-                "shutdown_on_finish": bool(shutdown_on_finish),
-            }
-            cfg_manager.save(cfg)
+
+            def _apply(root_cfg) -> None:
+                root_cfg["post_run"] = {
+                    "email_on_finish": bool(email_on_finish),
+                    "shutdown_on_finish": bool(shutdown_on_finish),
+                }
+            cfg_manager.update_config(_apply)
         except Exception as exc:
             logger.warning("[Bridge] 保存完成后操作偏好失败: %s", exc)

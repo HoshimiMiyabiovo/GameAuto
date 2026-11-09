@@ -281,6 +281,15 @@ class DailyProgressSnapshot:
         return [g for g in self.games if g.has_failed]
 
 
+def _safe_extra_json(raw: object) -> dict:
+    """extra_json 损坏时回退 {}（审计 P3）：单行损坏不能让整张 DailyView 加载失败。"""
+    try:
+        parsed = json.loads(raw or "{}")
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
 class DailyProgressTracker:
     """每日进度追踪器，基于 SQLite 持久化。
 
@@ -481,7 +490,7 @@ class DailyProgressTracker:
                     status=row["status"] or "pending",
                     message=row["message"] or "",
                     updated_at=row["updated_at"] or 0,
-                    extra=json.loads(row["extra_json"] or "{}"),
+                    extra=_safe_extra_json(row["extra_json"]),
                 ))
                 if row["updated_at"] and row["updated_at"] > games[gk].checked_at:
                     games[gk].checked_at = row["updated_at"]

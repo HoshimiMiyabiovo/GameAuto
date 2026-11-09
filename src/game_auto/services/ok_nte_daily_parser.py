@@ -31,6 +31,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from .utils import load_app_config_json_cached, read_text_tail
 
 LOGGER = logging.getLogger("GameAutomation")
 RESET_HOUR = 4
@@ -64,7 +65,7 @@ def _ok_nte_log_dir() -> Optional[Path]:
     try:
         if not _APP_CONFIG_PATH.is_file():
             return None
-        config = json.loads(_APP_CONFIG_PATH.read_text(encoding="utf-8"))
+        config = load_app_config_json_cached(_APP_CONFIG_PATH)
         apps = config.get("apps") or {}
         nte_cfg = apps.get("NevernessToEverness") or {}
         discovery = nte_cfg.get("_discovery") or {}
@@ -160,7 +161,7 @@ def find_today_ok_nte_log() -> Optional[Path]:
 def parse_ok_nte_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
     """解析单个 ok-nte 日志文件，返回符合每日进度数据结构的 game 项。"""
     try:
-        content = Path(file_path).read_text(encoding="utf-8", errors="ignore")
+        content = read_text_tail(file_path)  # 尾部限读（审计 P2-4）
     except Exception as exc:
         LOGGER.warning("[ok-nte] 读取日志失败: %s", exc)
         return None

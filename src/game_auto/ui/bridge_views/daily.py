@@ -105,16 +105,16 @@ class DailyView:
 
     # ── 失败诊断记录（flow_failures 表 + artifacts/flow_failures 截图） ──
 
-    @Slot(int, result=str)
-    def getRecentFlowFailures(self, days: int = 7):
-        """返回最近 N 天的失败记录（JSON 字符串，含截图可打开路径）。
+    @Slot(int)
+    def loadRecentFlowFailures(self, days: int = 7):
+        """异步加载最近 N 天的失败记录，完成后经 flowFailuresChanged 推给 QML。
 
-        同步读 SQLite（WAL 下只读很快），但仍放在后台线程避免阻塞 QML 主线程：
-        首次冷启动要建索引，且别把 GUI 卡顿的锅再背到数据查询上。
+        2026-11-09 审计 P1-5：旧实现 @Slot(int, result=str) 里 done.wait(3s)
+        同步等后台线程，QML 主线程整体冻结最长 3 秒（冷建索引必吃满）。
+        现改纯异步：槽立即返回，数据经 Signal 推送（dailyProgress 同款模式）。
         """
         days = max(1, min(int(days or 7), 365))
         out: Dict[str, Any] = {"days": days, "summary": [], "items": [], "error": ""}
-        done = threading.Event()
 
         def _load() -> None:
             try:
@@ -144,17 +144,13 @@ class DailyView:
             except Exception as exc:
                 out["error"] = str(exc)
                 logger.warning("[Bridge] 读取失败记录失败: %s", exc)
-            finally:
-                done.set()
+            try:
+                self.flowFailuresChanged.emit(json.dumps(out, ensure_ascii=False))
+            except Exception as exc:
+                logger.debug("[Bridge] 推送失败记录事件异常: %s", exc)
 
         threading.Thread(target=_load, daemon=True).start()
-        # 最多等 3s；超时先返回空列表，由 QML 侧提示"加载慢，可再点一次刷新"
-        if not done.wait(timeout=3.0):
-            out["error"] = out.get("error") or "加载超时"
-        try:
-            return json.dumps(out, ensure_ascii=False)
-        except Exception as exc:
-            return json.dumps({"error": f"序列化失败: {exc}"}, ensure_ascii=False)
+
 
     @Slot(str)
     def openFlowFailureImage(self, image_url: str):

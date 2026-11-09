@@ -197,19 +197,22 @@ def _write_sign_status_to_config(section_name: str, status: str, message: str) -
     字段（wuwa/endfield/nte 不经 tracker），启动前签到路径此前只写 tracker
     不写配置，导致 UI 显示"今日尚未签到"（2026-10-12 实例：实际已签到成功，
     last_sign_date 却停在 3 个月前）。写失败只告警，不影响签到主流程。
+
+    2026-11-09 收敛：旧实现 load 后绕过 cm.save() 直接 atomic_write_json
+    全量落盘——既不走归一化（把全部默认值写进盘），又与 manager 锁外互踩
+    （审计 P1-1/P1-2）。现走 cm.update_config 锁内原子读改写。
     """
     try:
-        from ..settings.manager import atomic_write_json
-        from ..settings.paths import APP_CONFIG_PATH
-        cfg = cm.load()
-        section = cfg.get(section_name) or {}
-        if not isinstance(section, dict):
-            section = {}
-        section["last_sign_date"] = time.strftime("%Y-%m-%d")
-        section["last_sign_status"] = status
-        section["last_sign_message"] = message or ""
-        cfg[section_name] = section
-        atomic_write_json(APP_CONFIG_PATH, cfg)
+        def _apply(cfg) -> None:
+            section = cfg.get(section_name)
+            if not isinstance(section, dict):
+                section = {}
+            section["last_sign_date"] = time.strftime("%Y-%m-%d")
+            section["last_sign_status"] = status
+            section["last_sign_message"] = message or ""
+            cfg[section_name] = section
+
+        cm.update_config(_apply)
         LOGGER.info("[启动前签到] 签到状态已写入配置: section=%s status=%s",
                     section_name, status)
     except Exception as exc:

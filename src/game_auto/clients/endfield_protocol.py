@@ -153,8 +153,14 @@ class EndfieldProtocolClient:
         return self._get("/api/endfield/gacha/global-stats", params=params or None)
 
     def all_gacha_records(self, pools: str) -> Optional[List[Dict[str, Any]]]:
+        """分页拉全部记录；页数硬上限 + 首条恒定熔断（审计 P2-5）。
+
+        服务端改版忽略 page 参数/网关劫持返回固定页时，旧实现 while True
+        死循环：内存无界增长 + 对服务端无限请求。
+        """
         records: List[Dict[str, Any]] = []
         page = 1
+        first_page_head = None
         while True:
             result = self.gacha_records(pools=pools, page=page, limit=500)
             if result is None:
@@ -168,8 +174,15 @@ class EndfieldProtocolClient:
                 items = []
             if not items:
                 break
+            if page == 1:
+                first_page_head = items[0]
+            elif items and items[0] == first_page_head:
+                # 每页首条与第一页相同 = page 参数被忽略，按服务端异常终止
+                break
             records.extend(items)
             page += 1
+            if page > 200:  # 500 条/页 × 200 页远超任何真实体量
+                break
         return records
 
     def bindings(

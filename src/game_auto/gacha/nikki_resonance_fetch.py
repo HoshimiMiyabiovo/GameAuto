@@ -220,7 +220,10 @@ def _request_bytes(
         conn.request(method.upper(), path, body=body, headers=headers)
         response = conn.getresponse()
         if response.status != 200:
-            LOGGER.error("[nikki] HTTP 请求失败 %s %s -> %s %s", method.upper(), path, response.status, response.reason)
+            # 只打 path 不打 query：verify_momo_token 把 Momo Token（长效凭据）
+            # 拼在 query 里，失败最常见正是 401/403——打全 path 会把 token
+            # 明文写进长期留存的 auto_runner.log（2026-11-09 审计 P1-3）
+            LOGGER.error("[nikki] HTTP 请求失败 %s %s -> %s %s", method.upper(), path.split("?", 1)[0], response.status, response.reason)
             raise ConnectionError(f"HTTP {response.status}: {response.reason}")
         response_body = response.read()
         encoding = response.getheader("Content-Encoding")
@@ -744,6 +747,11 @@ def fetch_pool_records(
             break
 
         page += 1
+        # 页数硬上限（审计 P2-5）：正常池远达不到；防服务端异常时死循环。
+        # Momo 单池上限 90 抽/期 × 26 期 ≈ 2300 条，20 条/页 → 200 页绰绰有余。
+        if page > 200:
+            print(f" - 达到页数硬上限 200，终止翻页（已读 {len(records)} 条）")
+            break
         time.sleep(sleep_sec)
 
     return records

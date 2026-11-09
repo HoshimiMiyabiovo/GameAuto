@@ -1,4 +1,5 @@
 import json
+import sys
 from typing import List, Dict, Any
 
 from game_auto.storage.workflow_db import WorkflowDB
@@ -94,5 +95,12 @@ def seed_demo_workflow(db_path: str):
 
 if __name__ == "__main__":
     demo_db = str(WORKFLOW_DB_PATH)
+    # 直写生产库加确认（审计 P3）：专用行 upsert 幂等风险低，但生产库不该被
+    # 顺手静默写入；脚本场景用 --yes 跳过
+    if "--yes" not in sys.argv and sys.stdin.isatty():
+        reply = input(f"将向生产库写入演示流程 {demo_db}，确认？[y/N] ").strip().lower()
+        if reply not in ("y", "yes"):
+            print("已取消")
+            raise SystemExit(1)
     seed_demo_workflow(demo_db)
     print(f"已写入演示流程到: {demo_db}")

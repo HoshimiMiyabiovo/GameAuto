@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import threading
-from typing import List, Optional
+from typing import Dict, List
 
 from fastapi import APIRouter, Request
 
 from game_auto.settings import APP_ORDER, APPS, get_app_display_name, get_script_display_name, refresh_runtime_config
 from game_auto.storage.workflow_db import WorkflowDB
 from game_auto.settings.paths import WORKFLOW_DB_PATH
-from game_auto.ui.webui.state import get_controller, get_last_result, get_run_status, is_running, set_last_result, set_running, logger, update_queue_state
+from game_auto.ui.webui.state import get_controller, get_last_result, get_run_status, release_running, set_last_result, set_running, logger, try_acquire_running, update_queue_state
 
 router = APIRouter(prefix="/api/apps", tags=["automation"])
 
@@ -91,8 +91,6 @@ def status(request: Request):
 
 @router.post("/run")
 def run(payload: dict):
-    if is_running():
-        return {"ok": False, "error": "已有任务运行中"}
     apps = payload.get("apps")  # [{"app_key":..., "script_choice":...}]
     force = bool(payload.get("forceRerun"))
     # 若未指定 apps，则用已启用的偏好
@@ -120,28 +118,7 @@ def run(payload: dict):
             "script_choice": sc or "",
             "state": "pending",
         })
-    set_running(True, queue=queue, source="webui")
-    logger.info("[WebUI][运行] 发起任务 %s", ", ".join([f"{a[0]}:{a[1] or ''}" for a in target]))
-    # 同步到 GUI 桥接（若 GUI 正在运行，前端可实时看到 WebUI 发起的队列）
-    try:
-        from game_auto.ui.bridge import get_active_bridge
-        br = get_active_bridge()
-        if br is not None:
-            # 将 WebUI 队列映射为 Bridge 的 queue_list 格式
-            q_items = []
-            for q in queue:
-                q_items.append({
-                    "app_key": q["app_key"],
-                    "task_name": f"{q['display_name']}({q['script_choice'] or ''})".strip("()"),
-                    "script_label": q["script_choice"],
-                    "state": "待执行",
-                })
-            br.emit_event("queue_list", items=q_items)
-            br.emit_event("running", value=True)
-            br.emit_event("status", title="正在运行", body="WebUI 发起任务", tone="running")
-    except Exception as exc:
-        logger.debug("[WebUI] 同步 GUI 运行状态失败: %s", exc)
-
+    # 后台任务体：先定义再引用（run 函数体内 Thread target 需要名字已绑定）
     def _bg():
         try:
             from game_auto.runtime.task_batch_runner import run_task_batch, TaskBatchHooks
@@ -195,8 +172,42 @@ def run(payload: dict):
             except Exception as exc:
                 logger.debug("[WebUI] 通知 GUI 任务结束失败: %s", exc)
 
-    threading.Thread(target=_bg, daemon=True).start()
+    # 锁内原子「检查空闲→置运行」（审计 P1-4：旧 check-then-act 在 uvicorn
+    # 线程池下两并发请求都能通过检查 → 双批任务抢前台/重复签到）。
+    # 校验在前、抢占在后，尽量缩短持有窗口；抢占后后台线程起来前的
+    # 异常路径必须归还，否则运行态永久卡死。
+    if not try_acquire_running("webui", queue=queue):
+        return {"ok": False, "error": "已有任务运行中"}
+    try:
+        try:
+            _notify_gui_run_started(queue)
+        except Exception as exc:
+            logger.debug("[WebUI] 同步 GUI 运行状态失败: %s", exc)
+        logger.info("[WebUI][运行] 发起任务 %s", ", ".join([f"{a[0]}:{a[1] or ''}" for a in target]))
+        threading.Thread(target=_bg, daemon=True).start()
+    except Exception:
+        release_running("webui")
+        raise
     return {"ok": True, "started": [f"{a[0]}:{a[1] or ''}" for a in target]}
+
+
+def _notify_gui_run_started(queue: List[Dict]) -> None:
+    """同步到 GUI 桥接（若 GUI 正在运行，前端可实时看到 WebUI 发起的队列）。"""
+    from game_auto.ui.bridge import get_active_bridge
+    br = get_active_bridge()
+    if br is not None:
+        # 将 WebUI 队列映射为 Bridge 的 queue_list 格式
+        q_items = []
+        for q in queue:
+            q_items.append({
+                "app_key": q["app_key"],
+                "task_name": f"{q['display_name']}({q['script_choice'] or ''})".strip("()"),
+                "script_label": q["script_choice"],
+                "state": "待执行",
+            })
+        br.emit_event("queue_list", items=q_items)
+        br.emit_event("running", value=True)
+        br.emit_event("status", title="正在运行", body="WebUI 发起任务", tone="running")
 
 @router.post("/stop")
 def stop():

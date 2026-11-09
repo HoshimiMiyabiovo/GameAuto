@@ -100,13 +100,13 @@ def pick_asset(assets: List[Dict[str, Any]], patterns: List[str]) -> Optional[Di
     return None
 
 
-def _download_to(url: str, dest: Path, expected_size: int = 0) -> None:
-    """一次性下载（sha 清单这类小文件用，无进度/取消）。"""
-    req = urllib.request.Request(url, headers=GITHUB_HEADERS)
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SEC) as resp:
-        data = resp.read()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(data)
+def _sha256_of_file(path: Path, chunk_size: int = 1 << 20) -> str:
+    """流式计算文件 sha256（64KB~1MB 分块），不整包驻留内存。"""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(chunk_size), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _fetch_sha256_map(assets: List[Dict[str, Any]]) -> Dict[str, str]:
@@ -387,7 +387,8 @@ def install_tool(tool_key: str,
 
         sha_map = _fetch_sha256_map(info["assets"])
         if asset["name"] in sha_map:
-            digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+            # 分块读（审计 P2）：安装包数百 MB，read_bytes 一次性分配全包内存
+            digest = _sha256_of_file(archive_path)
             if digest != sha_map[asset["name"]]:
                 raise RuntimeError("sha256 校验失败，安装包可能不完整或被篡改")
             logger.info("[安装器] sha256 校验通过: %s", asset["name"])

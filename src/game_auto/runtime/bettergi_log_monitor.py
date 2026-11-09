@@ -6,6 +6,8 @@ import threading
 from pathlib import Path
 from typing import Iterable, List, Optional
 
+from ..services.utils import read_file_with_timeout, safe_mtime_key
+
 
 @dataclass
 class BetterGIDailyRewardSummary:
@@ -82,6 +84,7 @@ class BetterGILogMonitor:
         date_format: str = "%Y%m%d",
         poll_interval: float = 2.0,
         encoding: str = "utf-8",
+        read_timeout: float = 10.0,
     ):
         self.logger = logger
         self.log_dir = Path(log_dir)
@@ -89,6 +92,9 @@ class BetterGILogMonitor:
         self.date_format = date_format or "%Y%m%d"
         self.poll_interval = max(0.5, float(poll_interval))
         self.encoding = encoding or "utf-8"
+        # 读超时：IO 卡住时放弃本轮，绝不死等（2026-10-15 三层防护第 2 条；
+        # 此前只覆盖 script_error/ok_ww 两套监控，bettergi 漏接，审计 P2 补课）
+        self.read_timeout = max(1.0, float(read_timeout))
 
         self.stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -147,7 +153,7 @@ class BetterGILogMonitor:
             return []
         today_token = self._today_token()
         todays = [path for path in all_files if today_token in path.name]
-        return sorted(todays, key=lambda item: (item.stat().st_mtime, item.name))
+        return sorted(todays, key=safe_mtime_key)
 
     def _initialize_from_existing_logs(self):
         files = self._matching_files()
@@ -198,11 +204,14 @@ class BetterGILogMonitor:
             self.last_expedition_line = line
 
     def _parse_file_from_offset(self, path: Path, offset: int):
-        try:
-            with open(path, "r", encoding=self.encoding, errors="ignore") as handle:
-                handle.seek(offset)
-                chunk = handle.read()
-        except OSError as exc:
+        # 与 script_error_log_monitor 同口径：read 带超时，盘 IO 挂起时
+        # 放弃本轮、offset 不退、下轮重试（读线程 daemon 化不拖累退出）
+        chunk, exc = read_file_with_timeout(path, offset, self.encoding, self.read_timeout)
+        if chunk is None and exc is None:
+            self.logger.warning(
+                f"[GI监控] 读取超时({self.read_timeout:.0f}s)，本轮跳过: {path.name}")
+            return
+        if exc is not None:
             self.logger.debug(f"[GI监控] 读取 BetterGI 日志失败 {path}: {str(exc)}")
             return
 
@@ -215,36 +224,44 @@ class BetterGILogMonitor:
     def _watch_loop(self):
         missing_dir_warned = False
         while not self.stop_event.is_set():
-            if not self.log_dir.exists():
-                if not missing_dir_warned:
-                    self.logger.warning(f"[GI监控] BetterGI 日志目录不存在，继续等待: {self.log_dir}")
-                    missing_dir_warned = True
-                self.stop_event.wait(self.poll_interval)
+            # 守护线程兜底：任何一轮异常都不能让线程静默死亡——否则完成
+            # 检测/自动关游戏全失效且无日志痕迹（2026-11-09 审计 P2-1）
+            try:
+                missing_dir_warned = self._watch_once(missing_dir_warned)
+            except Exception as exc:
+                self.logger.error(f"[GI监控] 监控轮询异常（继续下一轮）: {exc}", exc_info=True)
+            self.stop_event.wait(self.poll_interval)
+
+    def _watch_once(self, missing_dir_warned: bool) -> bool:
+        """单轮轮询；返回 missing_dir_warned 的新值。"""
+        if not self.log_dir.exists():
+            if not missing_dir_warned:
+                self.logger.warning(f"[GI监控] BetterGI 日志目录不存在，继续等待: {self.log_dir}")
+                return True
+            return missing_dir_warned
+
+        files = self._matching_files()
+        self.source_files = [str(path) for path in files]
+        self.log_found = bool(files)
+
+        for path in files:
+            file_key = str(path)
+            previous_offset = self._offsets.get(file_key, 0)
+            try:
+                current_size = path.stat().st_size
+            except OSError:
                 continue
 
-            files = self._matching_files()
-            self.source_files = [str(path) for path in files]
-            self.log_found = bool(files)
+            if current_size < previous_offset:
+                previous_offset = 0
 
-            for path in files:
-                file_key = str(path)
-                previous_offset = self._offsets.get(file_key, 0)
-                try:
-                    current_size = path.stat().st_size
-                except OSError:
-                    continue
+            if current_size == previous_offset:
+                self._offsets[file_key] = previous_offset
+                continue
 
-                if current_size < previous_offset:
-                    previous_offset = 0
-
-                if current_size == previous_offset:
-                    self._offsets[file_key] = previous_offset
-                    continue
-
-                self._parse_file_from_offset(path, previous_offset)
-                self._offsets[file_key] = current_size
-
-            self.stop_event.wait(self.poll_interval)
+            self._parse_file_from_offset(path, previous_offset)
+            self._offsets[file_key] = current_size
+        return missing_dir_warned
 
 
 def start_bettergi_log_monitor(config: dict, logger) -> Optional[BetterGILogMonitor]:
@@ -261,6 +278,7 @@ def start_bettergi_log_monitor(config: dict, logger) -> Optional[BetterGILogMoni
         date_format=str(monitor_config.get("date_format", "%Y%m%d") or "%Y%m%d"),
         poll_interval=float(monitor_config.get("poll_interval", 2.0) or 2.0),
         encoding=str(monitor_config.get("encoding", "utf-8") or "utf-8"),
+        read_timeout=float(monitor_config.get("read_timeout", 10.0) or 10.0),
     ).start()
 
 

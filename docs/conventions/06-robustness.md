@@ -14,7 +14,7 @@
 
 **任务鲁棒性三层防护（任务线程卡死不再无声无息）**：
 1. **日志队列化**（`automation_controller._init_logger`）：GameAutomation logger 只挂 QueueHandler，写盘/UI 转发由 QueueListener 消费线程执行。盘 IO 卡住只卡消费线程，业务线程 `logger.*` 永不阻塞（冒烟：10 条日志入队 0.3ms vs 同步写 20s）
-2. **watcher 读超时**（`services.utils.read_file_with_timeout`）：两套日志监控（script_error_log_monitor / ok_ww_log_monitor）的 open/read 全部改带超时（默认 10s，配置键 `read_timeout`），超时放弃本轮、offset 不退，下轮重试；读线程 daemon 化，挂起不拖累进程退出
+2. **watcher 读超时**（`services.utils.read_file_with_timeout`）：四套日志监控（script_error_log_monitor / ok_ww_log_monitor / bettergi_log_monitor / whimbox_log_monitor）的 open/read 全部带超时（默认 10s，配置键 `read_timeout`），超时放弃本轮、offset 不退，下轮重试；读线程 daemon 化，挂起不拖累进程退出。2026-11-09 审计发现 bettergi/whimbox 两套漏接（裸 read 在坏盘 IO 时钉死监控线程——原神 fail-closed 必败、暖暖完成回调丢失），已补齐。**新增第五套监控时必须同样接 `read_file_with_timeout`**
 3. **任务线程心跳看门狗**（`services/task_heartbeat_watchdog.py`）：`_monitor_game` 循环每轮 `beat()`，超过 `task_heartbeat_timeout_sec`（默认 600s，远大于 CHECK_INTERVAL=10s）无心跳 → dump 全线程栈到 watchdog.log + 置 stop_current_task + 杀进程树。与 hang_watchdog（只盯主线程）互补——**主线程 QTimer 照常心跳时任务线程卡死的场景以前完全无感**
 - 已验证：入队不阻塞 / 读超时返回 / 看门狗触发+栈落盘 / 持续 beat 不误触发，全部 PASS
 ### 脚本报错日志监控（ok- 系 pyappify 脚本）(重要)
@@ -161,6 +161,7 @@
 - **流程里的每一处长等待都必须接受停止回调**：`runtime/foreground_flow_runner.py` 的 `run_flow` 启动阶段有两处历史黑洞 —— `time.sleep(startup_wait_sec)` 与 `_wait_window_for_flow(pid, timeout=45)`。后者是纯 `time.sleep(0.6)` 轮询，**不看停止标志**，导致用户点「停止」后最长要等 45 秒才生效，表现为"按钮失灵 → 狂点 → 日志刷屏"（2026-09-11 实例：点了 27 次，40.3 秒后才关进程）。
 - **新增等待一律传 `stop_check`**：`run_flow(..., stop_check=...)` / `_wait_window_for_flow(..., stop_check=...)` / `_wait_window_by_pid(..., stop_check=...)` 已支持；流程内用 `_sleep_interruptible(seconds, stop_check)` 与 `_stop_requested(stop_check)`，轮询粒度 0.25s。调用方传 `lambda: controller.stop_current_task`。
 - **`stop_check=None` 必须保持旧行为**（向后兼容，勿改成必填）。中断时的收尾仍由既有 `close_on_exit` / `close_on_fail` 决定 —— 不要为"停止"另开一套关进程规则，否则会破坏 CJ 的"禁止自动关闭"。
+- 2026-11-10 补课（审计 P2）：确认策略 `execute_confirm_strategy` / `confirm_disappear` / `confirm_text_change` / `_wait_any_template` 已接 `stop_check`（命中停止返回 `"用户已请求停止"`，由外层步骤循环收尾）；步骤间 `post_delay` 改 `_sleep_interruptible`；controller `_launch_normal` 的 10s 进程发现循环响应停止、`initial_wait`（默认 20s）改 `_interruptible_initial_wait`（分片睡眠 + `_watchdog_beat`）。
 - 仍未接线：`run_wool_background` / `_run_monthly_flow` 内部 `run_flow` 未传 `stop_check`（签名无 controller），其 45s 窗口等待仍不可中断。
 ### 失败诊断记录 (重要, 2026-10-18)
 
@@ -302,5 +303,24 @@
   monotonic 时间戳，不要求 `start()`，也不影响 `stop_current_task` 的停止检查。
   **以后新增任何 `while True` + `sleep` 的等待循环，都要先问有没有打心跳**；
   只加日志/只 sleep 不算活着。
+- **2026-11-09 起心跳已内建（审计 P1-2 铺满）**：`task_heartbeat_watchdog` 新增
+  thread-local 桥——`execute_task` 入口 `set_thread_heartbeat(self._heartbeat.beat)`
+  / finally 清除，任务线程内**所有**长等待循环调 `beat_thread_heartbeat()` 续命
+  （foreground_flow_runner 的 `_heartbeat_beat()` 包装：步骤匹配循环 /
+  `_sleep_interruptible` / `_wait_window_by_pid` / `_wait_window_for_flow` /
+  `_wait_script_update_exe` / 确认策略三函数；controller `_wait_game_window_ready`
+  走 `_watchdog_beat()` 防御式出口——`__new__` 测试桩没有 `_heartbeat` 时静默跳过；
+  ok_ww 的 NTE 启动后点击链窗口等待同样接线）。run_flow 此前全函数 0 处 beat，
+  本机 WuwaLauncher 等待模板 3600s > 600s 阈值必然被误杀——11-05 只补一个循环
+  是同类位点的第一个。**新增等待循环调 `_heartbeat_beat()`（fff 内）或
+  `self._watchdog_beat()`（controller 内）即可，不用透传 watchdog 实例**。
+- **日志监控线程三道护栏（2026-11-09 审计 P2-1，三套监控统一）**：
+  ① `_matching_files` 排序 key 用 `services.utils.safe_mtime_key`——BetterGI 会
+  自己清旧日志，glob 与 stat 之间文件消失时裸 `stat()` 抛 FileNotFoundError；
+  ② `_watch_loop` 每轮整体 try/except 记 ERROR 继续下轮——守护线程静默死亡 =
+  完成检测/自动关游戏全失效且无日志痕迹；
+  ③ `task_batch_runner._run_single_task` 里监控 `start()`（含初始化读日志）在
+  try **内**调用——旧代码裸露在 try 外，异常穿透烧掉整批；现在失败降级为
+  "监控不可用"（原神走 fail-closed，暖暖走 monitor 超时兜底）。
 - 回归：`tests/suite_nte_launch_heartbeat_20261105.py`（AST 断言 beat 在 sleep
   之前、动态 mock 跑 3 轮验证 beat 次数、预算不匹配证据、补跑队列口径）。

@@ -47,6 +47,15 @@ def ensure_flow_config_path() -> Path:
         except Exception as exc:
             LOGGER.warning("[Paths] flow_configs.json 初始化复制失败: %s", exc)
     return FLOW_CONFIG_PATH
+
+
+# flow_configs.json 的读-改-写互斥锁：GUI（bridge_views/automation.
+# _save_wool_flow_field）与 WebUI（api/wool.toggle）并发写时后写者整文档
+# 覆盖先写者，读改写全程必须持锁（2026-11-09 审计 P2-1 同族）。
+# app_config.json 的对应锁在 settings.manager（_CONFIG_LOCK），别混用。
+import threading as _threading  # noqa: E402  - 放在路径常量旁便于两个写方共同引用
+FLOW_CONFIG_LOCK = _threading.Lock()
+
 WORKFLOW_DB_PATH = DATA_DIR / "workflow.sqlite3"
 # 固定点击序列（录制/回放）存储目录
 CLICK_SEQUENCES_DIR = ASSETS_DIR / "click_sequences"

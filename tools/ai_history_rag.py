@@ -24,6 +24,7 @@ chunks.jsonl 约 91MB（此前 43 / 11032 / 1165 万 / 16MB）。query 无倒排
 """
 import argparse
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -161,7 +162,8 @@ def cmd_build(args: argparse.Namespace) -> int:
     kept: List[Dict] = []
     stats = Counter()
     for sess in sessions:
-        score, reason = session_score(sess)
+        score, reason = session_score(sess)  # 只算一次，meta 里直接复用（审计 P3）
+        sess["_score"] = score
         stats["total"] += 1
         ws_hit = "workspace" in reason
         # 双门控：纯关键词线 KEYWORD_THRESHOLD；工作区会话需再凑内容分（防
@@ -175,20 +177,33 @@ def cmd_build(args: argparse.Namespace) -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     n_chunks = 0
     n_chars = 0
-    with (OUT_DIR / "sessions.jsonl").open("w", encoding="utf-8") as fs, \
-            (OUT_DIR / "chunks.jsonl").open("w", encoding="utf-8") as fc:
-        for sess in kept:
-            meta = {
-                "id": sess.get("id"), "src": sess.get("src"),
-                "title": sess.get("title"), "start": sess.get("s"),
-                "end": sess.get("e"), "n_msgs": len(sess.get("msgs") or []),
-                "score": session_score(sess)[0],
-            }
-            fs.write(json.dumps(meta, ensure_ascii=False) + "\n")
-            for chunk in iter_chunks(sess):
-                fc.write(json.dumps(chunk, ensure_ascii=False) + "\n")
-                n_chunks += 1
-                n_chars += len(chunk["text"])
+    # 原子写（审计 P2-2）：旧实现 "w" 直写，Ctrl-C/磁盘满/异常会留下截断
+    # 索引被 query 端静默读走；先写 .tmp 全部成功后一起 os.replace 换入。
+    sessions_tmp = OUT_DIR / "sessions.jsonl.tmp"
+    chunks_tmp = OUT_DIR / "chunks.jsonl.tmp"
+    try:
+        with sessions_tmp.open("w", encoding="utf-8") as fs, chunks_tmp.open("w", encoding="utf-8") as fc:
+            for sess in kept:
+                meta = {
+                    "id": sess.get("id"), "src": sess.get("src"),
+                    "title": sess.get("title"), "start": sess.get("s"),
+                    "end": sess.get("e"), "n_msgs": len(sess.get("msgs") or []),
+                    "score": sess.get("_score", session_score(sess)[0]),
+                }
+                fs.write(json.dumps(meta, ensure_ascii=False) + "\n")
+                for chunk in iter_chunks(sess):
+                    fc.write(json.dumps(chunk, ensure_ascii=False) + "\n")
+                    n_chunks += 1
+                    n_chars += len(chunk["text"])
+        os.replace(sessions_tmp, OUT_DIR / "sessions.jsonl")
+        os.replace(chunks_tmp, OUT_DIR / "chunks.jsonl")
+    finally:
+        # 成功时两个 .tmp 已被 replace 走（exists 为 False），失败时清理半截文件
+        for tmp in (sessions_tmp, chunks_tmp):
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
     print(f"筛选：{stats['total']} 会话 → 入库 {stats['kept']}"
           f"（工作区命中 {stats['kept_by_ws']}，关键词命中 {stats['kept'] - stats['kept_by_ws']}）")
     print(f"来源分布：{ {k[4:]: v for k, v in stats.items() if k.startswith('src:')} }")

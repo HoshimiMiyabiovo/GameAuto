@@ -17,6 +17,7 @@ import win32con
 import win32process
 from PIL import Image
 from ..settings.paths import BASE_DIR, CACHE_DIR, ensure_flow_config_path
+from ..services.task_heartbeat_watchdog import beat_thread_heartbeat
 
 # OCR 可用性由 `ocr_click_tester._ocr_scan` 内部判定：onnxocr v6 是主引擎，
 # 只有它返回空/异常时才尝试可选的 Tesseract 兜底。这里**不要**按
@@ -566,6 +567,18 @@ def _stop_requested(stop_check: Optional[Callable[[], bool]]) -> bool:
         return False
 
 
+def _heartbeat_beat() -> None:
+    """任务线程心跳透传（2026-11-09 审计 P1-2，包内所有 run_flow 长等待循环调用）。
+
+    execute_task 已把 watchdog.beat 挂进 thread-local（services.
+    task_heartbeat_watchdog.set_thread_heartbeat），本函数每轮续命；run_flow
+    全函数此前 0 处心跳，prelaunch/更新等待（本机实测 WuwaLauncher 3600s）
+    超 600s 阈值会被看门狗误判卡死强杀（11-05 异环事故同族）。非任务线程
+    （wool 后台等，未武装看门狗）为空操作。
+    """
+    beat_thread_heartbeat()
+
+
 def _sleep_interruptible(
     seconds: float,
     stop_check: Optional[Callable[[], bool]] = None,
@@ -580,6 +593,7 @@ def _sleep_interruptible(
     while remaining > 0:
         if _stop_requested(stop_check):
             return False
+        _heartbeat_beat()
         time.sleep(min(step, remaining))
         remaining -= step
     return not _stop_requested(stop_check)
@@ -594,6 +608,7 @@ def _wait_window_by_pid(
     while time.time() < end:
         if _stop_requested(stop_check):
             return None
+        _heartbeat_beat()
         hwnd = _find_window_by_pid(pid)
         if hwnd:
             return hwnd
@@ -614,6 +629,7 @@ def _wait_window_for_flow(
     while time.time() < end:
         if _stop_requested(stop_check):
             return None, None
+        _heartbeat_beat()
         hwnd = _find_window_by_pid(pid)
         if hwnd:
             if not title_keywords or _matches_window_keywords(hwnd, title_keywords):
@@ -1397,8 +1413,13 @@ def _pyautogui_click_held(
         pyautogui.moveTo(int(x), int(y))
         for i in range(count):
             pyautogui.mouseDown(button=button)
-            time.sleep(max(0.0, float(hold_sec)))
-            pyautogui.mouseUp(button=button)
+            try:
+                time.sleep(max(0.0, float(hold_sec)))
+            finally:
+                # 按下后必须保证抬起（审计 P2）：hold 期间 FailSafe/线程被中断
+                # 时若不抬，用户桌面进入"拖拽"态直到下一次点击——与键盘版
+                # press_key_scancode 的 finally KEYUP 对称
+                pyautogui.mouseUp(button=button)
             if i + 1 < count and interval:
                 time.sleep(interval)
     except pyautogui.FailSafeException as exc:
@@ -1426,9 +1447,13 @@ def _find_process_by_exact_name(name: str) -> Optional[psutil.Process]:
     return max(candidates, key=lambda p: p.create_time()) if candidates else None
 
 
-def _wait_any_template(hwnd: int, templates: List[str], timeout_sec: int, scales, confidences) -> bool:
+def _wait_any_template(hwnd: int, templates: List[str], timeout_sec: int, scales, confidences,
+                       stop_check: Optional[Callable[[], bool]] = None) -> bool:
     end = time.time() + timeout_sec
     while time.time() < end:
+        if _stop_requested(stop_check):
+            return False
+        _heartbeat_beat()
         for tpl in templates:
             if tpl and _locate_template_in_window(hwnd, tpl, scales, confidences):
                 return True
@@ -1530,6 +1555,7 @@ def confirm_disappear(
     confidences,
     enable_ocr: bool,
     local_region: Optional[Tuple[int, int, int, int]] = None,
+    stop_check: Optional[Callable[[], bool]] = None,
 ) -> Tuple[bool, str]:
     """
     确认策略1：消失型（点击后按钮消失）
@@ -1553,6 +1579,9 @@ def confirm_disappear(
     deadline = _time.time() + max(int(timeout_sec), 1)
     still_exists = True
     while True:
+        if _stop_requested(stop_check):
+            return False, "用户已请求停止"
+        _heartbeat_beat()
         still_exists, _ = _check_element_exists(
             logger=logger,
             hwnd=hwnd,
@@ -1597,6 +1626,7 @@ def confirm_text_change(
     confidences,
     enable_ocr: bool,
     local_region: Optional[Tuple[int, int, int, int]] = None,
+    stop_check: Optional[Callable[[], bool]] = None,
 ) -> Tuple[bool, str]:
     """
     确认策略2：文字变化型（点击后按钮文字改变）
@@ -1621,6 +1651,9 @@ def confirm_text_change(
     _time.sleep(max(0, min(int(wait_time), max(int(timeout_sec), 1))))
 
     while True:
+        if _stop_requested(stop_check):
+            return False, "用户已请求停止"
+        _heartbeat_beat()
         if enable_ocr and expected_text_after:
             try:
                 from .ocr_click_tester import ocr_find_text
@@ -1681,6 +1714,7 @@ def execute_confirm_strategy(
     confidences,
     enable_ocr: bool,
     local_region: Optional[Tuple[int, int, int, int]] = None,
+    stop_check: Optional[Callable[[], bool]] = None,
 ) -> Tuple[bool, str]:
     """
     智能确认策略路由器：
@@ -1731,6 +1765,7 @@ def execute_confirm_strategy(
             confidences=confidences,
             enable_ocr=enable_ocr,
             local_region=local_region,
+            stop_check=stop_check,
         )
 
     elif confirm_type == "text_change":
@@ -1748,6 +1783,7 @@ def execute_confirm_strategy(
             confidences=confidences,
             enable_ocr=enable_ocr,
             local_region=local_region,
+            stop_check=stop_check,
         )
 
     elif confirm_type == "none":
@@ -1756,7 +1792,7 @@ def execute_confirm_strategy(
     elif confirm_type == "template_match":
         # 兼容旧配置：仅使用 confirm_templates
         if confirm_templates:
-            found = _wait_any_template(hwnd, confirm_templates, confirm_timeout, scales, confidences)
+            found = _wait_any_template(hwnd, confirm_templates, confirm_timeout, scales, confidences, stop_check=stop_check)
             if found:
                 logger.info(f"[{step_name}] ✅ [模板匹配] 确认模板找到")
                 return True, "确认模板匹配"
@@ -2459,6 +2495,7 @@ def _wait_script_update_exe(
     while time.time() < deadline:
         if _stop_requested(stop_check):
             return ""
+        _heartbeat_beat()
         newer = _find_newer_script_exe(exe_path, since_ts=since_ts)
         if newer:
             return newer
@@ -2805,6 +2842,9 @@ def run_flow(
                 if _stop_requested(stop_check):
                     logger.info(f"[{flow_key}] 用户已请求停止，中断步骤{step_no}「{name}」")
                     return False, f"[{flow_key}] 用户已请求停止"
+                # 每轮匹配续命：wait_template 的 timeout_sec 可达 1200~3600s，
+                # 无心跳会被任务看门狗误判卡死强杀（2026-11-09 审计 P1-2）
+                _heartbeat_beat()
                 if action == "wait_process":
                     proc = _find_process_by_exact_name(process_name)
                     if proc:
@@ -3131,6 +3171,7 @@ def run_flow(
                     confidences=confidences,
                     enable_ocr=step_enable_ocr,
                     local_region=local_region,
+                    stop_check=stop_check,
                 )
 
                 if not ok:
@@ -3171,12 +3212,12 @@ def run_flow(
             step_local_region.pop(i, None)
 
             if stop_after_step and name == stop_after_step:
-                time.sleep(post_delay)
+                _sleep_interruptible(post_delay, stop_check)
                 close_on_exit = False
                 logger.info(f"[{flow_key}] 已达到提前返回步骤: {stop_after_step}，保持流程进程继续运行")
                 return True, f"[{flow_key}] 已完成到步骤: {stop_after_step}"
 
-            time.sleep(post_delay)
+            _sleep_interruptible(post_delay, stop_check)
             i += 1
         flow_ok = True
     finally:

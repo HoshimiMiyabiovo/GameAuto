@@ -180,6 +180,17 @@ class AutomationController:
             return True
         return self._is_wrapper_process_name(os.path.basename(str(snapshot.exe_path or "")))
 
+    def _watchdog_beat(self) -> None:
+        """任务线程心跳统一出口（06-robustness：长等待循环每轮必须打心跳）。
+
+        防御式取 _heartbeat：测试套件用 __new__ 绕过 __init__ 构造桩实例
+        （suite_wuwa_window_wait / suite_baijing_fitting 直调
+        _wait_game_window_ready），此时静默跳过——桩场景没有看门狗可喂。
+        """
+        heartbeat = getattr(self, "_heartbeat", None)
+        if heartbeat is not None:
+            heartbeat.beat()
+
     def _configured_game_process_name(self, config: dict) -> str:
         game_cfg = config.get("game")
         if not isinstance(game_cfg, dict):
@@ -734,6 +745,9 @@ class AutomationController:
         while time.time() < deadline:
             if self.stop_current_task:
                 return False
+            # 长等待循环必须每轮打心跳（06-robustness 口径）：等预算
+            # game_window_wait_sec 默认 300s，叠加 prelaunch 可超看门狗阈值
+            self._watchdog_beat()
             pids = self._game_related_pids(proc_name)
             windows = self._find_visible_windows_for_pids(pids)
             key = None
@@ -877,6 +891,44 @@ class AutomationController:
         except Exception as e:
             self.logger.warning(f"[{game_display}] 防遮挡点击失败: {str(e)}")
 
+    def _find_script_wrapper_process(self, launcher_stem: str, start_time: float):
+        """在 cmd.exe / python.exe / pythonw.exe 里找命令行含启动器名的新进程。
+
+        cmdline 匹配用正则（cleanup_cmd_patterns 同款语义）：.bat/.cmd 的真实
+        载体是 `cmd /c 路径\\xxx.bat`，xxx 必含启动器 stem，本机其他终端/
+        编译任务不会有。找不到返回 None。
+        """
+        import re as _re
+        pattern = _re.escape(launcher_stem) if launcher_stem else None
+        if not pattern:
+            return None
+        for name in ("cmd.exe", "python.exe", "pythonw.exe"):
+            for proc in ProcessSupervisor.find_processes(name, exact_name=True):
+                try:
+                    if proc.create_time() < start_time - 1:
+                        continue
+                    cmdline = " ".join(proc.cmdline() or [])
+                except Exception:  # noqa: BLE001 - 权限不足/进程已退出都跳过
+                    continue
+                if _re.search(pattern, cmdline, _re.IGNORECASE):
+                    return proc
+        return None
+
+    def _interruptible_initial_wait(self, seconds: float) -> None:
+        """启动后的初始化等待：分片睡眠、每片查停止标志并打心跳。
+
+        initial_wait 默认 20s，旧实现裸 time.sleep——用户点停止最长多等
+        20s+，且整段不打心跳（2026-11-09 审计 P2）。
+        """
+        remaining = max(0.0, float(seconds))
+        while remaining > 0:
+            if self.stop_current_task:
+                self.logger.info("[启动] 初始化等待期间收到停止请求，提前结束等待")
+                return
+            self._watchdog_beat()
+            time.sleep(min(0.5, remaining))
+            remaining -= 0.5
+
     def _launch_normal(
         self,
         config: dict,
@@ -911,14 +963,21 @@ class AutomationController:
             self.logger.info(f"程序通过 ShellExecuteW 启动成功 (工作目录: {exe_dir})")
            
             launcher_name = os.path.basename(launcher)
+            launcher_stem = os.path.splitext(launcher_name)[0]
             is_script_file = launcher_name.lower().endswith((".bat", ".cmd", ".py"))
             while time.time() - start_time < 10:
+                if self.stop_current_task:
+                    # 用户停止：不再空等进程发现窗口（最多 10s+20s initial_wait），
+                    # 脚本已拉起的收尾交给调用方的既有停止链路
+                    self.logger.info("[启动] 等待脚本进程期间收到停止请求，提前结束启动等待")
+                    break
                 if is_script_file:
-                    # 仅接受 launch 之后新出现的 cmd/python，避免误抓长期后台进程
-                    if proc := (ProcessSupervisor.find_process("cmd.exe") or ProcessSupervisor.find_process("python.exe")):
-                        if proc.create_time() < start_time - 1:
-                            time.sleep(0.5)
-                            continue
+                    # 仅接受 launch 之后新出现、且命令行含启动器名的 cmd/python——
+                    # 旧口径裸抓 cmd.exe/python.exe 只按创建时间过滤，用户此刻
+                    # 恰好新开任意终端会被当脚本 PID 记下、收尾连坐杀整棵子树
+                    # （2026-11-09 审计 P2）
+                    proc = self._find_script_wrapper_process(launcher_stem, start_time)
+                    if proc is not None:
                         script_pid = proc.pid
                         snapshot = ProcessSupervisor.snapshot_pid(script_pid)
                         if snapshot is not None:
@@ -950,10 +1009,10 @@ class AutomationController:
                     game_display,
                     click_reason="脚本刚启动，提前尝试点回游戏窗口",
                 )
-           
+
             initial_wait = config.get("initial_wait", 20)
             self.logger.debug(f"程序已启动，等待 {initial_wait} 秒初始化")
-            time.sleep(initial_wait)
+            self._interruptible_initial_wait(float(initial_wait))
             return True, script_pid
         except Exception as e:
             self.logger.error(f"启动失败: {str(e)}", exc_info=DEBUG_MODE)
@@ -1763,6 +1822,12 @@ class AutomationController:
         self._heartbeat.start(
             app_name, _on_task_stall, task_label=f"[{game_display}] {script_display}"
         )
+        # 把心跳挂进 thread-local：本线程内 run_flow 步骤匹配 / 窗口等待 /
+        # 确认策略 / NTE 启动后点击链等长等待循环经 beat_thread_heartbeat()
+        # 续命，不用层层透传 watchdog（2026-11-09 审计 P1-2，11-05 异环事故
+        # 同族——等待预算 3600s > 心跳阈值 600s 时健康任务被误杀）。
+        from ..services.task_heartbeat_watchdog import set_thread_heartbeat
+        set_thread_heartbeat(self._heartbeat.beat)
         try:
             self.logger.info(f"\n{'='*40}\n开始执行 [{game_display}] 任务 (脚本: {script_display})\n{'='*40}")
             # 注意：不要在这里重置 stop_current_task（2026-11-04 19:44 事故）。
@@ -2011,6 +2076,13 @@ class AutomationController:
         
         finally:
             self._heartbeat.stop()
+            # 先摘 thread-local 再停看门狗：任务线程到此为止，残留回调
+            # 可能被线程池复用后的下一个任务误用
+            try:
+                from ..services.task_heartbeat_watchdog import set_thread_heartbeat
+                set_thread_heartbeat(None)
+            except Exception as exc:  # noqa: BLE001 - 摘心跳失败不影响收尾
+                self.logger.debug("[%s] 清除线程心跳挂载失败: %s", game_display, exc)
             self._cleanup_key_listener()
             if self._module_session is not None:
                 try:

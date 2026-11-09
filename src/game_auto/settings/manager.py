@@ -1,13 +1,27 @@
-"""JSON 配置读写与默认值合并。"""
+"""JSON 配置读写与默认值合并。
+
+并发口径（2026-11-09 审计 P1-1）：app_config.json 的所有读-改-写必须走本模块，
+线程安全由模块级 `_CONFIG_LOCK` 保证——
+- `load()` 锁内读缓存并返回**深拷贝**：调用方改返回值不会污染共享缓存；
+- `save()` 锁内整文档归一化落盘；
+- `update_config(mutator)` 把「读→改→写」包在**同一次持锁**里，跨段并发不丢更新；
+- 带锁便捷写 `update_*` 系列全部经 `update_config` 收口。
+
+禁止绕行：直接 `load()` 后改再 `save()` 的两段式在两次调用之间会释放锁，
+跨线程并发时后写者用旧快照整文档覆盖先写者（startup_sign_runner /
+daily_checker / email_reporter 曾各自绕行，2026-11-09 已全部收敛）。
+跨进程（settings_gui）靠保存前 `load(force=True)` 缩窗，进程级互斥另议。
+"""
 
 import copy
 import json
 import logging
 import os
 import tempfile
+import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 LOGGER = logging.getLogger("GameAutomation")
 
@@ -37,6 +51,10 @@ except Exception:
 _CONFIG_FILE = APP_CONFIG_PATH
 _BACKUP_SUFFIX = ".bak"
 _MISSING = object()
+
+# 模块级线程锁：load/save/update_config 全程持锁。RLock 是因为
+# load() 的明文迁移与 .bak 恢复分支会锁内再调 save()。
+_CONFIG_LOCK = threading.RLock()
 
 _cache: Optional[Dict] = None
 
@@ -264,28 +282,66 @@ def _raw_has_plaintext_sensitive(raw: Any) -> bool:
     return found
 
 
+def _read_backup_raw() -> Optional[Dict]:
+    """读 .bak 备份（save() 落盘前的加密副本，格式=overrides-only）。损坏返回 None。"""
+    bak = Path(str(_CONFIG_FILE) + _BACKUP_SUFFIX)
+    if not bak.exists():
+        return None
+    try:
+        with open(bak, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (json.JSONDecodeError, OSError) as exc:
+        LOGGER.warning("[Config] .bak 备份读取失败: %s", exc)
+        return None
+
+
 def load(force: bool = False) -> Dict:
     global _cache
-    if _cache is None or force:
-        defaults = _default_config()
-        if _CONFIG_FILE.exists():
-            try:
-                with open(_CONFIG_FILE, encoding="utf-8") as f:
-                    raw = json.load(f)
-                merged = _merge_defaults(defaults, raw)
-                _cache = _decrypt_config(merged)
-                # 若原始文件含明文敏感字段且 DPAPI 可用，自动迁移为密文（后台重写一次）
-                if _raw_has_plaintext_sensitive(raw):
-                    try:
-                        # 用解密后的缓存重写一次，落盘时会自动加密
-                        save(_cache)
-                    except Exception as exc:
-                        LOGGER.warning("[Config] 明文敏感字段自动迁移失败: %s", exc)
-            except (json.JSONDecodeError, OSError):
+    with _CONFIG_LOCK:
+        if _cache is None or force:
+            defaults = _default_config()
+            if _CONFIG_FILE.exists():
+                try:
+                    with open(_CONFIG_FILE, encoding="utf-8") as f:
+                        raw = json.load(f)
+                    merged = _merge_defaults(defaults, raw)
+                    _cache = _decrypt_config(merged)
+                    # 若原始文件含明文敏感字段且 DPAPI 可用，自动迁移为密文（后台重写一次）
+                    if _raw_has_plaintext_sensitive(raw):
+                        try:
+                            # 用解密后的缓存重写一次，落盘时会自动加密
+                            save(_cache)
+                        except Exception as exc:
+                            LOGGER.warning("[Config] 明文敏感字段自动迁移失败: %s", exc)
+                except (json.JSONDecodeError, OSError) as exc:
+                    # 主文件损坏（磁盘满/杀软占用导致原子写窗口内断电等）时，
+                    # .bak 里是上一次 save 成功写入的合法 JSON——先恢复再回退默认值。
+                    # 直接回退默认值的话，下一次任意 save() 就会用默认值+增量覆盖，
+                    # 仅存于 config 的凭据（cookie/token/邮箱密码）将永久丢失
+                    # （2026-11-09 审计 P1-7）。
+                    bak_raw = _read_backup_raw()
+                    if bak_raw is not None:
+                        LOGGER.warning(
+                            "[Config] 主配置读取失败(%s)，已从 .bak 恢复并回写主文件: %s",
+                            exc, _CONFIG_FILE,
+                        )
+                        _cache = _decrypt_config(_merge_defaults(defaults, bak_raw))
+                        try:
+                            save(_cache)  # 回写主文件；save 会同时刷新 .bak
+                        except Exception as exc2:
+                            LOGGER.error("[Config] .bak 恢复后回写主文件失败: %s", exc2)
+                    else:
+                        LOGGER.error(
+                            "[Config] 配置读取失败且无可用 .bak，回退默认值: %s (%s)",
+                            _CONFIG_FILE, exc,
+                        )
+                        _cache = defaults
+            else:
                 _cache = defaults
-        else:
-            _cache = defaults
-    return _cache
+        # 返回深拷贝：调用方改返回值不再污染共享缓存（旧实现返回缓存本体，
+        # 跨线程原地改 + deepcopy 并发会抛 dictionary changed size during iteration）。
+        return copy.deepcopy(_cache)
 
 
 def atomic_write_json(path: Path, data: Dict) -> None:
@@ -313,6 +369,10 @@ def atomic_write_json(path: Path, data: Dict) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(write_data, f, ensure_ascii=False, indent=2)
+            # fsync 再 replace（审计 P3）：断电时保证 os.replace 看到的是完整
+            # 内容，不会把半截文件原子替换过去（恰好绕过 .bak 恢复的前提）
+            f.flush()
+            os.fsync(f.fileno())
         last_exc: Optional[Exception] = None
         for attempt in range(3):
             try:
@@ -334,21 +394,36 @@ def atomic_write_json(path: Path, data: Dict) -> None:
 
 def save(config: Dict) -> None:
     global _cache
-    persisted = _normalize_for_save(config)
+    with _CONFIG_LOCK:
+        persisted = _normalize_for_save(config)
 
-    # 备份“当前将要落盘”的加密副本。不能直接复制旧文件：新增敏感字段后的
-    # 首次迁移会把迁移前的明文原样留在 .bak 里。
-    if _CONFIG_FILE.exists():
-        try:
-            atomic_write_json(
-                Path(str(_CONFIG_FILE) + _BACKUP_SUFFIX),
-                _encrypt_for_persist(persisted),
-            )
-        except OSError as exc:
-            LOGGER.warning("[Config] 配置备份写入失败: %s", exc)
+        # 备份“当前将要落盘”的加密副本。不能直接复制旧文件：新增敏感字段后的
+        # 首次迁移会把迁移前的明文原样留在 .bak 里。
+        if _CONFIG_FILE.exists():
+            try:
+                atomic_write_json(
+                    Path(str(_CONFIG_FILE) + _BACKUP_SUFFIX),
+                    _encrypt_for_persist(persisted),
+                )
+            except OSError as exc:
+                LOGGER.warning("[Config] 配置备份写入失败: %s", exc)
 
-    atomic_write_json(_CONFIG_FILE, persisted)
-    _cache = _merge_defaults(_default_config(), persisted)
+        atomic_write_json(_CONFIG_FILE, persisted)
+        _cache = _merge_defaults(_default_config(), persisted)
+
+
+def update_config(mutator: Callable[[Dict], None]) -> None:
+    """锁内原子完成「读缓存 → mutator(私有副本) → save」。
+
+    多线程对 app_config.json 的读-改-写一律走本入口：load/save 各自持锁
+    但两段之间会放锁，跨线程并发时后写者用旧快照整文档覆盖先写者
+    （2026-11-09 审计 P1-1）。mutator(cfg) 直接改传入 dict，无返回值；
+    mutator 内抛异常则本次不落盘，缓存不受影响（load 返回的是深拷贝）。
+    """
+    with _CONFIG_LOCK:
+        cfg = load()
+        mutator(cfg)
+        save(cfg)
 
 
 def get(key: str, default: Any = None) -> Any:
@@ -389,54 +464,42 @@ def get_global() -> Dict:
     return load().get("global", {"min_run_time": 300, "check_interval": 10, "debug_mode": False})
 
 def update_app_order(order: List[str]) -> None:
-    cfg = load()
-    cfg["app_order"] = order
-    save(cfg)
+    update_config(lambda cfg: cfg.__setitem__("app_order", list(order)))
 
 
 def upsert_app(app_key: str, app_data: Dict) -> None:
-    cfg = load()
-    cfg.setdefault("apps", {})[app_key] = app_data
-    save(cfg)
+    def _m(cfg: Dict) -> None:
+        cfg.setdefault("apps", {})[app_key] = app_data
+    update_config(_m)
 
 
 def remove_app(app_key: str) -> None:
-    cfg = load()
-    cfg.get("apps", {}).pop(app_key, None)
-    if app_key in cfg.get("app_order", []):
-        cfg["app_order"].remove(app_key)
-    save(cfg)
+    def _m(cfg: Dict) -> None:
+        cfg.get("apps", {}).pop(app_key, None)
+        if app_key in cfg.get("app_order", []):
+            cfg["app_order"].remove(app_key)
+    update_config(_m)
 
 
 def update_qbittorrent(data: Dict) -> None:
-    cfg = load()
-    cfg["qbittorrent"] = data
-    save(cfg)
+    update_config(lambda cfg: cfg.__setitem__("qbittorrent", data))
 
 
 def update_script_tools_config(data: Dict) -> None:
-    cfg = load()
-    cfg["script_tools"] = data
-    save(cfg)
+    update_config(lambda cfg: cfg.__setitem__("script_tools", data))
 
 
 def update_log_config(data: Dict) -> None:
-    cfg = load()
-    cfg["log"] = data
-    save(cfg)
+    update_config(lambda cfg: cfg.__setitem__("log", data))
 
 
 def update_global(data: Dict) -> None:
-    cfg = load()
-    cfg["global"] = data
-    save(cfg)
+    update_config(lambda cfg: cfg.__setitem__("global", data))
 
 
 def update_disk_scan_overrides(data: Dict) -> None:
     """磁盘管理页按游戏覆盖扫描目录（{game_key: dir}）；空 dict = 全部回自动推导。"""
-    cfg = load()
-    cfg["disk_scan_overrides"] = data
-    save(cfg)
+    update_config(lambda cfg: cfg.__setitem__("disk_scan_overrides", data))
 
 
 def is_setup_completed() -> bool:
@@ -444,6 +507,4 @@ def is_setup_completed() -> bool:
 
 
 def mark_setup_completed() -> None:
-    cfg = load()
-    cfg["setup_completed"] = True
-    save(cfg)
+    update_config(lambda cfg: cfg.__setitem__("setup_completed", True))
