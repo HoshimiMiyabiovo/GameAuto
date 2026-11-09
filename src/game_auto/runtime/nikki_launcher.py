@@ -2,7 +2,7 @@
 
 由 NikkiLauncher 流程的 action=nikki_enter_game 驱动：
 叠纸启动器「启动游戏/更新/运行中」→ 游戏登录页「点击进入游戏/确认/登录」
-→ 加载与月卡/道具弹窗 → 左下角聊天气泡（主界面特征）连续出现。
+→ 加载与月卡/道具弹窗 → 主界面特征（聊天气泡模板或主世界 HUD 热键 OCR）连续出现。
 
 主界面模板来自 whimbox 2.5.6 的 IconPageMainFeature 二值化裁剪
 （GPL-3.0，本地自用）；启动器/登录页靠 RapidOCR，不依赖固定坐标。
@@ -28,6 +28,11 @@ MAIN_TEMPLATE = str(TEMPLATES_DIR / "暖暖-主界面.png")
 LOGIN_HINT_TEXTS = ("点击进入游戏", "占土进入游戏", "点击进入")
 CONFIRM_TEXTS = ("确认", "同意")
 LOGIN_TEXTS = ("登录", "注册\\登录")
+# 副本/大世界里右上角 ESC 旁的退出标志文案（2026-11-08 用户实机指认）。
+# 命中即说明游戏已在副本里没回主界面，_wait_main 读到这里就按 ESC 退出。
+INSTANCE_EXIT_TEXTS = ("退出", "离开", "返回")
+# 11-09 取证帧：主世界聊天气泡不再出现，但 F12/F10/CapsLock/TAB/L.Shift 全 1.00；顶栏菜单行主世界独有
+MAIN_HUD_HOTKEYS = ("F12", "F10", "CapsLock", "TAB", "L.Shift")
 
 
 def _stop(stop_check: Optional[Callable[[], bool]]) -> bool:
@@ -233,6 +238,24 @@ def _launch_game_from_launcher(logger, hwnd: int, step, stop_check):
     return False, "未找到启动器按钮"
 
 
+def _hud_signature(items) -> bool:
+    """主世界 HUD 热键签名：≥3 种热键且含 F12/F10（副本 HUD 无顶栏菜单行，防误判）。"""
+    keys = set()
+    for item in items or []:
+        try:
+            conf = float(item.get("confidence") or 0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        if conf < 0.8:
+            continue
+        text = str(item.get("text") or "")
+        for key in MAIN_HUD_HOTKEYS:
+            if key in text:
+                keys.add(key)
+                break
+    return len(keys) >= 3 and bool(keys & {"F12", "F10"})
+
+
 def _has_main(hwnd: int, scales, confidences) -> bool:
     from .foreground_flow_runner import _locate_template_on_screen
 
@@ -247,9 +270,11 @@ def _has_main(hwnd: int, scales, confidences) -> bool:
         max(1, int(height * 0.30)),
     )
     try:
-        return bool(_locate_template_on_screen(MAIN_TEMPLATE, region, scales, confidences))
+        if _locate_template_on_screen(MAIN_TEMPLATE, region, scales, confidences):
+            return True
     except Exception:
-        return False
+        pass
+    return _hud_signature(_ocr(LOGGER, hwnd))
 
 
 def _login_region(hwnd: int):
@@ -335,10 +360,23 @@ def _wait_main(logger, hwnd: int, scales, confidences, step, stop_check):
                 _click(hit[2]["center"])
                 logger.info("[暖暖] 加载中回到登录页，已重新点击「%s」", hit[2].get("text"))
             else:
-                hit = _pick(items, CONFIRM_TEXTS, min_conf=0.45)
-                if hit:
-                    _click(hit[2]["center"])
-                    logger.info("[暖暖] 异常弹窗「%s」已点击", hit[2].get("text"))
+                # 副本/大世界特征：右上角 ESC 旁的「退出」标志。读到说明游戏
+                # 已进副本但没回主界面，ESC 退回一层再继续等主界面模板
+                # （2026-11-08 实机：重进游戏直接进上次副本，IconPageMainFeature
+                # 不出现，死等 240s 超时；ESC 退出后回主界面即命中）。
+                # region 限定右上角（ESC 旁），避免误命中其他位置的「返回」文案。
+                exit_region = (left + int(width * 0.6), top, int(width * 0.4), int(height * 0.2))
+                exit_hit = _pick(items, INSTANCE_EXIT_TEXTS, min_conf=0.5, region=exit_region)
+                if exit_hit:
+                    _press_esc()
+                    logger.info(
+                        "[暖暖] 检测到副本/大世界「%s」标志，已按 ESC 退出，等回主界面",
+                        exit_hit[2].get("text"))
+                else:
+                    hit = _pick(items, CONFIRM_TEXTS, min_conf=0.45)
+                    if hit:
+                        _click(hit[2]["center"])
+                        logger.info("[暖暖] 异常弹窗「%s」已点击", hit[2].get("text"))
             last_ocr = time.time()
         time.sleep(1.0)
     return "timeout", "等待主界面超时"
