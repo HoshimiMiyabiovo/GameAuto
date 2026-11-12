@@ -14,7 +14,7 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Tuple, Optional, Dict, List
 
-from .foreground_flow_runner import run_flow, _pyautogui_click_guarded
+from .foreground_flow_runner import run_flow, _pyautogui_click_guarded, _clear_parked_failsafe_cursor
 from .process_supervisor import ProcessSnapshot, ProcessSupervisor
 from .ok_ww_log_monitor import run_nte_post_launch_ocr_click
 from .script_error_log_monitor import build_script_error_watchers
@@ -1838,6 +1838,7 @@ class AutomationController:
             if self.stop_current_task:
                 self.logger.info(f"[{game_display}] 启动前收到停止请求，直接退出")
                 return False, "用户终止", 0
+            _clear_parked_failsafe_cursor(self.logger)
 
             # 终止已有游戏进程
             configured_game_process = self._configured_game_process_name(config)

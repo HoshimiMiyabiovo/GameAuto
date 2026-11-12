@@ -55,7 +55,6 @@ class ScreenTaskRunner:
 
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger or logging.getLogger("GameAutomation")
-        pyautogui.FAILSAFE = True
         pyautogui.PAUSE = 0.1
 
     def run(self, profile: TaskProfile, screenshot_dir: str) -> bool:

@@ -1456,7 +1456,6 @@ def run_xm_seer_test(logger: logging.Logger, exe_path: str) -> bool:
 
     logger.info("等待程序界面加载...")
     time.sleep(XM_STARTUP_WAIT_SEC)
-    pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0.1
 
     hwnd = _find_window_by_keywords(["xm seer", "脱机", "seer"])
@@ -2035,7 +2034,6 @@ def run_xm_enhanced_flow(
     logger.info("[启动] 等待程序界面加载...")
     time.sleep(XM_STARTUP_WAIT_SEC)
 
-    pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0.1
 
     # 查找窗口

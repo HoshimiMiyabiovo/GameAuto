@@ -229,6 +229,8 @@ def _harness(script, stop_check=None, dismiss=None):
                           side_effect=lambda *a, **k: leaves.append(True)),
         mock.patch.object(bf, "_dismiss_item_popup",
                           side_effect=lambda *a, **k: dismiss.append(True) if dismiss is not None else None),
+        # 布阵页稳定等待是真等 15s：全流程桩里直接跳过，单测由 [4c] 覆盖
+        mock.patch.object(bf, "_wait_deploy_settled", return_value=True),
         mock.patch.object(bf.time, "sleep", lambda *_: None),
     ]
     for p in patches:
@@ -298,6 +300,20 @@ def test_state_machine():
     check("停止标志立即生效", not res5["ok"], res5)
     check("停止后不再点击", all(c[0] == "活动页返回" for c in clicks5), clicks5)
 
+    # 2026-11-09 实跑：布阵页「开始战斗」连点 3 次都没进战斗 → 失败、落取证、
+    # 失败信息带点击次数，且不写周标记（由 _maybe_run_fitting_weekly 判定）
+    s7 = Script([
+        "main", "field", "activity", "team", "deploy",
+        "deploy", "deploy", "deploy",
+    ], wave="0/50")
+    res7, clicks7, failures7, leaves7 = _harness(s7)
+    check("补点耗尽判失败", not res7["ok"] and res7["step"] == "第1场", res7)
+    check("失败信息带补点次数", "3 次" in res7["detail"], res7["detail"])
+    check("开始战斗共点 3 次",
+          sum(1 for c in clicks7 if c[0] == "开始战斗") == 3, clicks7)
+    check("补点失败也落取证", failures7 == ["第1场"], failures7)
+    check("补点失败也 finally 收尾", leaves7 == [True], leaves7)
+
 
 # ── [4b] 关浮层尽力而为 ────────────────────────────────────────────────
 def test_dismiss_item_popup():
@@ -341,6 +357,75 @@ def test_dismiss_item_popup():
 
 
 # ── [5] 独立周门控 ──────────────────────────────────────────────────────
+# ── [4c] 布阵页「开始战斗」稳定等待 + 复核补点（2026-11-10）────────────
+def test_battle_start_retry():
+    print("[4c] 开始战斗：稳定等待 / 点击复核 / 补点 / 耗尽失败")
+
+    def run_retry(pages, settle_ok=True, stop_seq=None):
+        seq = list(pages)
+        clicks = []
+
+        def page_now(logger, hwnd):
+            return (seq.pop(0) if seq else "deploy"), []
+
+        def fake_click(logger, hwnd, point, label):
+            clicks.append(label)
+            return True
+
+        stop_iter = iter(stop_seq or [False] * 10)
+        patches = [
+            mock.patch.object(bf, "_page_now", side_effect=page_now),
+            mock.patch.object(bf, "_click", side_effect=fake_click),
+            mock.patch.object(bf, "_wait_deploy_settled", return_value=settle_ok),
+            mock.patch.object(bf.time, "sleep", lambda *_: None),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            res = bf._start_battle_with_retry(
+                LOG, 1, stop_check=lambda: next(stop_iter, False))
+        finally:
+            for p in reversed(patches):
+                p.stop()
+        return res, clicks
+
+    res, clicks = run_retry(["battle"])
+    check("首次点击即进战斗", res[0] and res[1] == "battle" and res[3] == 1, res)
+    check("首次成功只点一次", clicks == ["开始战斗"], clicks)
+
+    res, _ = run_retry(["result"])
+    check("直接到结算页也算开打成功", res[0] and res[1] == "result", res)
+
+    res, clicks = run_retry(["deploy", "deploy", "battle"])
+    check("第 3 次补点才进战斗", res[0] and res[3] == 3, res)
+    check("补点路径共点 3 次", len(clicks) == 3, clicks)
+
+    res, clicks = run_retry(["deploy", "deploy", "deploy"])
+    check("3 次都没进 → 失败", not res[0] and res[1] == "deploy" and res[3] == 3, res)
+    check("不无限补点", len(clicks) == bf.BATTLE_START_MAX_ATTEMPTS, clicks)
+
+    res, clicks = run_retry([], settle_ok=False)
+    check("稳定等待被停止 → 一次都不点",
+          not res[0] and res[1] == "stopped" and res[3] == 0 and clicks == [], (res, clicks))
+
+    res, clicks = run_retry(["deploy"], stop_seq=[False, True])
+    check("补点途中用户停止 → 立刻收手",
+          not res[0] and res[1] == "stopped" and res[3] == 1 and len(clicks) == 1,
+          (res, clicks))
+
+    with mock.patch.object(bf.time, "sleep", lambda *_: None):
+        check("稳定等待可被用户停止",
+              bf._wait_deploy_settled(LOG, 1, stop_check=lambda: True) is False)
+    clock = iter([0.0, 100.0])
+    with mock.patch.object(bf.time, "monotonic", side_effect=lambda: next(clock, 100.0)), \
+            mock.patch.object(bf.time, "sleep", lambda *_: None):
+        check("稳定等待走满窗口才放行",
+              bf._wait_deploy_settled(LOG, 1, stop_check=None) is True)
+    check("稳定窗口 15s / 补点上限 3 次 / 复核延迟 2s",
+          bf.DEPLOY_SETTLE_SEC == 15.0 and bf.BATTLE_START_MAX_ATTEMPTS == 3
+          and bf.BATTLE_VERIFY_DELAY_SEC == 2.0)
+
+
 def test_weekly_gate():
     print("[5] 独立周门控")
     fake_db = mock.MagicMock()
@@ -386,6 +471,13 @@ def test_wiring():
     check("9 个判定都登记了证据", policy_src.count('("baijing_fitting.py"') == 9,
           policy_src.count('("baijing_fitting.py"'))
     check("变更记录有本轮", "拟合回归" in changelog)
+    fitting_src = (PROJECT_ROOT / "src/game_auto/runtime/baijing_fitting.py").read_text(encoding="utf-8")
+    check("主流程接线 _start_battle_with_retry",
+          "_start_battle_with_retry(" in fitting_src)
+    check("不再单点死等 25s（WAIT_BATTLE 已移除）",
+          "WAIT_BATTLE" not in fitting_src)
+    check("稳定等待 + 补点常量在位",
+          "DEPLOY_SETTLE_SEC" in fitting_src and "BATTLE_START_MAX_ATTEMPTS" in fitting_src)
     check("9 张参考图都列进矩阵", set(PAGES.values()) == {
         "ref_baijing_fitting_main_20261107.png",
         "ref_baijing_fitting_field_20261107.png",
@@ -406,6 +498,7 @@ def main():
     test_wave_parsing()
     test_state_machine()
     test_dismiss_item_popup()
+    test_battle_start_retry()
     test_weekly_gate()
     test_wiring()
 

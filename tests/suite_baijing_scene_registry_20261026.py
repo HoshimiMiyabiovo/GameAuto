@@ -81,12 +81,13 @@ class Screen:
     """界面状态机：lounge / focus / confirm / overlay / tea_summary / main / panel / blank。"""
 
     def __init__(self, state="lounge", leave_works=True, panel_marker_too=False,
-                 switch_after=0, next_state="main"):
+                 switch_after=0, next_state="main", switch_from="loading"):
         self.state = state
         self.leave_works = leave_works
         self.panel_marker_too = panel_marker_too
         self.switch_after = switch_after      # ocr_calls 达到后切 next_state（模拟加载完成）
         self.next_state = next_state
+        self.switch_from = switch_from
         self.claimed = False
         self.clicks = []
         self.ratios = []
@@ -132,8 +133,14 @@ class Screen:
             if not self.claimed:
                 data["可领取"] = CLAIM_XY
         elif self.state == "loading":
-            # 2026-10-31～11-06 五次取证帧：加载页 = logo + 轮换提示 + 进度
-            data = {"ASHECHOES": (960, 540)}
+            # 2026-10-31～11-06 五次取证帧：加载页 = 拉丁 logo + 轮换提示 + 进度
+            data = {"ASHECHOES": (960, 540), "99%": (1797, 1022)}
+        elif self.state == "loading_cn":
+            # 2026-11-10 10:00:32 生产 onnxocr v6 真实当帧：中央 logo 认成
+            # 「白荆廊」(0.85)，拉丁小字整帧读成「24919904」，ASHECHOES 全无
+            data = {"白荆廊": (967, 476),
+                    "【筑术师】具备极远的射程和较大的攻击范围": (960, 1010),
+                    "98%": (1797, 1022), "24919904": (1661, 1068)}
         elif self.state == "event_announce":
             # 2026-11-04 09:13 取证帧：活动公告横幅（生死轮回×叶脉联结计划），
             # 关闭提示/勾选在横幅下部（960 图 ×2 换算到 1920 屏幕坐标）
@@ -158,7 +165,7 @@ class Screen:
 
     def ocr(self, logger, hwnd=None, region=None):
         self.ocr_calls += 1
-        if self.switch_after and self.ocr_calls >= self.switch_after and self.state == "loading":
+        if self.switch_after and self.ocr_calls >= self.switch_after and self.state == self.switch_from:
             self.state = self.next_state
         return [
             {"text": t, "confidence": 0.75, "center": xy, "box": (xy[0], xy[1], xy[0], xy[1])}
@@ -356,6 +363,48 @@ def test_new_scenes_20261027():
     check("event_dialog 零 ESC", scr.esc == 0, scr.esc)
 
 
+# ── 4.7 2026-11-10：中文 logo 加载页 + 旧场景名不再冒充当帧 ──────────
+def test_loading_cn_and_failure_detail_20261110():
+    print("[4.7] 11-10 实锤：加载页中文 logo 可识别 / 失败文案带当帧文字")
+    check("加载特征覆盖中文 logo 全部 OCR 变体",
+          all(v in bd.LOADING_SCREEN_MARKERS
+              for v in ("白荆廊", "白荆回廊", "白荆回廓")),
+          bd.LOADING_SCREEN_MARKERS)
+    check("不用泛化短词「白荆」（固定页面会白等 60s）",
+          "白荆" not in bd.LOADING_SCREEN_MARKERS, bd.LOADING_SCREEN_MARKERS)
+
+    # 组合闸：logo + 进度才算加载；只有游戏名的固定页面不许命中
+    logo_only = [{"text": "白荆回廊活动公告", "confidence": 0.9, "center": (300, 300)},
+                 {"text": "确认", "confidence": 0.9, "center": (1196, 684)}]
+    rule, _ = bd._match_scene_rule(LOG, 1, logo_only)
+    check("只有游戏名没进度 → 不判加载过场",
+          rule is None or rule["name"] != "加载过场", rule["name"] if rule else None)
+    real = [{"text": "白荆廊", "confidence": 0.85, "center": (967, 476)},
+            {"text": "98%", "confidence": 0.98, "center": (1797, 1022)}]
+    rule2, _ = bd._match_scene_rule(LOG, 1, real)
+    check("logo + 进度 → 判加载过场",
+          rule2 is not None and rule2["name"] == "加载过场",
+          rule2["name"] if rule2 else None)
+
+    # 生产 OCR 当帧只有「白荆廊 / 98% / 提示文字 / 乱码」，也必须命中加载过场
+    scr = Screen(state="loading_cn")
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="t-loading-cn"))
+    check("中文 logo 加载页命中「加载过场」", state == "scene:加载过场", state)
+    check("只等待零点击零 ESC", scr.clicks == [] and scr.esc == 0, (scr.clicks, scr.esc))
+    check("证据文案说的是仍在加载",
+          any("仍在加载" in d for _, d in scr.failures), scr.failures)
+
+    # 纯文案：最后一轮已变成未登记界面 → 不许再说「场景「休息室」反复退出失败」
+    stale = "｜".join(["白荆廊", "【筑术师】具备极远的射程", "98%", "24919904"])
+    d1 = bd._scene_failure_detail("休息室", stale)
+    check("旧场景名不再冒充当帧结论", "反复退出失败" not in d1, d1)
+    check("文案带当帧文字", "98%" in d1 and "白荆廊" in d1, d1)
+    d2 = bd._scene_failure_detail("加载过场", "")
+    check("等加载不算反复退出失败", "仍在加载" in d2 and "反复退出失败" not in d2, d2)
+    d3 = bd._scene_failure_detail("休息室", "")
+    check("真·同场景退不出去仍报原结论", "反复退出失败" in d3, d3)
+
+
 # ── 4.6 2026-11-07：加载过场 + 定巡之礼先领后关 ───────────────────
 def test_loading_and_claim_20261107():
     print("[4.6] 加载过场只等待 / 定巡之礼先领「可领取」再点 X")
@@ -373,8 +422,9 @@ def test_loading_and_claim_20261107():
     check("loading 卡死 → scene:加载过场", state == "scene:加载过场", state)
     check("loading 卡死未做有效动作", acted is False, acted)
     check("loading 卡死零点击", scr.clicks == [], scr.clicks)
-    check("loading 卡死落了证据",
-          any("反复退出失败" in d for _, d in scr.failures), scr.failures)
+    check("loading 卡死落了证据（不再说成反复退出失败）",
+          any("仍在加载" in d for _, d in scr.failures)
+          and not any("反复退出失败" in d for _, d in scr.failures), scr.failures)
 
     # 定巡之礼弹窗：先点「可领取」，弹窗还在再点右上 X（顺序锁定）
     scr = Screen(state="event_claim")
@@ -543,6 +593,7 @@ def main():
     test_single_scenes()
     test_new_scenes_20261027()
     test_loading_and_claim_20261107()
+    test_loading_cn_and_failure_detail_20261110()
     test_event_announce_20261107()
     test_single_ocr_per_round()
     test_unknown_scene_evidence()

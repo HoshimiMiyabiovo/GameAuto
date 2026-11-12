@@ -507,7 +507,9 @@ class ClickSequencePlayer:
 
     def __init__(self, logger: Optional[logging.Logger] = None, failsafe: bool = True):
         self.logger = logger or logging.getLogger("GameAutomation")
-        pyautogui.FAILSAFE = failsafe
+        # 2026-11-10 起 pyautogui.FAILSAFE 全局关闭（foreground_flow_runner 模块级），
+        # failsafe 参数保留仅为兼容旧调用方签名，不再真的打开 fail-safe。
+        pyautogui.FAILSAFE = False
         pyautogui.PAUSE = 0.05
 
     def load(self, name: str, directory: Optional[str] = None) -> ClickSequence:

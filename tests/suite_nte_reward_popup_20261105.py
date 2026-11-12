@@ -37,20 +37,28 @@ def check(name, cond, detail=""):
         FAILURES.append(name)
 
 
-def _ocr_seq(seq):
+def _ocr_seq(seq, centers=None):
+    """seq: 每轮 OCR 的文本列表；centers: 可选 {轮次: [(x,y),...]} 一一对应。"""
     it = iter(seq)
-    return lambda *a, **k: [
-        {"text": t, "center": (0, 0), "confidence": 0.9} for t in next(it)
-    ]
+    centers_it = iter(centers) if centers else iter([None] * len(seq))
+    def _call(*a, **k):
+        texts = next(it)
+        cts = next(centers_it)
+        items = []
+        for i, t in enumerate(texts):
+            c = (cts[i] if cts and i < len(cts) else (0, 0))
+            items.append({"text": t, "center": c, "confidence": 0.9})
+        return items
+    return _call
 
 
-def _popup_env(seq):
+def _popup_env(seq, centers=None):
     from contextlib import ExitStack
 
     stack = ExitStack()
     stack.enter_context(mock.patch.object(ff, "_window_rect", return_value=(0, 0, 1920, 1080)))
     stack.enter_context(mock.patch(
-        "game_auto.runtime.ocr_click_tester.ocr_window_content", _ocr_seq(seq)))
+        "game_auto.runtime.ocr_click_tester.ocr_window_content", _ocr_seq(seq, centers)))
     click = stack.enter_context(mock.patch.object(ff, "_click_window_local"))
     stack.enter_context(mock.patch.object(zs.time, "sleep", lambda *_: None))
     return stack, click
@@ -141,7 +149,44 @@ def test_evidence():
     check("采购后浮层截图在", (out / "monthly_shop" / "20261105_202348_迷迭兑换_采购后.jpg").exists())
     check("可复用的浮层文字常量",
           "点击空白区域关闭" in zs.REWARD_POPUP_TEXTS
-          and "获得物品" in zs.REWARD_POPUP_TEXTS)
+          and "获得物品" in zs.REWARD_POPUP_TEXTS
+          and "获得" in zs.REWARD_POPUP_TEXTS)
+
+
+def test_zzz_confirm_button():
+    print("[6] ZZZ 后勤商店「获得」弹窗：点确认按钮而不是空白")
+    logger = mock.MagicMock()
+    # 2026-11-10 实跑截图 OCR：获得(479,210) / 音擎残芯(480,313) / 确认(488,364)
+    # mock 的 _window_rect 返回 (0,0,1920,1080)，left=0/top=0，局部==屏幕绝对
+    seq = [["获得", "音擎残芯", "确认"], ["商城"]]
+    centers = [[(479, 210), (480, 313), (488, 364)], [(500, 500)]]
+    stack, click = _popup_env(seq, centers)
+    with stack:
+        got = zs._dismiss_reward_popup(logger, 1, "后勤商店")
+    check("点一次关掉 → True", got is True, got)
+    check("只点 1 次", click.call_count == 1, click.call_count)
+    if click.call_count:
+        args = click.call_args[0]
+        check("点的是确认按钮 (488,364)，不是右下空白 (1766,1004)",
+              args[1] == 488 and args[2] == 364, args)
+
+    # 异环形态（无确认按钮）仍走空白关闭，不回归
+    seq2 = [["获得物品", "点击空白区域关闭"], ["商城"]]
+    stack2, click2 = _popup_env(seq2)
+    with stack2:
+        got2 = zs._dismiss_reward_popup(logger, 1, "迷迭兑换")
+    check("异环无确认按钮 → 仍点空白", got2 is True and click2.call_count == 1, (got2, click2.call_count))
+    if click2.call_count:
+        args2 = click2.call_args[0]
+        check("异环点在右下空白 (1766,1004)",
+              abs(args2[1] - 1766) < 5 and abs(args2[2] - 1004) < 5, args2)
+
+    # 弹窗里没有确认按钮（只有获得+商品名）→ 退回空白
+    seq3 = [["获得", "音擎残芯"], ["商城"]]
+    stack3, click3 = _popup_env(seq3)
+    with stack3:
+        got3 = zs._dismiss_reward_popup(logger, 1, "后勤商店")
+    check("无确认按钮 → 退回点空白", got3 is True and click3.call_count == 1, (got3, click3.call_count))
 
 
 def main():
@@ -150,6 +195,7 @@ def main():
     test_buy_items_marks_failed()
     test_close_and_config()
     test_evidence()
+    test_zzz_confirm_button()
 
 
 if __name__ == "__main__":

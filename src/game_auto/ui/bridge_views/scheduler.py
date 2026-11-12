@@ -290,6 +290,19 @@ class SchedulerView:
         except Exception:
             return None
 
+    def _retry_scheduled_date(self, entry: Dict) -> str:
+        """条目「该在哪天执行」：以 due_at 的日期为准，兼容只有 date 的旧条目。
+
+        历史 bug（11-10/11-11 连续两天）：``date`` 存的是**创建当天**，而
+        ``due_at`` 常指向公告开服的**次日**。旧代码一律拿 ``date == today``
+        过滤，于是跨日条目在创建当天被当成"今天还有补跑没执行"，把日报邮件
+        和自动关机无限推迟；到了真正该执行的那天，又因日期不匹配永远不触发。
+        """
+        due = self._parse_retry_dt(entry.get("due_at"))
+        if due is not None:
+            return due.astimezone(CN_TZ).strftime("%Y-%m-%d")
+        return str(entry.get("date") or "")
+
     def _pending_update_retries(self, now: Optional[datetime] = None) -> List[Dict]:
         now = now or datetime.now(CN_TZ)
         today = now.strftime("%Y-%m-%d")
@@ -297,7 +310,7 @@ class SchedulerView:
             items = self._load_update_retries()
         out: List[Dict] = []
         for e in items:
-            if str(e.get("date") or "") != today:
+            if self._retry_scheduled_date(e) != today:
                 continue
             attempt = int(e.get("attempt") or 0)
             max_attempts = int(e.get("max_attempts") or 3)
@@ -381,18 +394,22 @@ class SchedulerView:
         now = now or datetime.now(CN_TZ)
         due = max(open_at + timedelta(minutes=OPEN_BUFFER_MIN), now + timedelta(minutes=5))
         today = now.strftime("%Y-%m-%d")
+        due_day = due.astimezone(CN_TZ).strftime("%Y-%m-%d")
         with self._update_retry_lock:
-            items = [e for e in self._load_update_retries() if str(e.get("date") or "") >= today]
+            # 按「应执行日」清理：过期残留丢弃，今天/未来（含跨日）保留。
+            items = [e for e in self._load_update_retries()
+                     if self._retry_scheduled_date(e) >= today]
             entry = next(
                 (e for e in items
-                 if str(e.get("app_key") or "") == app_key and str(e.get("date") or "") == today),
+                 if str(e.get("app_key") or "") == app_key
+                 and self._retry_scheduled_date(e) == due_day),
                 None,
             )
             if entry is None:
                 entry = {
                     "app_key": app_key,
                     "script_choice": script_choice,
-                    "date": today,
+                    "date": due_day,
                     "attempt": 0,
                     "max_attempts": 3,
                     "created_at": now.isoformat(timespec="seconds"),
@@ -400,6 +417,8 @@ class SchedulerView:
                 items.append(entry)
             entry.update({
                 "script_choice": script_choice,
+                # date 统一迁移成「应执行日」；旧条目（存创建日）在这里被纠正
+                "date": due_day,
                 "due_at": due.isoformat(timespec="seconds"),
                 "open_at": open_at.isoformat(timespec="seconds"),
                 "version": str(info.get("version") or ""),
@@ -418,13 +437,11 @@ class SchedulerView:
         app_key = str(app_key or "")
         if not app_key:
             return
-        today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
         with self._update_retry_lock:
             items = self._load_update_retries()
-            new_items = [
-                e for e in items
-                if not (str(e.get("app_key") or "") == app_key and str(e.get("date") or "") == today)
-            ]
+            # 补跑已完成/终止：该 app 的排队全部清掉（含跨日、旧格式残留），
+            # 不再按日期挑，避免"删了今天的、明天的死条目还挂着挡收尾"。
+            new_items = [e for e in items if str(e.get("app_key") or "") != app_key]
             if len(new_items) != len(items):
                 self._save_update_retries(new_items)
                 if reason:
@@ -446,7 +463,8 @@ class SchedulerView:
                 items = self._load_update_retries()
             entry = next(
                 (e for e in items
-                 if str(e.get("app_key") or "") == app_key and str(e.get("date") or "") == today),
+                 if str(e.get("app_key") or "") == app_key
+                 and self._retry_scheduled_date(e) == today),
                 None,
             )
             if success or (state == "skipped" and not update_skip):
@@ -490,19 +508,28 @@ class SchedulerView:
         except Exception:
             logger.warning("[更新补跑] 处理任务结果失败", exc_info=True)
 
-    def _check_update_retries(self) -> None:
-        """每 30s 由定时器调用：到点的更新补跑启动一批。"""
+    def _check_update_retries(self, now: Optional[datetime] = None) -> None:
+        """每 30s 由定时器调用：到点的更新补跑启动一批。
+
+        ``now`` 可注入，便于跨日回归测试（定时器调用时不传）。
+        """
         if getattr(self, "_auto_run_paused", False):
             return
         if self._is_running:
             return
-        now = datetime.now(CN_TZ)
+        now = now or datetime.now(CN_TZ)
         today = now.strftime("%Y-%m-%d")
         with self._update_retry_lock:
             items = self._load_update_retries()
+            # 应执行日已过的残留直接丢弃，不再挂在文件里
+            fresh = [e for e in items if self._retry_scheduled_date(e) >= today]
+            changed = len(fresh) != len(items)
+            if changed:
+                logger.info("[更新补跑] 清理 %d 条过期队列", len(items) - len(fresh))
+                items = fresh
             due = []
             for e in items:
-                if str(e.get("date") or "") != today:
+                if self._retry_scheduled_date(e) != today:
                     continue
                 attempt = int(e.get("attempt") or 0)
                 max_attempts = int(e.get("max_attempts") or 3)
@@ -512,6 +539,8 @@ class SchedulerView:
                 if due_at is not None and due_at <= now:
                     due.append(e)
             if not due:
+                if changed:
+                    self._save_update_retries(items)
                 return
             apps = []
             seen = set()

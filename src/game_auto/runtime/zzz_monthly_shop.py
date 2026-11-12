@@ -50,7 +50,18 @@ RETRY_SETTLE_SEC = 2.0
 # **不会自动散掉**（原神/崩铁的浮层会自动消失，所以 2.5s 的等待以前够用）。
 # 浮层一直盖在商品卡上，下一轮定位/点击全落在浮层 → 质感骰子 1/5、
 # 三重钥匙 0/20，还被当成「已达上限」写进成功报告与月度标记。
-REWARD_POPUP_TEXTS = ("获得物品", "点击空白区域关闭")
+# 2026-11-10 实锤：绝区零后勤商店的成功弹窗与异环不同——OCR 只读到一个词
+# 「获得」（没有「物品」后缀），中间商品名（音擎残芯）、底部「确认」。词表
+# 不命中「获得」时 `_dismiss_reward_popup` 会当"没有浮层"直接放行，弹窗盖住
+# 商品卡导致后续全部定位失败（0848 采购前 47 个文字块 → 0851 采购后只剩 3 块）。
+# 「获得」做子串匹配足够特异：游戏内大世界/商店页没有独立的「获得」二字，
+# 命中的都是「获得物品」或 ZZZ 的「获得」弹窗。
+REWARD_POPUP_TEXTS = ("获得物品", "获得", "点击空白区域关闭")
+# 2026-11-10 实锤：绝区零后勤商店的成功弹窗底部是「确认」按钮（OCR 三行：
+# 获得 / 音擎残芯 / 确认），且没有「点击空白区域关闭」提示——点右下角空白
+# 根本关不掉（旧代码就是在这条路上空转 3 次仍判"没有浮层"放行）。
+# 异环浮层没有确认按钮，仍走空白关闭，两条路径靠 OCR 命中分派。
+REWARD_CONFIRM_TEXTS = ("确认", "购买", "确定")
 # 浮层是居中大卡片，右下角是明确的空白区（避开左侧导航、顶部页签、商品卡）。
 REWARD_POPUP_DISMISS_FRAC = (0.92, 0.93)
 REWARD_POPUP_DISMISS_TRIES = 3
@@ -540,12 +551,35 @@ def _read_item_remaining(
     return best_val
 
 
+def _reward_popup_present(logger: logging.Logger, hwnd: int) -> bool:
+    """整窗 OCR 是否挂着「获得物品」奖励浮层（OCR 不可用按没有处理）。"""
+    from .ocr_click_tester import ocr_window_content
+
+    try:
+        texts = [
+            str(r.get("text") or "")
+            for r in (ocr_window_content(logger, hwnd=hwnd) or [])
+        ]
+    except Exception as exc:  # noqa: BLE001 - 读不到就交给旧口径，不能拖垮采购
+        LOGGER.debug("[商店采购] 检测获得物品浮层失败: %s", exc)
+        return False
+    return any(any(k in t for k in REWARD_POPUP_TEXTS) for t in texts)
+
+
 def _dismiss_reward_popup(logger: logging.Logger, hwnd: int, label: str):
     """买成功后确保「获得物品」浮层消失。
 
     原神/崩铁的浮层会自动散掉（POST_BUY_SETTLE_SEC 够用），异环的浮层
     写着「点击空白区域关闭」、**不点就一直挂着**，把商品卡全遮住。这里
-    OCR 检测浮层文字 → 点右下角空白 → 复查，最多 3 次。
+    OCR 检测浮层文字 → 关掉它 → 复查，最多 3 次。
+
+    关闭方式按弹窗形态分派（2026-11-10 实锤）：
+    - 绝区零后勤商店：底部是「确认」按钮（OCR 三行 获得/商品名/确认），
+      没有「点击空白区域关闭」提示，点右下角空白关不掉 → OCR 定位确认
+      按钮并点击（屏幕绝对坐标换算成窗口局部）。
+    - 异环：浮层写着「点击空白区域关闭」、没有确认按钮 → 点右下角空白。
+    两条路径共用同一套「检测文字 → 点击 → 复查」循环，优先确认按钮、
+    找不到再点空白。
 
     返回 None=本来就没有浮层（正常）、True=已关闭、False=关不掉（异常）。
     """
@@ -555,24 +589,41 @@ def _dismiss_reward_popup(logger: logging.Logger, hwnd: int, label: str):
     rect = _window_rect(hwnd)
     if not rect:
         return None
-    _, _, width, height = rect
+    left, top, width, height = rect
     x = int(width * REWARD_POPUP_DISMISS_FRAC[0])
     y = int(height * REWARD_POPUP_DISMISS_FRAC[1])
     seen = False
     for attempt in range(1, REWARD_POPUP_DISMISS_TRIES + 1):
         try:
-            texts = [
-                str(r.get("text") or "")
-                for r in (ocr_window_content(logger, hwnd=hwnd) or [])
-            ]
+            ocr_results = ocr_window_content(logger, hwnd=hwnd) or []
         except Exception as exc:  # noqa: BLE001 - OCR 不可用就按"没有浮层"处理，不拖垮采购
             LOGGER.debug("[%s] 检测获得物品浮层失败: %s", label, exc)
             return None
+        texts = [str(r.get("text") or "") for r in ocr_results]
         if not any(any(k in t for k in REWARD_POPUP_TEXTS) for t in texts):
             return True if seen else None
         seen = True
-        logger.info(f"[{label}] 检测到「获得物品」浮层，点空白关闭（第 {attempt} 次）@ ({x},{y})")
-        _click_window_local(hwnd, x, y, clicks=1)
+        # 优先点弹窗里的「确认」按钮（ZZZ 形态）。ocr_window_content 的
+        # center 是屏幕绝对坐标，_click_window_local 吃窗口局部坐标。
+        confirm_center = None
+        for r in ocr_results:
+            text = str(r.get("text") or "")
+            if not any(k in text for k in REWARD_CONFIRM_TEXTS):
+                continue
+            c = r.get("center")
+            if not c or len(c) < 2:
+                continue
+            confirm_center = (int(c[0]) - left, int(c[1]) - top)
+            break
+        if confirm_center is not None:
+            logger.info(
+                f"[{label}] 检测到「获得」弹窗，点确认按钮关闭（第 {attempt} 次）"
+                f"@ 局部 {confirm_center}"
+            )
+            _click_window_local(hwnd, confirm_center[0], confirm_center[1], clicks=1)
+        else:
+            logger.info(f"[{label}] 检测到「获得物品」浮层，点空白关闭（第 {attempt} 次）@ ({x},{y})")
+            _click_window_local(hwnd, x, y, clicks=1)
         time.sleep(REWARD_POPUP_SETTLE_SEC)
     logger.error(f"[{label}] 「获得物品」浮层点了 {REWARD_POPUP_DISMISS_TRIES} 次仍在，停止本商品采购")
     return False
@@ -679,8 +730,13 @@ def _buy_once(
     if not gone:
         if stop_check is not None and stop_check():
             return STOPPED
-        logger.warning(f"[{label}] 已点确认但弹窗未关闭（可能余额不足或界面异常）")
-        return CONFIRM_GONE_FAIL
+        if not _reward_popup_present(logger, hwnd):
+            logger.warning(f"[{label}] 已点确认但弹窗未关闭（可能余额不足或界面异常）")
+            return CONFIRM_GONE_FAIL
+        # 购买已成功：复核命中的是奖励弹窗自带的「确认」按钮（ZZZ 获得弹窗，
+        # 2026-11-10 实锤）。这里若返回，浮层会盖住商店让后续商品全看不见；
+        # 放行到下面的关浮层 + 购买证据复核。
+        logger.info(f"[{label}] 确认复核未过但检测到「获得」奖励弹窗，按买成功处理并关浮层")
     # 等「获得物品」浮层散掉：不等的话下一次 OCR 会命中浮层上的商品名，
     # 点过去不是商品卡、等不到确认弹窗，就被误判成"已达上限"（2026-11-03 实锤）。
     time.sleep(POST_BUY_SETTLE_SEC)
@@ -721,7 +777,7 @@ def _leave_shop_to_main(
     marker = _abs_template(str(step.get("exit_marker_template") or ""))
     if not marker or not os.path.isfile(marker):
         return True   # 没配就当不需要退出，保持旧行为
-    from .foreground_flow_runner import _press_escape
+    from .foreground_flow_runner import press_key_scancode
 
     for _ in range(EXIT_MAX_ESC):
         if stop_check is not None and stop_check():
@@ -729,7 +785,7 @@ def _leave_shop_to_main(
         if _locate(hwnd, marker, scales, confidences, EXIT_CHECK_SEC, stop_check):
             logger.info(f"[{label}] 已退回主世界")
             return True
-        _press_escape(hwnd)
+        press_key_scancode("escape")
         time.sleep(1.2)
     logger.warning(f"[{label}] 采购完成，但按 {EXIT_MAX_ESC} 次 ESC 没确认回到主世界")
     return False

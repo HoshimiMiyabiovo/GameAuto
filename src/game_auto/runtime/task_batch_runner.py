@@ -321,6 +321,21 @@ def _run_pending_weekly_flow(controller, app_key: str) -> Optional[Tuple[str, bo
     if entry is None or controller.stop_current_task:
         return None
     flow_key, label = entry
+
+    # 2026-11-11 起恶名狩猎交回 OneDragon 一条龙，本项目的 ZZZ_NOTORIOUS_HUNT
+    # 整段停用。必须在调度层短路：只靠 run_flow 里的 enabled 检查会返回
+    # 「流程已禁用」被计成失败，每批次都往报告里塞一条 ❌ 并反复重试。
+    try:
+        from .foreground_flow_runner import _load_flow_config
+
+        weekly_cfg = _load_flow_config(flow_key)
+    except Exception as exc:  # noqa: BLE001 - 读配置失败不能挡住原有每周流程
+        controller.logger.debug("[%s] 读取每周流程配置失败: %s", label, exc)
+        weekly_cfg = None
+    if weekly_cfg is not None and not weekly_cfg.get("enabled", True):
+        controller.logger.info("[%s] 流程已禁用，跳过（本周由外部脚本负责）", label)
+        return None
+
     if is_weekly_flow_done(flow_key):
         return None
 

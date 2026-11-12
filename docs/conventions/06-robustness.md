@@ -213,6 +213,13 @@
   2026-09-29 CJ 事故：窗口贴屏幕左上角 + 用户鼠标随手放 (0,0) → 整个任务崩。
 - **测试进程难以复现触发**：DPI 虚拟化会让 moveTo(0,0) 落到屏幕中心、
   SetCursorPos(0,0) 后 position() 返回 (1,1)。验证收口逻辑用 mock 抛 FailSafeAborted。
+- **启动前清理遗留角落鼠标（2026-11-10 实跑事故）**："只有人类会停原点"的假设不成立——
+  whimbox 每次页面切换后 `move_to((0,0))` 避悬停（whimbox/ui/ui.py:185）；暖暖超时被强杀后
+  遗留光标被 pyautogui 当急停，紧接着 Qoder 每日积分 / ZZZ 后勤月商店两个前台流程首点击连续中止。
+  `_clear_parked_failsafe_cursor` 在 `run_flow` / `execute_task` 两个启动边界检测鼠标精确在 (0,0)
+  就用 win32 `SetCursorPos` 直挪屏幕中心并记一行日志（不能走 pyautogui：它的动作函数在 (0,0)
+  会先触发 fail-safe）。**流程内 fail-safe 不变**，人类甩角落急停仍收口 FailSafeAborted 整批终止。
+  回归 `tests/suite_failsafe_cursor_park_20261110.py`。
 - click_sequence.py 自己管理 FAILSAFE（点击序列暂停期间禁用），不在本约定范围。
 ### 收尾动作必须 finally 兜底 (重要)
 

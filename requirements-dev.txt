@@ -2,3 +2,4 @@
 #   uv pip install --python .venv/Scripts/python.exe -r requirements-dev.txt
 pytest>=8.0
 ruff>=0.5
+tokenizers>=0.20   # ai_history_rag_eval 的 ONNX 嵌入/重排分词（dev 实验，不进运行时）

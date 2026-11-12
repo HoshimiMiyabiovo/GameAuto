@@ -974,7 +974,6 @@ def run_baijing_ingame_flow(config: dict, logger: logging.Logger, stop_check=Non
     if not hwnd:
         logger.warning("[白荆回廊] 未找到游戏窗口句柄，后续步骤将按全屏匹配")
 
-    pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0.1
 
     # ════════════ 进入阶段（关闭公告 → 进入游戏 → 延长等待） ════════════

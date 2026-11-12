@@ -30,7 +30,6 @@ class GenericWorkflowRunner:
     def __init__(self, db_path: str, logger: Optional[logging.Logger] = None):
         self.db = WorkflowDB(db_path)
         self.logger = logger or logging.getLogger("GameAutomation")
-        pyautogui.FAILSAFE = True
         pyautogui.PAUSE = 0.1
 
     def run_workflow(self, workflow_name: str, screenshot_dir: str) -> bool:

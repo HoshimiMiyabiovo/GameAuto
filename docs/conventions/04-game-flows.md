@@ -485,6 +485,23 @@ This file mirrors important repository-level development notes inside the projec
   「+」按钮位置由「重置」OCR 位置 + 0.1225 倍窗宽偏移推算（**已用用户
   2026-10-30 截图定标，参考图 `docs/refs/baijing_memory_enhance_20261030.png`：
   1919x1079 下重置 (1189,669)、最大 (1529,670)、+ 约 (1424,669)，同一行**）。
+- **2026-11-11 10:15 实锤：强化弹窗默认停在「特质提升」页，必须先切「等级提升」页签**
+  （用户「看一下图片，其实只要切到等级提升页面就好了」）：取证帧
+  `20261111_101511_BaiJingDaily_记忆烙痕强化_ocr.jpg` 顶部两个页签
+  「等级提升」@(447,206)、「特质提升」@(758,205，白底高亮 = 当前选中)，画面只有
+  「特质变动 / 特质升级 / 消耗材料 / 当前选择 / 取消 / 确认」，**没有**
+  「指定等级 / 重置 / + / 最大」。旧流程 `MEMORY_DIALOG_MARKERS` 含「等级提升」，
+  看到页签标题就判"强化窗已就绪"，接着按 `MEMORY_RESET_REGION` 找「重置」→
+  推算「+」→ 报「未找到 + 按钮（重置=None）」（#271，白荆少 10 分只有 90/100）。
+  修复：`_ensure_memory_level_tab` 在「重置」之前先查等级页独占标记
+  （指定等级/重置/最大），没有就点顶部「等级提升」页签（区域限定
+  `MEMORY_LEVEL_TAB_REGION=(0.15,0.13,0.45,0.26)`，OCR 未命中按比例
+  (0.233,0.191) 兜底），切完**必须复验**才允许继续，否则落证据返回，绝不盲点。
+  **坑**：`_abs_region` 的 frac 是 (x0,y0,x1,y1) 而非 (x0,y0,w,h)——写成
+  (0.15,0.13,0.35,0.12) 会得到高度 0 的死区域，页签永远匹配不上。
+  回归 `tests/suite_baijing_memory_level_tab_20261111.py`（helper 四态 +
+  主流程状态机「特质页起始 → 切页签 → 重置/+1/确认 → 成功」+ 静态守卫），
+  白荆四套件 ALL PASS。**未实机验证，需重启 GUI**。
   `_return_to_task_panel` 返回顺序：已在面板→主界面重开「任务」→ 退出确认框点「确认」→
   页面左上角「返回」按钮（fx<0.2,fy<0.15 区域）→ ESC，最多 5 层。
 - **场景退出登记表已扩到 10 个场景**（`SCENE_RULES`，2026-10-27 / 10-29 / 10-30 失败取证驱动补登记）：
@@ -509,6 +526,21 @@ This file mirrors important repository-level development notes inside the projec
   直接 X 等于丢奖，2026-11-07 用户拍板「遇到就给他领了呗」：先点「可领取」、
   重识别、弹窗还在再点 X；「可领取」只在规则命中定巡之礼后查找，不误伤其它页面）。
   长期参考图 `data/artifacts/ref_baijing_dingxun_dialog_20261107.jpg`（含 可领取@conf0.75）。
+  **2026-11-10 更正（用户「加载过场不能登记吗？为什么总是对着加载报失败」）**：
+  规则 11-07 就登记了、还排在 `SCENE_RULES` 第一位，但 `LOADING_SCREEN_MARKERS=("ASHECHOES",)`
+  当天 **0 次命中**——10:00:32 生产 onnxocr v6 的真实当帧是「白荆廊」(0.85) /
+  「白荆回廊」(0.71) /「白荆回廓」+ 47%→98% +「24919904」乱码，拉丁小字
+  一个字母都没认出来。三处修复：① 特征扩成中文 logo 三种 OCR 变体 + 拉丁词，
+  **并加组合闸** `_loading_screen_hit`（logo 与 `\d{1,3}%` 同时在场才算加载）——
+  只列词会让任何含「白荆回廊」字样的固定页面被子串命中、白等满 60s（实测）；
+  `SCENE_RULES` 因此新增可选 `detector` 字段。② `recover_scene` 轮次耗尽时若最后
+  一轮未匹配，证据文案改为「最后识别到「X」，收尾时画面已变成未登记界面；当帧文字: …」，
+  并抽成纯函数 `_scene_failure_detail`；旧实现拿上一轮的 `last_scene`「休息室」
+  配当帧 98% 加载页截图，才报出「对着加载页说休息室反复退出失败」。真·同场景
+  退不出去仍报原结论。③ 加载卡死（等满 60s）的文案改为「加载过场等待 60s 后仍在
+  加载，未强行点击」，不再叫「反复退出失败」。回归
+  `tests/suite_baijing_scene_registry_20261026.py` [4.7]（中文 logo 命中 / 组合闸防误判 /
+  三种文案），全量 pytest 全绿、ruff 过。**未实机验证，改完必须重启 GUI**。
   **加载页会叠活动公告横幅**（11-04 #163 取证：生死轮回×叶脉联结计划，参考图
   `ref_baijing_loading_event_banner_20261104.jpg`）：取证瞬间的 OCR 只抓到 4 条加载页
   小字、横幅文字全漏（证据截图与 OCR 时序错位，非能力问题——事后直跑 RapidOCR
@@ -690,6 +722,22 @@ This file mirrors important repository-level development notes inside the projec
   再兜底点卡片中心 (0.573,0.381)。
   回归：`artifacts/test_baijing_club_daily_20261018.py`（5 组，含"弹窗帧不得命中页面
   特征"这条防回归断言）。
+- **俱乐部活动「回声猎区」分支入口**（`_run_club_activity_echo_zone`，2026-11-11 用户
+  截图实测，活动重置剩余 12 天）：挂在 `claim_club_daily_reward` 领完每日任务之后、
+  `_leave_club_page` 之前，仍在俱乐部页时顺手检测右侧「俱乐部活动」卡片（整张可点，
+  「回声猎区」标题中心 ≈ (0.819, 0.370)，检测区域限定 (0.50,0.26,1.0,0.52)）。
+  **分支先行、内容未实现**：命中 → 点 OCR center → 快照取证
+  （`club_activity_echo_*.jpg`）→ 立即复用 `_leave_club_page` 退回主界面；
+  未命中（活动结束/换期）→ 不点击直接跳过——**禁比例盲点**，活动结束后卡片可能
+  消失或换内容。活动页布局未实机探明，**刻意不做页面判定**（无已验证标记集，
+  遵守页面判定铁律），进页证据只靠快照。分支结果挂 `result["activity"]`
+  （entered / returned_main / status），**不改动每日任务主状态**——退出失败只把
+  分支自身标 failed 并提示人工恢复，后续步骤各自 `_ensure_main_ui` 自保兜底。
+  活动内容（刷本/领奖/专属退出链路）等实机截图补齐后再写，届时应从
+  `claim_club_daily_reward` 拆出独立任务行记录（同俱乐部每日任务的 observability
+  口径），不要永远寄生在 club_daily 的 extra 里。
+  回归：`tests/suite_baijing_club_activity_20261111.py`（常量守卫/未命中禁点/命中
+  点 OCR center/退出失败标注/接线与停止，全打桩无真窗口）。
 - **有猫兑换每月购买**（`runtime/baijing_cat_exchange.py`，2026-10-25 用户新增需求）：
   「有猫零售 → 有猫兑换」页每月刷新，可以每月买点小东西；清单做成配置
   `app_config.json → baijing.cat_exchange.items`（2026-10-25 时待定；**2026-11-01 用户
@@ -1033,6 +1081,16 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
 - **每步必须等页面特征出现再点下一步**：第二轮连点实测「作战开始」→ 布阵页加载超过 7 秒，
   第三下点空停在了布阵页。战斗等待 420s 上限、每 20s 一条波次心跳、全程 `stop_check` 可中断；
   失败落 `flow_diagnostics.record_failure`（截图 + 当帧 OCR），`finally` 统一点「返回」收尾。
+- **「开始战斗」按钮出现 ≠ 可交互（2026-11-09 10:02 实跑，2026-11-10 修）**：主流程旧实现
+  `_wait_page("deploy")` 只等按钮文字出现（约 11s）就点一次，随后死等 25s，10:02:00 那一下
+  点击被吞 → 判「第1场: 战斗未开始（deploy）」；失败取证帧里红色按钮还挂着、OCR 1.00 认到，
+  不是页面判据问题。11-07 提权真机是点「作战开始」后等约 19s 才点，一次进战斗。现在
+  `runtime/baijing_fitting.py` 的 `_start_battle_with_retry`：`_wait_deploy_settled` 给 15s
+  可中断稳定窗口 → 点 `P_BATTLE_START` → 2s 后 `_page_now` 复核 → 没进 `battle/result`
+  就补点，最多 3 次 → 仍不进才 `_fail` 落取证，失败信息带点击次数。旧的 `WAIT_BATTLE=25s`
+  单点死等已删。回归 `tests/suite_baijing_fitting_20261107.py` [4c]。**未实机验证**，
+  下次白荆批次才跑得到；若仍不进，下一嫌疑是取证帧里 4 个角色头像的红 ×（队伍状态
+  是否满足开战条件），需点击前/后连续两帧确认按钮可交互态。
 - **提权是硬前提**：游戏窗口权限高于普通 shell，低权限合成点击被 UIPI 静默拦截
   （11-07 实机点「外勤」两次画面纹丝不动，提权后立刻进页）。GUI/CLI 必须用
   `00_START_HERE_GUI_ADMIN.bat` 提权启动，否则整段看着"成功"其实一步没点动。
@@ -1094,6 +1152,22 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
 - **用户决定（2026-11-01）**：OneDragon 的这个应用已在 `config/01/one_dragon/_group.yml` 里
   `notorious_hunt: enabled: false`，改用本项目的 `ZZZ_NOTORIOUS_HUNT`。
   **注意 OneDragon 的 `run_times` 坑没动**：将来若重新启用，必须同时打开「循环执行」。
+- **决定反转（2026-11-11，用户「恶名狩猎交给 zzz 一条龙，你别研究了」）**：
+  上一条作废。核查 `D:\down\ZZZ\ZenlessZoneZero-OneDragon` 现状——
+  `config/01/one_dragon/_group.yml` 的 `notorious_hunt: enabled: true`、
+  `notorious_hunt.yml` 的 `loop: true`（`run_times` 坑已避开）、
+  `config/01/app_run_record/notorious_hunt.yml` 记录 `left_times: 0 / dt: 20261109 / 11-09 22:00`，
+  即一条龙本周已接管并打满 3 次。本项目自研周常是重复执行且天天失败
+  （11-11 08:48「没看到 boss 列表」），**整段停用，不再排查/修复该流程**。
+  落地：`flow_configs.json` 与 `flow_configs.example.json` 的
+  `ZZZ_NOTORIOUS_HUNT.enabled=false`（附 `_comment_disabled` 说明）；
+  `task_batch_runner._run_pending_weekly_flow` 在 `is_weekly_flow_done` 之前加
+  `enabled` 短路（照月商店范式）——否则 `run_flow` 返回「流程已禁用」会被计成失败，
+  每批次塞一条 ❌ 并反复重试；写入本周 `weekly_flow:ZZZ_NOTORIOUS_HUNT=2026-W46`
+  让运行中的旧 GUI 立即静默（与一条龙 11-09 已完成的事实一致）。
+  `runtime/zzz_notorious_hunt.py`、`foreground_flow_runner` 的 action 及既有测试**保留不删**，
+  把 `enabled` 改回 true 即可切回；OneDragon 侧的体力计划「深度追猎」不受影响。
+  回归 `tests/suite_weekly_flow_disabled_20261111.py`。
 ### 2026-11-02 失败复盘（11 个 failed → 逐条定性 + 5 处修复）
 
 当日 `daily_progress` 统计：success 22 / already 6 / pending 6 / skipped 2 / **failed 11**。

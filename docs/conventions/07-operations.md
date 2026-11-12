@@ -130,6 +130,22 @@
   `_unfired_scheduled_today` / 关机顺延包含补跑条目。
 - 维护窗口边界用严格小于：11:00 开服、buffer 5 分钟 → 11:05 视为已开服，
   避免 11:05 的补跑又被维护检查跳过。
+- **跨日补跑必须按 `due_at` 判日期（2026-11-11 修复，用户「什么鬼东西不关机了」）**：
+  条目的 `date` 历史上存的是**创建当天**，而公告开服常在**次日**；
+  `_pending_update_retries` / `_check_update_retries` / `_remove_update_retry` /
+  `_handle_update_retry_result` 旧代码一律 `date == today`，于是 ① 创建当天
+  把跨日条目算成"今天还有补跑没跑"，`_has_unfired_scheduled_today()` 恒真 →
+  日报邮件与自动关机被无限推迟（11-10、11-11 连续两天，日志「还有 1 个定时
+  任务/更新补跑未执行」）；② 到真正该执行的次日又因日期不匹配永不触发。
+  **统一入口 `_retry_scheduled_date(entry)`**：以 `due_at` 的日期为准，解析失败
+  才回退旧 `date`（兼容存量队列）。配套：`_schedule_update_retry` 写入时把
+  `date` 迁移成应执行日、复用键也按应执行日（不会重复建条目）；
+  `_remove_update_retry` 成功/终止时清掉该 app 的全部排队，不再按日期挑；
+  `_check_update_retries` 加可注入 `now` 参数（定时器仍无参调用）并清理
+  应执行日已过的残留。回归 `tests/suite_update_retry_crossday_20261111.py`。
+  存量 `data/cache/update_retries.json` 已就地迁移（备份 `.bak_20261111`）——
+  因为旧代码只看 `date`，把 `date` 改成应执行日后**运行中的旧 GUI 也立即
+  解除阻塞**，不必等重启；新代码仍按项目惯例需重启 GUI 生效。
 - 2026-10-21 扩展：鸣潮用官方 CMS
   `media-cdn-mingchao.kurogame.com/akiwebsite/website2.0/json/G152/zh/`
   （ArticleMenu.json + article/<id>.json，正文「更新维护时间：2026年9月30日04:00 ~ 11:00」）；

@@ -1188,7 +1188,8 @@
     "_comment_scene_gate": "2026-11-08 #219/#220 重构：①第一步 zzz_enter_main 场景表校正（不假设冷启动）；②reuse_existing_window 接管运行中游戏；③close_process_on_finish/close_process_on_fail=false——游戏留给紧随其后的恶名狩猎周常（调度顺序月在前周在后），周常跑完才关，月→周不再杀进程冷启动。"
   },
   "ZZZ_NOTORIOUS_HUNT": {
-    "enabled": true,
+    "enabled": false,
+    "_comment_disabled": "2026-11-11 用户决定：恶名狩猎交回 ZenlessZoneZero-OneDragon 一条龙，本项目周常默认停用（原 2026-11-01 的「改用本项目」决定作废）。一条龙侧需同时满足 _group.yml notorious_hunt enabled:true 与 notorious_hunt.yml loop:true，否则 run_times 不按周重置会每周空跑。",
     "exe_from_app": "ZenlessZoneZero",
     "window_title_keywords": [],
     "window_process_names": [

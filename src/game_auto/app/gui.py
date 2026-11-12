@@ -101,6 +101,21 @@ def _launch_qml_ui(dep_report=None) -> None:
     engine.rootContext().setContextProperty("bridge", bridge)
     UILogHandler.set_bridge(bridge)
 
+    # ── 全局热键游戏截图：GUI 启动即常驻待命（类似 Xbox Game Bar） ──
+    # 延迟 1.5s：pynput 起低级键盘钩子 + WGC 预热，别和 QML 首绘抢 GIL。
+    # notify 只发 Qt 信号（QueuedConnection），热键回调在 pynput 线程不碰 Qt 对象。
+    from ..services.game_shot_service import GameShotService
+
+    game_shot = GameShotService(
+        notify=lambda message, color="#2f7d4a": bridge.emit_event(
+            "toast", message=message, color=color
+        )
+    )
+    _shot_starter = QTimer()
+    _shot_starter.setSingleShot(True)
+    _shot_starter.timeout.connect(game_shot.start)
+    _shot_starter.start(1500)
+
     # ── 已设置 WebUI 账号时才随 GUI 自动启动（127.0.0.1:60171） ──
     # 延迟到首帧后空闲再起：uvicorn import 约 0.6s，立即起会和 QML 首绘抢 GIL
     def _start_webui_background():
@@ -177,6 +192,12 @@ def _launch_qml_ui(dep_report=None) -> None:
     # ── 退出清理：停止后台自动化任务，防止子进程残留导致终端不释放 ──
     def _cleanup_on_quit():
         ui_logger.info("[退出] 开始清理资源...")
+        # os._exit 跳过 atexit，热键钩子必须在这里显式注销，否则残留低级键盘钩子
+        try:
+            game_shot.stop()
+            ui_logger.info("[退出] 已注销截图热键")
+        except Exception as exc:
+            ui_logger.debug("[退出] 停止截图服务失败: %s", exc)
         # 先停看门狗，避免退出瞬间被误判为卡死而写转储
         try:
             beat_timer.stop()

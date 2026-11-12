@@ -19,12 +19,15 @@ from PIL import Image
 from ..settings.paths import BASE_DIR, CACHE_DIR, ensure_flow_config_path
 from ..services.task_heartbeat_watchdog import beat_thread_heartbeat
 
-# OCR 可用性由 `ocr_click_tester._ocr_scan` 内部判定：onnxocr v6 是主引擎，
-# 只有它返回空/异常时才尝试可选的 Tesseract 兜底。这里**不要**按
-# `pytesseract` 包是否存在做门控 —— 2026-11-07 复核发现旧代码用
-# `HAS_OCR = bool(pytesseract)` 卡住整个文字定位函数，可下游
-# `ocr_find_any_text` 走的是 RapidOCR，等于没装这个 Python 包就把主 OCR
-# 一起关掉了（正常安装时 pytesseract 是必装包，所以从未暴露）。
+# ── pyautogui fail-safe 全局关闭（2026-11-10 用户拍板）─────────────────────
+# pyautogui 的 FAILSAFE 把"鼠标顶到左上角 (0,0)"当紧急停止，但它的触发条件
+# 是 `position() in FAILSAFE_POINTS`——只要鼠标**恰好**停在四角（被杀脚本停放、
+# 用户点完启动按钮随手放角落、最大化窗口边框溢出把坐标 clamp 到 0）就误触发，
+# 整个任务抛 FailSafeAborted 中断（11-10 12:15 Qoder 流程实锤）。
+# 本项目自己有 watchdog 心跳 + GUI「停止」按钮 + stop_check 链路做真急停，
+# 不需要这套"鼠标位置"急停。关掉即止，不再另加四角拒绝（贴边窗口的合法
+# 角落点击不该被拦）。
+pyautogui.FAILSAFE = False
 
 
 Rect = Tuple[int, int, int, int]
@@ -1334,36 +1337,46 @@ def _click_window_local(hwnd: int, x_local: int, y_local: int, clicks: int = 1,
 def _hover_window_local(hwnd: int, x_local: int, y_local: int, duration: float = 0.2):
     """把鼠标移到窗口内指定位置并停留（不点击）。
 
-    用于只有悬停才展开的浮层菜单（MiniMax「每日签到」卡片）。pyautogui.moveTo
-    同样受 fail-safe 保护，这里与点击一样转成 FailSafeAborted。
+    用于只有悬停才展开的浮层菜单（MiniMax「每日签到」卡片）。pyautogui
+    fail-safe 已全局关闭，moveTo 不再抛 FailSafeException。
     """
     rect = _window_rect(hwnd)
     if not rect:
         return
     l, t, _, _ = rect
     _focus_window(hwnd)
-    try:
-        pyautogui.moveTo(l + int(x_local), t + int(y_local), duration=duration)
-    except pyautogui.FailSafeException:
-        raise FailSafeAborted("鼠标位于屏幕左上角(0,0)，已按用户紧急停止处理")
+    pyautogui.moveTo(l + int(x_local), t + int(y_local), duration=duration)
 
 
 class FailSafeAborted(Exception):
-    """pyautogui fail-safe 触发（鼠标精确位于 (0,0)）。
+    """自动化紧急停止收口（watchdog 心跳丢失 / GUI 停止 / stop_check 触发）。
 
-    pyautogui 把"鼠标顶在屏幕左上角"当作用户紧急停止信号。本项目的挂机流程
-    窗口常贴屏幕角摆放，用户点完启动按钮随手把鼠标放到左上角就会误触发，
-    表现为整个任务 traceback 崩溃、日志只有看不懂的堆栈（2026-09-29 CJ 实例）。
-    转成此异常后在 task_batch_runner 收口成一条人话日志 + 优雅失败。
+    历史：pyautogui 的 fail-safe 把"鼠标顶在屏幕左上角"当急停，2026-11-10 起
+    已全局关闭（模块级 `pyautogui.FAILSAFE = False`），本异常只由项目自己的
+    停止链路抛出，原样接 task_batch_runner 的 should_stop_batch 收口。
     """
 
 
 _FAILSAFE_HINT = (
-    "PyAutoGUI 紧急停止已触发：鼠标位于屏幕左上角 (0,0)。"
-    "这是 pyautogui 的防失控保护（鼠标顶到左上角 = 请求停止自动化）。"
-    "若是误触发（如点完启动按钮后鼠标恰好停在角落），请把鼠标移开屏幕角落后重新运行任务；"
-    "若是有意停止，无需处理。"
+    "自动化已停止（watchdog 心跳 / GUI 停止 / stop_check）。"
 )
+
+
+def _clear_parked_failsafe_cursor(logger: logging.Logger) -> None:
+    """启动边界把被杀脚本遗留停放在 (0,0) 的鼠标挪走（whimbox 避悬停会停那）。
+
+    2026-11-10 起 pyautogui fail-safe 已全局关闭，挪走 (0,0) 只是卫生清理
+    （别让鼠标真的停在屏幕角落），不再承担任何急停语义。
+    """
+    if tuple(win32api.GetCursorPos()) != (0, 0):
+        return
+    safe = (win32api.GetSystemMetrics(0) // 2, win32api.GetSystemMetrics(1) // 2)
+    # 不走 pyautogui：它的动作函数在 (0,0) 会先触发 fail-safe
+    win32api.SetCursorPos(safe)
+    logger.info(
+        "[fail-safe] 启动前鼠标遗留停在 (0,0)（疑似被杀脚本停放），已挪至 %s",
+        safe,
+    )
 
 
 # 2026-11-04 实机：Unity 启动器不认瞬时 down+up，且瞬时点击是典型脚本特征。
@@ -1377,7 +1390,7 @@ except (TypeError, ValueError):
 
 def _pyautogui_click_guarded(x: int, y: int, clicks: int = 1, interval: float = 0.2,
                              button: str = "left", hold_sec: Optional[float] = None):
-    """前台点击统一收口：默认走极短按住式点击，fail-safe 抛 FailSafeAborted。
+    """前台点击统一收口：默认走极短按住式点击。
 
     hold_sec=None → 用 `DEFAULT_CLICK_HOLD_SEC`（全局默认，所有调用点自动受益）；
     hold_sec=0    → 显式瞬时 `pyautogui.click`（确有需要时才用）；
@@ -1391,6 +1404,8 @@ def _pyautogui_click_guarded(x: int, y: int, clicks: int = 1, interval: float = 
         else:
             pyautogui.click(int(x), int(y), clicks=clicks, interval=interval, button=button)
     except pyautogui.FailSafeException as exc:
+        # pyautogui.FAILSAFE 已全局关闭，正常路径进不来；保留兜底以防
+        # 第三方库/别的进程把它打开。
         logger = logging.getLogger("GameAutomation")
         logger.warning("[fail-safe] %s", _FAILSAFE_HINT)
         raise FailSafeAborted(_FAILSAFE_HINT) from exc
@@ -1423,6 +1438,8 @@ def _pyautogui_click_held(
             if i + 1 < count and interval:
                 time.sleep(interval)
     except pyautogui.FailSafeException as exc:
+        # pyautogui.FAILSAFE 已全局关闭，正常路径进不来；保留兜底以防
+        # 第三方库/别的进程把它打开。
         logger = logging.getLogger("GameAutomation")
         logger.warning("[fail-safe] %s", _FAILSAFE_HINT)
         raise FailSafeAborted(_FAILSAFE_HINT) from exc
@@ -2539,6 +2556,7 @@ def run_flow(
     """
     if _stop_requested(stop_check):
         return False, f"[{flow_key}] 用户已请求停止，未启动流程"
+    _clear_parked_failsafe_cursor(logger)
 
     cfg = _load_flow_config(flow_key)
     if not cfg:

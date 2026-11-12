@@ -32,6 +32,12 @@ tests/suite_baijing_fitting_20261107.py。
   其实一步没点动。
 - 「作战开始」→ 布阵页加载较慢（第二轮连续点击间隔 7s 时第三下点空），
   每步都必须等页面特征出现再点下一步，绝不盲点一串。
+- **布阵页「开始战斗」点一次可能不生效（2026-11-09 10:02 实跑）**：`_wait_page("deploy")`
+  只等按钮文字出现（约 11s）就点，10:02:00 那一下被吞，之后死等 25s 判
+  「战斗未开始（deploy）」；失败取证帧里按钮还挂着、OCR 1.00 认到，不是判据问题。
+  11-07 提权真机是点「作战开始」后等约 19s 才点，一次进战斗。现在
+  `_start_battle_with_retry` = 稳定等待 15s（可中断）→ 点击 → 2s 复核 → 没进补点，
+  最多 3 次 → 仍不进才落取证，失败信息带点击次数。
 - 结算页没有任何按钮，点空白 (0.5,0.5) 才回活动页，中间有加载过场。
 - **本周已领完时点左下角里程碑不是"没反应"而是弹「物品详情」浮层**（2026-11-08
   12:41 首跑实锤：11-07 实机已领完，点 (150,960) 弹出「秘银拓片」详情——「获取方式/
@@ -91,10 +97,17 @@ WAIT_FIELD = 8.0
 WAIT_ACTIVITY = 12.0
 WAIT_TEAM = 15.0
 WAIT_DEPLOY = 20.0
-WAIT_BATTLE = 25.0
 WAIT_BACK_ACTIVITY = 25.0
 WAIT_REWARD = 8.0
 WAIT_REWARD_CLOSED = 12.0
+
+# 布阵页「开始战斗」：按钮文字出现 ≠ 按钮可交互（2026-11-09 10:02 实跑点击被吞）。
+# 11-07 提权真机是点「作战开始」后等约 19s 才点「开始战斗」，一次进战斗；
+# 主流程旧实现只等页面特征（约 11s）就点一次，随后死等 25s 判失败。
+DEPLOY_SETTLE_SEC = 15.0           # 布阵页稳定等待（可中断），参照真机 ~15-20s
+BATTLE_VERIFY_DELAY_SEC = 2.0      # 每次点击后延迟复核是否真的进战斗
+BATTLE_START_MAX_ATTEMPTS = 3      # 首次 + 最多 2 次补点
+BATTLE_OK_PAGES = ("battle", "result")
 
 
 def _texts(items: Sequence[Dict]) -> List[str]:
@@ -295,6 +308,55 @@ def runs_needed(wave: Optional[Tuple[int, int]]) -> int:
     return min(MAX_RUNS, max(0, math.ceil((cap - cur) / WAVES_PER_RUN)))
 
 
+def _wait_deploy_settled(
+    logger: logging.Logger, hwnd, stop_check: Optional[Callable[[], bool]]
+) -> bool:
+    """布阵页按钮稳定等待（可中断），期间不点任何东西。
+
+    11-09 10:02 实跑：点「作战开始」后 10:01:51~10:01:59 还在加载过场，
+    10:02:00 页面特征一出现就点「开始战斗」，点击被吞；11-07 提权真机
+    则等到约 19s 后才点，一次进战斗。这里给固定的可中断稳定窗口，
+    页面判定仍由调用前的 `_wait_page("deploy")` 负责，不重复 OCR。
+    """
+    deadline = time.monotonic() + DEPLOY_SETTLE_SEC
+    while time.monotonic() < deadline:
+        if _stopped(stop_check):
+            logger.info(f"{LOG_TAG} 布阵页稳定等待被用户停止")
+            return False
+        time.sleep(min(POLL_INTERVAL_SEC, max(0.0, deadline - time.monotonic())))
+    logger.info(f"{LOG_TAG} 布阵页已稳定 {DEPLOY_SETTLE_SEC:.0f}s，开始点「开始战斗」")
+    return True
+
+
+def _start_battle_with_retry(
+    logger: logging.Logger, hwnd, stop_check: Optional[Callable[[], bool]]
+) -> Tuple[bool, str, List[Dict], int]:
+    """布阵页 → 开打：稳定等待 → 点击 → 延迟复核 → 没进就补点，最多 3 次。
+
+    返回 (是否进战斗, 末次页面, 末帧 OCR, 实际点击次数)。失败只回传证据，
+    由调用方统一 `_fail` 落取证，保证失败信息里带点击次数。
+    """
+    if not _wait_deploy_settled(logger, hwnd, stop_check):
+        return False, "stopped", [], 0
+    last_page, last_items = "deploy", []
+    for attempt in range(1, BATTLE_START_MAX_ATTEMPTS + 1):
+        if _stopped(stop_check):
+            return False, "stopped", last_items, attempt - 1
+        if not _click(logger, hwnd, P_BATTLE_START, "开始战斗"):
+            return False, last_page, last_items, attempt
+        time.sleep(BATTLE_VERIFY_DELAY_SEC)
+        page, items = _page_now(logger, hwnd)
+        last_page, last_items = page, items
+        if page in BATTLE_OK_PAGES:
+            logger.info(f"{LOG_TAG} 开始战斗第 {attempt} 次点击生效（页面={page}）")
+            return True, page, items, attempt
+        logger.warning(
+            f"{LOG_TAG} 开始战斗第 {attempt}/{BATTLE_START_MAX_ATTEMPTS} 次点击未进战斗"
+            f"（页面={page}）{'，准备补点' if attempt < BATTLE_START_MAX_ATTEMPTS else ''}"
+        )
+    return False, last_page, last_items, BATTLE_START_MAX_ATTEMPTS
+
+
 def _wait_battle_result(
     logger: logging.Logger,
     hwnd,
@@ -438,13 +500,16 @@ def run_fitting_regression(
             ok, page, items = _wait_page(logger, hwnd, "deploy", WAIT_DEPLOY, stop_check)
             if not ok:
                 return _fail(logger, hwnd, step, f"未进入布阵页（{page}）", items, runs, claimed)
-            # 3) 布阵页 → 开打
-            if not _click(logger, hwnd, P_BATTLE_START, "开始战斗"):
-                return _fail(logger, hwnd, step, "开始战斗点击失败", [], runs, claimed)
-            ok, page, items = _wait_page(logger, hwnd, "battle", WAIT_BATTLE, stop_check,
-                                         also_ok=("result",))
+            # 3) 布阵页 → 开打（11-09 实跑：单次点击被吞，改稳定等待 + 复核补点）
+            ok, page, items, attempts = _start_battle_with_retry(
+                logger, hwnd, stop_check=stop_check
+            )
             if not ok:
-                return _fail(logger, hwnd, step, f"战斗未开始（{page}）", items, runs, claimed)
+                return _fail(
+                    logger, hwnd, step,
+                    f"战斗未开始（{page}，开始战斗已点 {attempts} 次）",
+                    items, runs, claimed,
+                )
             # 4) 挂机直到结算（自动战斗默认开启，全程不点技能）
             if page != "result":
                 ok, page, items = _wait_battle_result(logger, hwnd, stop_check)

@@ -102,3 +102,21 @@ DEFAULT_NIKKI_RESONANCE_SHOP: Dict = {
 DEFAULT_APPS: Dict[str, Dict] = {
     p.app_key: copy.deepcopy(p.default_app) for p in iter_profiles()
 }
+
+
+# 全局热键游戏截图（2026-11-10）：GUI 启动即常驻待命，按热键截当前前台窗口。
+# hotkey 用用户可读写法（services/game_shot_service.to_pynput_hotkey 转 pynput）；
+# 默认 Ctrl+Alt+S 而不是 Win+Alt+PrtSc —— 后者被 Xbox Game Bar 自己占着，注册会失败。
+# capture: window=只截前台窗口 / screen=整屏；format: png / jpg；
+# sound 必须在：游戏独占全屏时 GUI 窗口在后台，应用内 toast 用户根本看不见。
+DEFAULT_GAME_SHOT: Dict = {
+    "enabled": True,
+    "hotkey": "ctrl+alt+s",
+    "capture": "window",
+    "format": "png",
+    "jpeg_quality": 90,
+    "max_width": 0,
+    "sound": True,
+    "toast": True,
+    "min_interval_sec": 0.8,
+}

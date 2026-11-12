@@ -192,6 +192,17 @@ MEMORY_BREAKTHROUGH_MARKERS = ("突破效果变化", "烙痕等级上限", "消�
 MEMORY_BREAKTHROUGH_CONFIRM = (0.611, 0.796)
 MEMORY_BREAKTHROUGH_CONFIRM_SAMPLE = (0.55, 0.796)
 MEMORY_BREAKTHROUGH_CANCEL = (0.386, 0.796)
+# 强化弹窗的两个页签（2026-11-11 10:15 取证帧 #271 @1919x1079）：
+# 「等级提升」@(447,206)、「特质提升」@(758,205)。弹窗**默认停在「特质提升」**，
+# 此时画面只有「特质变动/特质升级/消耗材料/当前选择」，没有「指定等级/重置/+」，
+# 直接按 MEMORY_RESET_REGION 找「重置」→ 推算「+」必然落空（用户：切到等级提升页就好）。
+# 「重置/[+]/最大」只存在于「等级提升」页签。区域按 (x0,y0,x1,y1) 窗口比例
+# （_abs_region 的语义，与 MEMORY_RESET_REGION 一致），只圈顶部页签行，
+# 避免正文里的同名词被误点。
+MEMORY_LEVEL_TAB_REGION = (0.15, 0.13, 0.45, 0.26)
+MEMORY_LEVEL_TAB_TEXT = ("等级提升",)
+MEMORY_LEVEL_TAB_FALLBACK = (0.233, 0.191)
+MEMORY_LEVEL_TAB_MARKERS = ("指定等级", "重置", "最大")
 
 # ── 午后茶憩任务（2026-10-18 用户截图实测） ──
 # 流程：任务行「前往」→「是否前往茶憩?」确定 → 角色选择页点首个角色 →
@@ -291,10 +302,15 @@ EVENT_DIALOG_CLAIM_MARKERS = ("可领取",)   # 只在规则命中定巡之礼�
 EVENT_ANNOUNCE_MARKERS = ("点击空白区域关闭", "本期不再显示")
 EVENT_ANNOUNCE_BLANK = (0.10, 0.50)   # 11-04 帧实测：横幅左界 ≈ x0.18，左边缘是空白
 # 加载过场（10-31/11-01/11-03/11-04/11-06 五次「未匹配任何已知场景」失败全是它，
-# #120/#129/#153/#163/#197）：白荆拉丁 logo「ASHECHOES」五帧全部在场；提示文字
-# 每日轮换（刻印属性/漫巡中/真实伤害…）、进度 99%/%86 不稳，都不能当特征。
-# 只等待不点击——加载中点哪都无效，等特征消失把真页面交回下一轮识别。
-LOADING_SCREEN_MARKERS = ("ASHECHOES",)
+# #120/#129/#153/#163/#197）：提示文字每日轮换（刻印属性/漫巡中/真实伤害…）、
+# 进度 99%/%86 不稳，都不能当特征。只等待不点击——加载中点哪都无效。
+# 2026-11-10 10:00:32 实锤：只用拉丁 logo「ASHECHOES」当特征当天 **0 次命中**。
+# 生产 onnxocr v6 把中央 logo 认成「白荆廊」(0.85)/「白荆回廊」(0.71)/「白荆回廓」，
+# 拉丁小字整帧被读成「24919904」，同帧只有 47%→98% 和轮换提示。故把中文 logo
+# 的三种实测 OCR 变体全部登记，拉丁词保留给能认出来的帧。**别用泛化短词「白荆」**：
+# 固定页面上若常驻这俩字，加载规则会一直命中，_scene_exit_loading 白等满 60s；
+# panel/main 在 _match_scene_rule 之前先短路，但仍只挑加载页独占的中央大字。
+LOADING_SCREEN_MARKERS = ("ASHECHOES", "ASH ECHOES", "白荆廊", "白荆回廊", "白荆回廓")
 LOADING_WAIT_TIMEOUT_SEC = 60.0
 # 茶憩 3D 房间：任务流程用「茶憩纪念函」当进场特征，但 10-27 10:22 的当帧
 # OCR 只认出房间常驻陈设（飞镖/棒球），纪念函没进识别结果——登记表用并集兜底，
@@ -420,6 +436,17 @@ CLUB_CARD_FALLBACK = (0.573, 0.381)
 CLUB_BLANK_CLICK = (0.50, 0.13)
 CLUB_BACK_REGION = (0.0, 0.0, 0.20, 0.10)
 CLUB_SNAPSHOT_PREFIX = "club_daily"
+
+# ── 俱乐部活动「回声猎区」分支入口（2026-11-11 用户截图实测，活动重置剩余 12 天） ──
+# 俱乐部页右侧「俱乐部活动」卡片整张可点：卡片边界 frac x 0.484~0.967 / y 0.264~0.497，
+# 「回声猎区」大字标题中心 ≈ (0.819, 0.370)。分支只做"检测入口 → 点进活动页 →
+# 快照取证 → 立即退出"，活动内容（刷本/领奖）未实现，等实机探明活动页布局再补。
+CLUB_ACTIVITY_ECHO_TEXTS = ("回声猎区",)
+# 检测区域限定在活动卡片内（顶部避开「今日俱乐部奖励已领取」横幅 y≈0.215~0.245）；
+# 单词检测但带区域限定（页面判定铁律允许模式：标题+区域限定），且 OCR 未命中
+# **不做比例盲点**——活动结束后卡片可能消失/换内容，瞎点会点进未知页面。
+CLUB_ACTIVITY_DETECT_REGION = (0.50, 0.26, 1.0, 0.52)
+CLUB_ACTIVITY_SNAPSHOT_PREFIX = "club_activity_echo"
 
 # ── 友情勋章（2026-10-20 用户实测截图） ──
 # 主界面左上角功能图标行：设置(0.052) / 邮件(0.095) / 好友(0.138) / 俱乐部(0.183)。
@@ -1529,6 +1556,42 @@ def _find_plus_button(
     return (cx, cy)
 
 
+def _ensure_memory_level_tab(
+    logger: logging.Logger, hwnd, stop_check=None
+) -> bool:
+    """确保强化弹窗停在「等级提升」页签；「重置 / +」只在这一页。
+
+    2026-11-11 10:15 取证帧（#271）：点「强化烙痕」后弹窗默认选中「特质提升」，
+    ``MEMORY_DIALOG_MARKERS`` 里的「等级提升」只是**另一个页签的标题**，旧流程
+    误以为强化窗已就绪，接着找「重置」→ 推算「+」→ 报「未找到 + 按钮」。
+    用户口径：切到「等级提升」页即可。切完必须复验该页独占内容，否则绝不盲点。
+    """
+    # 已在目标页（如弹窗记住了上次页签）：不点击，直接放行
+    if _ocr_best_match(logger, MEMORY_LEVEL_TAB_MARKERS, hwnd, min_conf=0.45):
+        return True
+    tab = _ocr_best_match(
+        logger, MEMORY_LEVEL_TAB_TEXT, hwnd,
+        frac_region=MEMORY_LEVEL_TAB_REGION, min_conf=0.5,
+    )
+    if tab:
+        _pyautogui_click_guarded(*tab["center"])
+        logger.info(f"[白荆回廊·日常] 强化弹窗切到「等级提升」页签 @ {tab['center']}")
+    else:
+        pos = _ratio_point(logger, hwnd, MEMORY_LEVEL_TAB_FALLBACK)
+        if not pos:
+            return False
+        _pyautogui_click_guarded(*pos)
+        logger.info(f"[白荆回廊·日常] 「等级提升」页签 OCR 未命中，比例兜底 @ {pos}")
+    # 切页后短轮询复验；看不到「指定等级/重置/最大」就不允许继续找「+」
+    for _ in range(3):
+        if _stopped(stop_check):
+            return False
+        if _ocr_best_match(logger, MEMORY_LEVEL_TAB_MARKERS, hwnd, min_conf=0.45):
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def _same_click_target(a, b, tol: int = 25) -> bool:
     """两个 OCR 命中是否在同一位置（用于判断上一次点击是否让界面发生了变化）。"""
     if not a or not b:
@@ -1837,12 +1900,31 @@ def _scene_exit_cat_retail(logger: logging.Logger, hwnd, results, stop_check=Non
     return _exit_via_top_left_back(logger, hwnd, results, "有猫零售")
 
 
+def _loading_screen_hit(logger, hwnd, results: List[Dict]) -> Optional[Dict]:
+    """加载过场 = 中央 logo + 进度百分比，两样都在才算。
+
+    只看 logo 会把任何含「白荆回廊」字样的固定页面误判成加载（`_pick_result`
+    的子串匹配），随后 `_scene_exit_loading` 白等满 60s。进度数字本身每帧不稳
+    （11-10 实测 47%→98%），但「这一帧有百分比」是加载页的稳定事实，正好当
+    第二道闸；其它规则仍走普通 markers 匹配，不受影响。
+    """
+    hit = _pick_result(logger, hwnd, results, LOADING_SCREEN_MARKERS, min_conf=0.5)
+    if not hit:
+        return None
+    has_percent = any(
+        re.search(r"\d{1,3}\s*%", str(r.get("text") or ""))
+        for r in (results or [])
+    )
+    return hit if has_percent else None
+
+
 # 登记表顺序 = 匹配优先级：遮罩类先清，再清会挡住返回按钮的摘要，最后才是界面本身。
 # 新增界面只要加一行（特征必须挑该界面独占文字，原因见 REST_ROOM_MARKERS 注释），
 # 并在 artifacts/test_baijing_scene_registry_20261026.py 补一条用例锁住顺序。
 SCENE_RULES = (
     # 加载过场排最前：加载中点哪都无效，先等它过去，别让真页面在 unknown 里被放弃
-    {"name": "加载过场", "markers": LOADING_SCREEN_MARKERS, "min_conf": 0.5, "exit": _scene_exit_loading},
+    {"name": "加载过场", "markers": LOADING_SCREEN_MARKERS, "min_conf": 0.5,
+     "detector": _loading_screen_hit, "exit": _scene_exit_loading},
     # 活动公告横幅在遮罩前：加载完它经常第一个弹出来挡路（11-04/11-06 两次实录）
     {"name": "活动公告", "markers": EVENT_ANNOUNCE_MARKERS, "min_conf": 0.55, "exit": _scene_exit_event_announce},
     {"name": "过场遮罩", "markers": ("点击屏幕继续",), "min_conf": 0.5, "exit": _scene_exit_overlay},
@@ -1862,6 +1944,13 @@ SCENE_RULES = (
 def _match_scene_rule(logger: logging.Logger, hwnd, results: List[Dict]):
     """按登记表顺序找第一个命中的场景，返回 (规则, 命中项)；都没有返回 (None, None)。"""
     for rule in SCENE_RULES:
+        detector = rule.get("detector")
+        if detector is not None:
+            # 组合判据（如加载页 = logo + 百分比）自己决定要不要命中
+            hit = detector(logger, hwnd, results)
+            if hit:
+                return rule, hit
+            continue
         hit = _pick_result(
             logger, hwnd, results, rule["markers"],
             min_conf=rule.get("min_conf", SCENE_OCR_MIN_CONF),
@@ -1888,6 +1977,21 @@ def _record_unknown_scene(logger: logging.Logger, hwnd, context: str, detail: st
     _record_step_failure(logger, hwnd, f"场景恢复:{key}", detail)
 
 
+def _scene_failure_detail(last_scene: str, last_unmatched_texts: str) -> str:
+    """恢复收尾的取证文案：不让上一轮的场景名冒充当帧结论。
+
+    抽成纯函数便于用真实当帧 OCR 文本回归（2026-11-10 10:00:32 事故）。
+    """
+    if last_unmatched_texts:
+        return (
+            f"最后识别到「{last_scene}」，收尾时画面已变成未登记界面；"
+            f"当帧文字: {last_unmatched_texts[:200]}"
+        )
+    if last_scene == "加载过场":
+        return f"加载过场等待 {LOADING_WAIT_TIMEOUT_SEC:.0f}s 后仍在加载，未强行点击"
+    return f"场景「{last_scene}」反复退出失败，仍无法回到任务面板/主界面"
+
+
 def recover_scene(
     logger: logging.Logger,
     hwnd,
@@ -1909,6 +2013,7 @@ def recover_scene(
     acted_any = False
     last_scene = ""
     unknown_streak = 0
+    last_unmatched_texts = ""
     cached = results
     for _ in range(max(1, int(rounds))):
         if _stopped(stop_check):
@@ -1923,14 +2028,18 @@ def recover_scene(
         rule, _hit = _match_scene_rule(logger, hwnd, current)
         if rule is None:
             unknown_streak += 1
+            last_unmatched_texts = "｜".join(
+                str(r.get("text") or "") for r in (current or [])[:12]
+            )
             if unknown_streak >= SCENE_UNKNOWN_ROUNDS:
-                texts = "｜".join(str(r.get("text") or "") for r in (current or [])[:12])
+                texts = last_unmatched_texts
                 _record_unknown_scene(
                     logger, hwnd, context or "未知场景",
                     f"未匹配任何已知场景，需要补登记；当帧文字: {texts[:200]}",
                 )
                 return ("unknown", acted_any)
             continue
+        last_unmatched_texts = ""
         last_scene = str(rule["name"])
         logger.info(f"[白荆回廊·日常] 识别到场景「{last_scene}」，执行专属退出")
         try:
@@ -1945,10 +2054,11 @@ def recover_scene(
                 break
         time.sleep(0.4)
     if last_scene:
-        _record_unknown_scene(
-            logger, hwnd, context or f"场景{last_scene}",
-            f"场景「{last_scene}」反复退出失败，仍无法回到任务面板/主界面",
-        )
+        # 轮次耗尽时画面常已不是 last_scene（2026-11-10 10:00:32：最后识别到
+        # 「休息室」，点确认后游戏切进加载过场，取证截图也是 98% 加载页），
+        # 拿旧场景名配当帧截图会报出「对着加载页说休息室反复退出失败」。
+        detail = _scene_failure_detail(last_scene, last_unmatched_texts)
+        _record_unknown_scene(logger, hwnd, context or f"场景{last_scene}", detail)
         return (f"scene:{last_scene}", acted_any)
     return ("unknown", acted_any)
 
@@ -2282,7 +2392,16 @@ def _handle_memory_exp_task(logger: logging.Logger, hwnd, stop_check=None) -> bo
                     return False
                 on_detail = False
                 continue
-        # 5) 正常强化：重置 → +1 → 确认
+        # 5) 正常强化：先确认停在「等级提升」页签 → 重置 → +1 → 确认
+        #    2026-11-11 10:15 实锤（#271）：弹窗默认停在「特质提升」页，那一页
+        #    只有「特质变动/消耗材料/当前选择」，没有「指定等级/重置/+」，
+        #    直接按重置偏移找「+」必然报「未找到 + 按钮」。
+        if not _ensure_memory_level_tab(logger, hwnd, stop_check=stop_check):
+            last_fail = "强化弹窗未切到「等级提升」页签（找不到 指定等级/重置/最大）"
+            logger.warning(f"[白荆回廊·日常] {last_fail}")
+            _record_step_failure(logger, hwnd, "记忆烙痕强化", last_fail)
+            _return_to_task_panel(logger, hwnd, stop_check=stop_check)
+            return False
         reset = _ocr_best_match(
             logger, ("重置",), hwnd, frac_region=MEMORY_RESET_REGION, min_conf=0.45
         )
@@ -3066,6 +3185,51 @@ def _leave_club_page(logger: logging.Logger, hwnd, stop_check=None) -> bool:
     return ok
 
 
+def _run_club_activity_echo_zone(logger: logging.Logger, hwnd, stop_check=None) -> Dict:
+    """俱乐部活动「回声猎区」分支入口（2026-11-11 活动开启，分支先行、内容未实现）。
+
+    在俱乐部页上检测右侧「俱乐部活动」卡片的「回声猎区」标题：命中 → 点击进
+    活动页 → 快照取证 → 立即退出回主界面；未命中（活动结束/换期）→ 不点击直接
+    跳过。活动页布局尚未实机探明，**刻意不做页面判定**（无已验证标记集，避免
+    违反页面判定铁律），进页证据靠快照 jpg；活动内容（刷本/领奖/退出链路）等
+    实机截图补齐后再写。
+
+    返回 {"status", "detail", "entered", "returned_main"}：status = skipped（未
+    检测到入口或流程未实现的占位）/ failed（点击后未能退回主界面，需人工恢复）。
+    失败只挂在本分支结果里，不影响每日任务领取的主状态。
+    """
+    result = {"status": "skipped", "detail": "", "entered": False, "returned_main": None}
+    if _stopped(stop_check):
+        result["detail"] = "用户停止"
+        return result
+    hit = _ocr_best_match(
+        logger, CLUB_ACTIVITY_ECHO_TEXTS, hwnd,
+        frac_region=CLUB_ACTIVITY_DETECT_REGION, min_conf=0.55,
+    )
+    if not hit:
+        result["detail"] = "俱乐部活动未见「回声猎区」入口（活动未开或已结束）"
+        logger.info(f"[白荆回廊·俱乐部] {result['detail']}")
+        return result
+    _pyautogui_click_guarded(*hit["center"])
+    logger.info(f"[白荆回廊·俱乐部] 点击「回声猎区」活动入口 @ {hit['center']}（流程未实现，进页取证后即退出）")
+    result["entered"] = True
+    time.sleep(2.5)  # 活动页加载（无已验证标记，只等一个固定窗口再取证）
+    _capture_daily_list_snapshot(logger, hwnd, prefix=CLUB_ACTIVITY_SNAPSHOT_PREFIX)
+    # 立即退出：活动页与俱乐部页共用左上「返回」，_leave_club_page 页无关
+    # （主界面检测 + 返回/ESC 循环），可直接复用；失败时后续步骤各自
+    # _ensure_main_ui 自保兜底（10-22 起的口径）。
+    back_ok = _leave_club_page(logger, hwnd, stop_check=stop_check)
+    result["returned_main"] = back_ok
+    if not back_ok:
+        result["status"] = "failed"
+        result["detail"] = "已点击回声猎区入口但未能退回主界面（活动页退出链路未实现，需人工恢复）"
+        logger.warning(f"[白荆回廊·俱乐部] {result['detail']}")
+    else:
+        result["detail"] = "已进活动页取证并退出（活动内容未实现，占位分支）"
+        logger.info(f"[白荆回廊·俱乐部] {result['detail']}")
+    return result
+
+
 def claim_club_daily_reward(logger: logging.Logger, hwnd, stop_check=None) -> Dict:
     """领俱乐部每日任务奖励（每日刷新，2026-10-18 用户截图实测）。
 
@@ -3101,6 +3265,10 @@ def claim_club_daily_reward(logger: logging.Logger, hwnd, stop_check=None) -> Di
         )
     else:
         result.update(status="failed", detail="点击「领取」后卡片未变为「今日任务已完成」")
+    # 俱乐部活动分支（回声猎区，2026-11-11）：仍在俱乐部页时顺手检测活动入口。
+    # 只挂 result["activity"]，不改动每日任务主状态——活动分支失败不连坐领奖。
+    if not _stopped(stop_check):
+        result["activity"] = _run_club_activity_echo_zone(logger, hwnd, stop_check=stop_check)
     back_ok = _leave_club_page(logger, hwnd, stop_check=stop_check)
     result["returned_main"] = back_ok
     logger.info(f"[白荆回廊·俱乐部] 结果 {result['status']}：{result['detail']}，回主界面={back_ok}")
@@ -3786,7 +3954,6 @@ def run_baijing_daily_vision_flow(
         _record_baijing_task(logger, "daily", "日常任务", "failed", "未找到游戏窗口")
         return False
 
-    pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0.1
     _focus_game_window(logger, hwnd)
     time.sleep(0.8)

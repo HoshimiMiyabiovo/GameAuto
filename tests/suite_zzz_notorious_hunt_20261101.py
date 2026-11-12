@@ -284,7 +284,10 @@ def case_weekly_gate():
         stop_current_task = False
         logger = LOG
 
+    # 2026-11-11 起调度层会先读 enabled（本项目周常已停用），这两条用例测的是
+    # 周标记/执行入口的行为，必须显式把流程配置打桩成启用，别依赖本机真实配置。
     with ExitStack() as stack:
+        stack.enter_context(patch.object(ffr, "_load_flow_config", lambda key: {"enabled": True}))
         stack.enter_context(patch.object(tbr, "is_weekly_flow_done", lambda key: True))
         stack.enter_context(
             patch.dict(tbr._WEEKLY_RUNNERS, {"ZZZ_NOTORIOUS_HUNT": lambda *a, **k: calls.append(1) or (True, "x")})
@@ -294,6 +297,7 @@ def case_weekly_gate():
     check("没有真的执行", calls == [], calls)
 
     with ExitStack() as stack:
+        stack.enter_context(patch.object(ffr, "_load_flow_config", lambda key: {"enabled": True}))
         stack.enter_context(patch.object(tbr, "is_weekly_flow_done", lambda key: False))
         stack.enter_context(patch.object(tbr, "_run_pending_weekly_flow", tbr._run_pending_weekly_flow))
         stack.enter_context(
