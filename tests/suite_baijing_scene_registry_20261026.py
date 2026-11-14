@@ -20,6 +20,10 @@
 8. 登记表顺序：任务面板特征优先，绝不"在面板上点返回"
 9. 三个恢复入口（回面板 / 回主界面 / 重开列表）都走登记表且不再 ESC 空转
 10. 静态：规则表内容 + 旧的一次性场景函数确已删除
+11. 2026-11-12 #279：轮次耗尽但每轮都在推进（收尾当帧已是另一登记场景/
+    主界面/面板）≠ 失败，不落假证据；同名场景卡死仍照旧落证据
+12. 2026-11-13 #282：好友页登记（detector ≥2 独有词 + OCR 截字变体
+    「键领取/赠送」），退出点左上「返回」零 ESC
 
 跑法：.venv\\Scripts\\python.exe artifacts\\test_baijing_scene_registry_20261026.py
 """
@@ -151,6 +155,11 @@ class Screen:
         elif self.state == "retail":
             # 2026-10-26 20:10 取证帧：有猫零售左侧栏目 + 左上返回
             data = {"有猫精选": (1286, 219), "精选礼包": (202, 234), "有猫推荐": (900, 60), "返回": BACK_XY}
+        elif self.state == "friend":
+            # 2026-11-13 10:18 #282 取证帧：好友页（友情勋章任务领完留在这里）。
+            # 注意 OCR 把「一键领取/赠送」的「一」截掉了，只剩「键领取/赠送」。
+            data = {"返回": BACK_XY, "好友列表": (233, 167), "列表内查找好友": (600, 120),
+                    "键领取/赠送": (1734, 55), "今日赠礼": (400, 300)}
         elif self.state == "panel":
             # 任务列表里也有「午后茶憩」任务行文字，绝不能被当成休息室特征
             data = {"累计活跃度": ACTIVITY_XY, "午后茶憩": TEA_ROW_XY}
@@ -209,6 +218,9 @@ class Screen:
             # 与休息室同一套离开交互：返回 → 确认框
             self.state = "confirm"
         elif self.state == "retail" and _near((x, y), BACK_XY):
+            self.state = "main"
+        elif self.state == "friend" and _near((x, y), BACK_XY):
+            # 好友入口在主界面左上图标行，返回即到家
             self.state = "main"
         elif self.state == "main" and _near((x, y), TASK_BTN_XY):
             self.state = "panel"
@@ -405,6 +417,45 @@ def test_loading_cn_and_failure_detail_20261110():
     check("真·同场景退不出去仍报原结论", "反复退出失败" in d3, d3)
 
 
+# ── 4.8 2026-11-12：轮次耗尽但每轮都在推进 ≠ 失败 ─────────────────
+def test_rounds_exhausted_not_failure_20261112():
+    print("[4.8] 11-12 #279 实锤：加载完成后轮次烧光，当帧已是定巡之礼，不落假失败")
+    # rounds=1 复刻生产时序：加载等待成功返回 True（实际 ~3s，远没到 60s），
+    # 预算烧光，收尾当帧恰是刚弹出的定巡之礼。旧代码在此落「仍在加载」假失败。
+    scr = Screen(state="loading", switch_after=3, next_state="event_claim")
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="轮次耗尽-弹窗", rounds=1))
+    check("返回 scene:加载过场 且 acted=True", state == "scene:加载过场" and acted is True, (state, acted))
+    check("不落失败证据（当帧已是登记表内场景）", scr.failures == [], scr.failures)
+    check("全程零点击（弹窗留给下一轮恢复处理）", scr.clicks == [], scr.clicks)
+
+    # 交回调用方后的下一轮恢复必须能收敛：领取「可领取」→ 点右上 X
+    state2, acted2 = scr.run(lambda: bd.recover_scene(LOG, 1, context="轮次耗尽-后续"))
+    check("下一轮恢复处理弹窗 → main", state2 == "main" and acted2 is True, (state2, acted2))
+    check("下一轮点击序列 = 先领取后关闭",
+          scr.clicks == [CLAIM_XY, EVENT_CLOSE_XY], scr.clicks)
+
+    # 同款假失败的另外两个收尾落点：当帧已漂回主界面 / 任务面板
+    scr = Screen(state="loading", switch_after=3, next_state="main")
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="轮次耗尽-主界面", rounds=1))
+    check("收尾当帧是主界面 → 返回 main 不落证据",
+          state == "main" and acted is True and scr.failures == [], (state, acted, scr.failures))
+    scr = Screen(state="loading", switch_after=3, next_state="panel")
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="轮次耗尽-面板", rounds=1))
+    check("收尾当帧是任务面板 → 返回 panel 不落证据",
+          state == "panel" and acted is True and scr.failures == [], (state, acted, scr.failures))
+
+    # 纯文案：加载完成后的耗尽不许再说「仍在加载」；超时（exit 返回 False）仍要说
+    d_done = bd._scene_failure_detail("加载过场", "", last_acted=True)
+    check("加载完成+轮次耗尽 ≠ 仍在加载", "仍在加载" not in d_done, d_done)
+    d_stuck = bd._scene_failure_detail("加载过场", "", last_acted=False)
+    check("真超时仍报仍在加载", "仍在加载" in d_stuck, d_stuck)
+
+    # 反向：仍卡在同一场景（同名规则再命中）必须照旧落「反复退出失败」证据
+    scr = Screen(state="lounge", leave_works=False)
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="轮次耗尽-卡死", rounds=1))
+    check("同名场景卡死仍落证据", any("反复退出失败" in d for _, d in scr.failures), scr.failures)
+
+
 # ── 4.6 2026-11-07：加载过场 + 定巡之礼先领后关 ───────────────────
 def test_loading_and_claim_20261107():
     print("[4.6] 加载过场只等待 / 定巡之礼先领「可领取」再点 X")
@@ -517,12 +568,39 @@ def test_stuck_scene_evidence():
     check("没有 ESC 空转", scr.esc == 0, scr.esc)
 
 
+# ── 4.9 2026-11-13：好友页登记（#282 取证驱动） ───────────────────
+def test_friend_page_20261113():
+    print("[4.9] 好友页：detector ≥2 独有词，退出点左上「返回」")
+    scr = Screen(state="friend")
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="t-friend"))
+    check("friend → 状态 main", state == "main", state)
+    check("friend 点了左上返回", BACK_XY in scr.clicks, scr.clicks)
+    check("friend 零 ESC", scr.esc == 0, scr.esc)
+
+    # 单一「好友列表」不许命中（别的页面可能同名词，铁律 ≥2 证据）
+    only_list = [{"text": "好友列表", "confidence": 0.9, "center": (233, 167)}]
+    rule, _ = bd._match_scene_rule(LOG, 1, only_list)
+    check("只有「好友列表」不判好友页",
+          rule is None or rule["name"] != "好友页", rule["name"] if rule else None)
+    # OCR 截字变体也要能凑满双证据：好友列表 + 键领取/赠送
+    real_frame = [{"text": "好友列表", "confidence": 0.9, "center": (233, 167)},
+                  {"text": "键领取/赠送", "confidence": 0.95, "center": (1734, 55)},
+                  {"text": "今日赠礼", "confidence": 0.9, "center": (400, 300)}]
+    rule2, _ = bd._match_scene_rule(LOG, 1, real_frame)
+    check("真实取证帧（含截字变体）判好友页",
+          rule2 is not None and rule2["name"] == "好友页",
+          rule2["name"] if rule2 else None)
+    check("好友页登记在规则表末尾", bd.SCENE_RULES[-1]["name"] == "好友页",
+          [r["name"] for r in bd.SCENE_RULES])
+
+
 # ── 8. 登记表顺序 ─────────────────────────────────────────────────
 def test_rule_order():
     print("[8] 登记表顺序：面板特征优先，绝不在任务面板上点「返回」")
     check("规则顺序", [r["name"] for r in bd.SCENE_RULES] == ["加载过场", "活动公告", "过场遮罩", "计划等级提升",
                                                               "定巡之礼", "茶憩摘要", "关注特写", "休息室",
-                                                              "烙痕详情", "烙痕列表", "茶憩房间", "有猫零售"],
+                                                              "烙痕详情", "烙痕列表", "茶憩房间", "有猫零售",
+                                                              "好友页"],
           [r["name"] for r in bd.SCENE_RULES])
     check("休息室特征不含「午后茶憩」（任务行也有这四个字）",
           "午后茶憩" not in bd.REST_ROOM_MARKERS, bd.REST_ROOM_MARKERS)
@@ -594,6 +672,8 @@ def main():
     test_new_scenes_20261027()
     test_loading_and_claim_20261107()
     test_loading_cn_and_failure_detail_20261110()
+    test_rounds_exhausted_not_failure_20261112()
+    test_friend_page_20261113()
     test_event_announce_20261107()
     test_single_ocr_per_round()
     test_unknown_scene_evidence()

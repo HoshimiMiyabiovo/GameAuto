@@ -462,6 +462,30 @@
 - 回归：`tests/suite_hsr_monthly_handoff_20261104.py`（开关/两份配置/
   禁用安静跳过/未禁用仍触发，4 组 ALL PASS）。
 
+### 版本周期流程门控 `version_cycle:<KEY>`（2026-11-12，第三种刷新节奏）
+
+- **为什么三种门控并存**：monthly_flow（自然月 `YYYY-MM`）会漏掉"一个月两个版本
+  更新"的采购（42 天节奏一年约 8.7 个版本窗口 vs 12 个自然月，必然错位）；weekly_flow
+  （ISO 周）则一天到晚重跑。崩铁「戏言成真」随**版本**重置可兑换次数，只能按版本号
+  门控——这是全库第一个版本周期流程，机制在 `background_template_runner`
+  （`version_cycle_meta_key` / `version_cycle_due` / `_run_version_cycle_flow`），
+  调度接线镜像附加月流程（`task_batch_runner._EXTRA_VERSION_CYCLE_FLOWS` /
+  `_run_pending_version_cycle_flow` / `_run_extra_version_cycle_flows` /
+  `_sweep_pending_version_cycle_flows`，两条日常出口 + 收尾补漏 + `_VERSION_CYCLE_CHECKED`
+  批次清场，全同 `_EXTRA_MONTHLY_*` 口径）。
+- **门控判定顺序**（`version_cycle_due` 纯函数）：① 更新日历有版本号（`get_update_info("hsr")`，
+  模块缓存 6h）：版本号 ≠ 已存 → 到期，相同 → 跳过；② 日历不可用 → 距上次成功
+  **≥42 天 CD 兜底**（用户口径，防日历长期不可用时永不采购）；③ 无任何记录 → 到期。
+  meta 值 `"<版本号>|<YYYY-MM-DD>"`，**成功才写**，失败下批自动重试。
+- **两层顺延**：公告已出未开服 → `_version_shop_open` 用 `open_at+5min` 判（更新日历
+  同款 buffer）；关服维护窗口 → 调度层 `get_maintenance_state` 顺延（同月商店）。
+  naive/aware 混比（注入时钟的测试路径）统一去 tz 按挂钟比，**不许"保守放行"**——
+  那会把"未开服顺延"整个吞掉（套件实锤）。
+- 与「崩铁每月事项交接给三月七」不冲突：三月七管的是余烬兑换+自塑尘脂合成（月度），
+  戏言成真是三月七不覆盖的新页签，本项目自研。回归
+  `tests/suite_hsr_version_shop_20261112.py`（门控四态/CD 兜底/meta 容错/未开服顺延/
+  enabled 短路/维护顺延/双份配置/接线静态，全打桩不真跑商店）。
+
 ### 异环「获得物品」浮层：不点不散，会伪造「本月已买完」 (2026-11-05)
 
 - **事故**：20:23 迷迭兑换采购前截图 OCR 是「本月库存 5/5」「20/20」（本月根本

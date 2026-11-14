@@ -8,10 +8,11 @@
 未保存编辑存到页面级 fieldDrafts，滚回来能恢复。
 
 本套件锁定：
-1. QML 离屏可加载、7 张卡都在 ListView 里；
-2. 结构不再退回 Flickable + Repeater 全量构建；
-3. fieldDrafts 的写入/读取/清理行为；
-4. 关键性能参数（cacheBuffer / reuseItems: false）仍在。
+1. QML 离屏可加载、卡片容器是 ListView（findChild 按 objectName 找，本身就是
+   结构锁——不再 grep 源码；Flickable+Repeater 退回会让 findChild 失败）；
+2. 只渲染当前游戏、fieldDrafts 的写入/读取/清理行为。
+（2026-11-13 删原 [1] 源码 grep 段：reuseItems/cacheBuffer/fieldDrafts 等
+性能参数与 objectName 的文本锁对重构零容忍，行为上 [2] 已全覆盖。）
 
 跑法：.venv\\Scripts\\python.exe tests\\suite_stamina_view_perf_20261031.py
 """
@@ -130,7 +131,6 @@ Window {
 
 
 def main():
-    test_source()
     test_qml_load()
     print("-" * 60)
     if FAILURES:

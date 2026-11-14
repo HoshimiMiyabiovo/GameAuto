@@ -22,7 +22,6 @@
 跑法：.venv\\Scripts\\python.exe -m pytest tests/suite_nte_dayvalue_20261024.py -q
 """
 
-import inspect
 import logging
 import sys
 from unittest.mock import patch
@@ -187,25 +186,11 @@ def test_recheck():
     check("当天无日志 → None", r is None, r)
 
 
-def test_nikki_removal():
-    print("[5] 暖暖 Pearpal 假进度删除")
-    src = inspect.getsource(dc)
-    check("check_nikki_daily 已删除", "def check_nikki_daily" not in src)
-    check("NIKKI_EXPECTED_TASKS 已删除", "NIKKI_EXPECTED_TASKS" not in src)
-    check("_record_nikki_to_tracker 已删除", "_record_nikki_to_tracker" not in src)
-    check("pearpal_notebook 落库已删除", 'source="pearpal_notebook"' not in src)
-    check("Pearpal notebook 导入已删除", "fetch_pearpal_notebook_payload" not in src)
-    check("whimbox 落库仍在", "_record_whimbox_script_tasks" in src)
-    check("check_games_progress 走 whimbox 落库",
-          "whimbox 脚本任务落库跳过" in inspect.getsource(dc.check_games_progress))
-
-
 def main():
     test_fetch_role_home()
     test_check_tajiduo_daily()
     test_completion_state()
     test_recheck()
-    test_nikki_removal()
     print("-" * 60)
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} -> {FAILURES}")

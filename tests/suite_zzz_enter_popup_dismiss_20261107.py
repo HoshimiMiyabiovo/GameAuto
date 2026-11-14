@@ -13,7 +13,8 @@ OneDragon enter_game（issue #893/#1996）同场景的做法：识别循环里 O
   [3] run_flow 状态机：等待主界面途中点掉弹窗继续等 / 弹窗点不掉按时限失败
   [4] run_flow 状态机：接管已开游戏（弹窗在场）→ 步骤1 点掉弹窗后 optional 跳过
   [5] 两份 flow_configs：三条 ZZZ 流程接线 + NOTORIOUS 补 start_from_main
-  [6] runner 静态接线
+  （原 [6] runner 静态接线已删：锁 .get()/分支写法的断言对重构零容忍，
+  dismiss 链路行为由 [1]-[4] 覆盖）
 
 跑法：.venv\\Scripts\\python.exe tests\\suite_zzz_enter_popup_dismiss_20261107.py
 """
@@ -302,23 +303,12 @@ def test_flow_configs():
     check("电台模板存在", tpl.is_file(), tpl)
 
 
-def test_runner_wiring():
-    print("[6] runner 静态接线")
-    src = Path(ff.__file__).read_text(encoding="utf-8")
-    check("步骤读取 dismiss_texts", 'step.get("dismiss_texts")' in src)
-    check("定位函数透传 dismiss_texts", "dismiss_texts=step_dismiss_texts or None" in src)
-    check("ocr_dismiss 分支点击弹窗并复位", "match_method == \"ocr_dismiss\"" in src)
-    check("弹窗词走带标签 OCR", "_ocr_locate_labeled_in_window(" in src)
-    check("旧 _ocr_locate_in_window 保留", "def _ocr_locate_in_window(" in src)
-
-
 def main():
     test_locate_fallback_dismiss()
     test_labeled_ocr()
     test_wait_step_dismisses_popup()
     test_click_step_dismiss_then_optional_skip()
     test_flow_configs()
-    test_runner_wiring()
     print("-" * 60)
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} -> {FAILURES}")

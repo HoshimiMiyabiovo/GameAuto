@@ -64,6 +64,13 @@
   `tests/suite_xxx_日期.py`）。一键执行：
   `.venv\Scripts\python.exe -m pytest tests -q`（`tests/test_suites.py` 逐个子进程跑，
   隔离各套件的 monkeypatch；新增套件按 `suite_*.py` 命名即自动纳入）。
+- **测试禁锁实现写法**（2026-11-13 起）：套件里禁止「读源码文本断言某段代码存在」
+  的写法锁——注释、日志文案、类型注解、精确调用格式（含参数排版）、「旧代码已
+  删除」墓碑都不许锁；改一处措辞就红、重构必误报，且基本都有行为等价物。允许的
+  例外只有**接线锚点**：巨型入口函数无法在测试里真调用时，允许用
+  `inspect.getsource(具体函数)` 或源码子串检查**稳定标识符**（函数名/内建动作名/
+  配置键），优先 `hasattr`；函数存在性一律 `hasattr` 不做源码子串。QML 结构用
+  离屏实例化 + `findChild` 验证，不 grep `.qml` 文本。
 - **artifacts/ 留什么**：截图证据 + 依赖本机日志/游戏配置/真实屏幕的真机脚本
   （如 wool_claim_logs、wool_flow_fixes、stamina_configs、genshin/starrail_launcher 的
   app_config 断言）。纯逻辑测试不要再往 artifacts 放。

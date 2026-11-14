@@ -1,5 +1,6 @@
 import logging
 import time
+from datetime import date, datetime
 from typing import Callable, List, Optional, Tuple
 
 from .foreground_flow_runner import run_flow
@@ -226,4 +227,157 @@ def run_zzz_logistics_monthly_background(logger: logging.Logger) -> Tuple[bool, 
 
 def run_nte_monthly_background(logger: logging.Logger) -> Tuple[bool, str]:
     return _run_monthly_flow(logger, "NTE_MONTHLY", "异环每月")
+
+
+# ── 版本周期流程（崩铁 42 天/版本更新对齐，2026-11-12）────────────────
+# 与 monthly_flow（自然月）/weekly_flow（ISO 周）并列的第三种刷新节奏：
+# 崩铁版本 42 天一更，常驻商店「戏言成真」页签随版本重置可兑换次数——自然月
+# 门控会漏掉"一个月两个版本更新"的场景，ISO 周门控则一天到晚重跑，都不对口径。
+# 门控键 `version_cycle:<KEY>` = "<版本号>|<YYYY-MM-DD>"（成功才写）。
+
+VERSION_CYCLE_CD_DAYS = 42   # 用户口径：每 42 天更新、注意 CD（日历不可用时的兜底）
+
+
+def version_cycle_meta_key(flow_key: str) -> str:
+    """版本周期流程的门控键（workflow.sqlite3 的 task_meta）。"""
+    return f"version_cycle:{flow_key}"
+
+
+def _parse_version_cycle_meta(stored: Optional[str]) -> Tuple[str, Optional[date]]:
+    """meta 值 "<版本号>|<YYYY-MM-DD>" → (版本号, 成功日期)。
+
+    容错：无 | 的旧值整串当版本号；日期解析失败给 None（门控按"无成功记录"走
+    首跑/CD 逻辑，宁可多跑一次也不静默跳过）。
+    """
+    from datetime import date as _date
+
+    if not stored:
+        return "", None
+    if "|" not in stored:
+        return stored.strip(), None
+    ver, _, day = stored.partition("|")
+    try:
+        return ver.strip(), _date.fromisoformat(day.strip())
+    except ValueError:
+        return ver.strip(), None
+
+
+def version_cycle_due(
+    stored: Optional[str],
+    update_info: Optional[dict],
+    today=None,
+) -> Tuple[bool, str]:
+    """版本周期门控判定（纯函数，便于测试）。
+
+    - 日历有版本号：与已存版本不同 → 到期（含首跑无记录）；相同 → 未到期。
+    - 日历不可用（update_info 为 None / 无 version 字段）：距上次成功
+      ≥ VERSION_CYCLE_CD_DAYS 天兜底到期；无成功记录 → 到期。
+    开服校验不在这里——公告已出未开服要顺延，由 runner 层用 open_at 判。
+    """
+    from datetime import date as _date
+
+    today = today or _date.today()
+    stored_ver, stored_day = _parse_version_cycle_meta(stored)
+    cur_ver = str((update_info or {}).get("version") or "").strip()
+    if cur_ver:
+        if stored_ver and stored_ver == cur_ver:
+            return False, f"当前版本 {cur_ver} 已购"
+        return True, f"新版本 {cur_ver}（已购 {stored_ver or '无'}）"
+    if stored_day is None:
+        return True, "无购买记录，到期"
+    days = (today - stored_day).days
+    if days >= VERSION_CYCLE_CD_DAYS:
+        return True, f"日历不可用，距上次成功 {days} 天 ≥ {VERSION_CYCLE_CD_DAYS} 天 CD"
+    return False, f"日历不可用，距上次成功 {days} 天（CD {VERSION_CYCLE_CD_DAYS} 天未满）"
+
+
+def _fetch_hsr_update_info() -> Optional[dict]:
+    """更新日历取崩铁当前版本公告（模块缓存 6h）；不可用返回 None 走 CD 兜底。"""
+    try:
+        from ..services.game_update_calendar import get_update_info
+
+        return get_update_info("hsr")
+    except Exception as exc:  # noqa: BLE001 - 日历不可用不影响门控兜底
+        LOGGER.warning("[版本商店] 读取更新日历失败: %s", exc)
+        return None
+
+
+def _version_shop_open(info: dict, now: Optional[datetime] = None) -> bool:
+    """新版本公告已出但未开服 → False（顺延，别抢在关服时启动客户端）。
+
+    open_at + 5min 的口径与更新日历 buffer 一致；解析失败宁可放行（由流程
+    内部的失败取证兜底）。
+    """
+    from datetime import datetime as _dt, timedelta as _td
+
+    open_at = str((info or {}).get("open_at") or "").strip()
+    if not open_at:
+        return True
+    try:
+        open_dt = _dt.fromisoformat(open_at)
+    except ValueError:
+        return True
+    if now is not None:
+        now_dt = now
+    elif open_dt.tzinfo is not None:
+        now_dt = _dt.now(open_dt.tzinfo)
+    else:
+        now_dt = _dt.now()
+    try:
+        if (open_dt.tzinfo is None) != (now_dt.tzinfo is None):
+            # naive/aware 混比只发生在注入时钟的测试/工具路径：统一去 tz 按挂钟比较，
+            # 不能"保守放行"——那会把"未开服顺延"整个语义吞掉（套件实锤）。
+            return now_dt.replace(tzinfo=None) >= open_dt.replace(tzinfo=None) + _td(minutes=5)
+        return now_dt >= open_dt + _td(minutes=5)
+    except (TypeError, ValueError):  # noqa: BLE001 - 仍比不了的极端情况才放行
+        return True
+
+
+def _run_version_cycle_flow(
+    logger: logging.Logger,
+    flow_key: str,
+    label: str,
+    *,
+    update_info: Optional[dict] = None,
+    now: Optional[datetime] = None,
+) -> Tuple[bool, str]:
+    """版本周期流程通用门控 + 执行：到期才 run_flow，成功才写标记。
+
+    `update_info`/`now` 可注入（测试用）；不注入走真实日历与时钟。
+    """
+    from datetime import date as _date, datetime as _dt
+
+    from ..storage.workflow_db import WorkflowDB
+    from ..settings.paths import WORKFLOW_DB_PATH
+
+    db = WorkflowDB(str(WORKFLOW_DB_PATH))
+    meta_key = version_cycle_meta_key(flow_key)
+    stored = db.get_task_meta(meta_key)
+    info = update_info if update_info is not None else _fetch_hsr_update_info()
+    now_dt = now or _dt.now()
+    today = now_dt.date() if isinstance(now_dt, _dt) else now_dt
+    due, reason = version_cycle_due(stored, info, today=today)
+    if not due:
+        logger.info("[%s] %s，跳过", label, reason)
+        return True, reason
+    if not _version_shop_open(info or {}, now=now_dt if isinstance(now_dt, _dt) else None):
+        logger.info("[%s] 新版本未开服，顺延（open_at=%s）", label, (info or {}).get("open_at"))
+        return True, "新版本未开服，顺延"
+    ok, msg = run_flow(logger, flow_key)
+    if ok:
+        ver = str((info or {}).get("version") or "")
+        db.set_task_meta(meta_key, f"{ver}|{today.isoformat()}")
+        logger.info("[%s] ✅ %s（已记录版本 %s|%s）", label, msg, ver or "?", today.isoformat())
+        return True, f"✅ {msg}"
+    logger.warning("[%s] ❌ %s（下次运行重试）", label, msg)
+    return False, f"❌ {msg}（下次运行重试）"
+
+
+def run_hsr_version_shop_background(logger: logging.Logger) -> Tuple[bool, str]:
+    """崩铁戏言成真版本商店（金品质三件，随版本重置）。
+
+    门控：更新日历版本号变化 → 跑（开服后才跑）；同版本 → 跳过；
+    日历不可用 → 42 天 CD 兜底。清单与导航在 flow_configs 的 HSR_VERSION_SHOP。
+    """
+    return _run_version_cycle_flow(logger, "HSR_VERSION_SHOP", "崩铁戏言成真商店")
 

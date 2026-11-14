@@ -120,6 +120,16 @@
 - **无限暖暖复核以朝夕心愿为关键判定**（`KEY_STATUS_TASKS["nikki"]`，用户拍板
   2026-10-06）：whimbox 解析器恒定输出 8 项任务，朝夕心愿 success 即整体完成、
   failed 才改判；美鸭梨挖掘/星海拾光等边角任务失败不触发整轮重试。
+  **第三态补漏（2026-11-13）**：脚本被游戏更新弹窗打断时 whimbox 没有汇总块，
+  parser 给的是 `pending`（朝夕心愿 100/500 + 7 项 pending）。
+  `completion_state()` 在 `KEY_STATUS_TASKS` 分支只裁决 success/failed，pending 会
+  `break` 掉到计数口径返回 `"pending"`；而 `_verify_script_log_result` 只在
+  `== "failed"` 时改判，于是「核心任务根本没做完」被静默判成功、不进统一重试。
+  现于复核层对 `game_key=="nikki"` 单加一段：关键任务存在且状态不是
+  success/already/skipped → 一律改判失败（文案带 X/Y 与状态）。**只限暖暖**：
+  异环/绝区零的 KEY_STATUS 任务是领取类，pending 时重跑会撞「已领取不可重入」
+  （2026-10-03 事故），继续走原 `completion_state` 口径。回归
+  `tests/suite_nikki_verify_pending_20261113.py`。
 - **原神判定以 BetterGI 日志为准，双向覆盖**（`_apply_bettergi_verdict`，
   用户拍板 2026-10-24）：监控跟踪「委托奖励 + 探索派遣」两项标记
   （`bettergi_log_monitor._process_line`）。未确认全部完成 → 失败（只降不升）；

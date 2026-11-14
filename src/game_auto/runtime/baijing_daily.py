@@ -41,6 +41,7 @@ extra.earned，目录核算值留在 extra.activity_catalog。日常 tab 处理�
 """
 
 import ctypes
+import json
 import logging
 import os
 import re
@@ -447,6 +448,37 @@ CLUB_ACTIVITY_ECHO_TEXTS = ("回声猎区",)
 # **不做比例盲点**——活动结束后卡片可能消失/换内容，瞎点会点进未知页面。
 CLUB_ACTIVITY_DETECT_REGION = (0.50, 0.26, 1.0, 0.52)
 CLUB_ACTIVITY_SNAPSHOT_PREFIX = "club_activity_echo"
+
+# ── 回声猎区内容（2026-11-13 用户实机截图实测：A~E 顺序解锁，boss 暂不打） ──
+# 用户拍板口径：「先打 abcde 按顺序打，点进去是编队选择页面，可以复用拟合回归」。
+# 链路：地图点节点标签 → 右侧详情面板「开始收录」→ 编队页（拟合回归同款：
+# 作战开始 → [布阵页] → 开始战斗 → 挂机 → 结算）→ 回地图 → 下一个节点。
+ECHO_MAP_TITLE = ("回声猎区",)
+# 地图页判定 = 标题 + ≥1 地图独有词（双证据，铁律禁单标题——俱乐部页入口卡片
+# 也有「回声猎区」四个字；证据 = 2026-11-13 用户地图页截图）。
+ECHO_MAP_BODY = ("纯净回声", "重置时间剩余", "猎区累计分贝奖励")
+# 节点标签「纯净回声·X」定位：优先信 OCR 文本里的字母；字母认不全时按 x 从左
+# 到右对应 A~E（两张截图 x 序严格递增）。**禁固定比例兜底**——选中节点后地图
+# 会平移（A 标签 11-13 两张截图分别在 x≈0.107 / x≈0.046），比例必漂。
+ECHO_NODE_LABEL = "纯净回声"
+ECHO_NODE_LETTERS = ("A", "B", "C", "D", "E")
+# 节点标签搜索区：地图中下部，右界 0.66 避开右侧详情面板（面板左缘 ≈0.68，
+# 面板标题也叫「纯净回声·X」，不避开会把面板标题混进节点序）。
+ECHO_NODE_REGION = (0.0, 0.35, 0.66, 0.95)
+# 详情面板「开始收录」按钮：OCR 优先，比例兜底 = 11-13 截图按钮中心 (1620,985)；
+# 搜索区 y≥0.55 避开面板上部「关卡详情/推荐刻印评价」。
+ECHO_CLAIM_TEXTS = ("开始收录",)
+ECHO_CLAIM_FALLBACK = (0.844, 0.912)
+ECHO_CLAIM_REGION = (0.60, 0.55, 1.0, 1.0)
+# 「重置时间剩余N天」→ 已清标记过期日；读不到按 3 天保守失效（宁可重打不可漏打）
+ECHO_RESET_RE = re.compile(r"重置时间剩余\s*(\d+)\s*天")
+ECHO_RESET_FALLBACK_DAYS = 3
+ECHO_META_KEY = "baijing_echo_zone:cleared"   # meta 存 JSON {"period_end","cleared"}
+# 等待/超时（秒）
+ECHO_WAIT_MAP = 25.0         # 俱乐部页 → 猎区地图（有过场加载）
+ECHO_WAIT_PANEL = 6.0        # 点节点标签 → 详情面板出现（锁定节点无面板）
+ECHO_HEARTBEAT_SEC = 20.0    # 战斗挂机心跳
+ECHO_BATTLE_TIMEOUT = 480.0  # 单节点战斗上限（拟合 25 波 420s，boss 级留余量）
 
 # ── 友情勋章（2026-10-20 用户实测截图） ──
 # 主界面左上角功能图标行：设置(0.052) / 邮件(0.095) / 好友(0.138) / 俱乐部(0.183)。
@@ -1900,6 +1932,26 @@ def _scene_exit_cat_retail(logger: logging.Logger, hwnd, results, stop_check=Non
     return _exit_via_top_left_back(logger, hwnd, results, "有猫零售")
 
 
+# 好友页：2026-11-13 10:18 取证（#282，友情勋章任务领完留在好友页，恢复认不出
+# 白等 90s）。OCR 实测「一键领取/赠送」的「一」常被截成「键领取/赠送」，两个
+# 变体都登记；判定走 detector ≥2 独有词（铁律），「好友列表」单词太泛不上表。
+FRIEND_SCENE_MARKERS = ("好友列表", "列表内查找好友", "今日赠礼", "键领取/赠送", "一键领取/赠送")
+
+
+def _friend_page_hit(logger: logging.Logger, hwnd, results: List[Dict]) -> Optional[Dict]:
+    """好友页 = 独有词 ≥2（「好友列表」单独出现不算——别的页面可能同名词）。"""
+    texts = [str(r.get("text") or "") for r in (results or [])]
+    hits = [m for m in FRIEND_SCENE_MARKERS if any(m in t for t in texts)]
+    if len(hits) < 2:
+        return None
+    return {"text": "好友页:" + "+".join(hits), "confidence": 1.0, "center": (0, 0)}
+
+
+def _scene_exit_friend(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
+    """好友页：点左上「返回」回主界面（好友入口在主界面左上图标行）。"""
+    return _exit_via_top_left_back(logger, hwnd, results, "好友页")
+
+
 def _loading_screen_hit(logger, hwnd, results: List[Dict]) -> Optional[Dict]:
     """加载过场 = 中央 logo + 进度百分比，两样都在才算。
 
@@ -1938,6 +1990,9 @@ SCENE_RULES = (
     {"name": "烙痕列表", "markers": MEMORY_LIST_MARKERS, "min_conf": 0.55, "exit": _scene_exit_memory_list},
     {"name": "茶憩房间", "markers": TEA_ROOM_REGISTRY_MARKERS, "min_conf": 0.55, "exit": _scene_exit_tea_room},
     {"name": "有猫零售", "markers": CAT_RETAIL_MARKERS, "min_conf": 0.55, "exit": _scene_exit_cat_retail},
+    # 好友页排最后：独有词多页少见，detector ≥2 闸在（2026-11-13 #282 取证驱动）
+    {"name": "好友页", "markers": FRIEND_SCENE_MARKERS, "min_conf": 0.55,
+     "detector": _friend_page_hit, "exit": _scene_exit_friend},
 )
 
 
@@ -1977,17 +2032,22 @@ def _record_unknown_scene(logger: logging.Logger, hwnd, context: str, detail: st
     _record_step_failure(logger, hwnd, f"场景恢复:{key}", detail)
 
 
-def _scene_failure_detail(last_scene: str, last_unmatched_texts: str) -> str:
+def _scene_failure_detail(
+    last_scene: str, last_unmatched_texts: str, last_acted: bool = False
+) -> str:
     """恢复收尾的取证文案：不让上一轮的场景名冒充当帧结论。
 
     抽成纯函数便于用真实当帧 OCR 文本回归（2026-11-10 10:00:32 事故）。
+    `last_acted` 区分「加载过场」的两种结局：等待超时返回 False（文案说
+    仍在加载）和加载完成后轮次恰好耗尽——后者不该说成 60s 超时
+    （2026-11-12 10:14 #279 实锤：实际 3s 就加载完了）。
     """
     if last_unmatched_texts:
         return (
             f"最后识别到「{last_scene}」，收尾时画面已变成未登记界面；"
             f"当帧文字: {last_unmatched_texts[:200]}"
         )
-    if last_scene == "加载过场":
+    if last_scene == "加载过场" and not last_acted:
         return f"加载过场等待 {LOADING_WAIT_TIMEOUT_SEC:.0f}s 后仍在加载，未强行点击"
     return f"场景「{last_scene}」反复退出失败，仍无法回到任务面板/主界面"
 
@@ -2012,6 +2072,7 @@ def recover_scene(
     """
     acted_any = False
     last_scene = ""
+    last_acted = False
     unknown_streak = 0
     last_unmatched_texts = ""
     cached = results
@@ -2048,16 +2109,37 @@ def recover_scene(
             logger.warning(f"[白荆回廊·日常] 场景「{last_scene}」退出流程异常: {exc}")
             acted = False
         acted_any = acted_any or acted
+        last_acted = acted
         if not acted:
             unknown_streak += 1
             if unknown_streak >= SCENE_UNKNOWN_ROUNDS:
                 break
         time.sleep(0.4)
     if last_scene:
+        # 轮次耗尽 ≠ 失败：收尾当帧若已漂到面板/主界面/另一张登记表内场景，
+        # 说明每轮退出都在推进、只是预算烧完，落失败证据只会制造假案
+        # （2026-11-12 10:14 #279 实锤：茶憩房间→关注特写→休息室→加载过场
+        # 四轮全部成功，烧光 rounds 后恰逢定巡之礼弹出，被落成「仍在加载」
+        # 假失败，3 秒后调用方重试就把它领掉了）。只有仍卡在 last_scene 同名
+        # 规则上（真·退不出去）或画面未登记时才落证据。
+        fresh = _scene_results(logger, hwnd)
+        if _pick_result(logger, hwnd, fresh, TASK_LIST_CORE_MARKERS, min_conf=0.55):
+            return ("panel", acted_any)
+        if detect_baijing_main_ui(logger, hwnd, budget_sec=1.5)[0]:
+            return ("main", acted_any)
+        rule_now, _hit_now = _match_scene_rule(logger, hwnd, fresh)
+        if rule_now is not None and rule_now["name"] != last_scene:
+            logger.info(
+                f"[白荆回廊·日常] 恢复轮次耗尽，当帧已是登记表内场景「{rule_now['name']}」，"
+                "交回调用方继续下一轮恢复"
+            )
+            return (f"scene:{last_scene}", acted_any)
         # 轮次耗尽时画面常已不是 last_scene（2026-11-10 10:00:32：最后识别到
         # 「休息室」，点确认后游戏切进加载过场，取证截图也是 98% 加载页），
         # 拿旧场景名配当帧截图会报出「对着加载页说休息室反复退出失败」。
-        detail = _scene_failure_detail(last_scene, last_unmatched_texts)
+        detail = _scene_failure_detail(
+            last_scene, last_unmatched_texts, last_acted=last_acted
+        )
         _record_unknown_scene(logger, hwnd, context or f"场景{last_scene}", detail)
         return (f"scene:{last_scene}", acted_any)
     return ("unknown", acted_any)
@@ -3185,20 +3267,409 @@ def _leave_club_page(logger: logging.Logger, hwnd, stop_check=None) -> bool:
     return ok
 
 
+def _echo_texts(items: List[Dict], min_conf: float = 0.5) -> List[str]:
+    """当帧 OCR 文本（置信度过滤）——回声猎区各判定共用。"""
+    return [
+        str(it.get("text") or "")
+        for it in (items or [])
+        if float(it.get("confidence") or 0) >= min_conf
+    ]
+
+
+def _echo_map_confirmed(items: List[Dict]) -> bool:
+    """猎区地图 = 标题「回声猎区」+ ≥1 地图独有词（双证据，页面判定铁律）。
+
+    俱乐部页入口卡片也有「回声猎区」四个字，单标题必误判；独有词取节点标签/
+    重置倒计时/左下奖励入口（2026-11-13 用户地图页截图实测）。
+    """
+    texts = _echo_texts(items)
+    if not any(m in t for t in texts for m in ECHO_MAP_TITLE):
+        return False
+    return any(m in t for t in texts for m in ECHO_MAP_BODY)
+
+
+def _echo_reset_expiry(items: List[Dict]) -> str:
+    """从「重置时间剩余N天」算已清标记过期日（ISO 日期）；读不到按保守值。
+
+    读不到宁可短给（3 天后标记作废重打一遍）也不长给——标记错最多浪费一场，
+    漏打是丢奖励。
+    """
+    for text in _echo_texts(items):
+        m = ECHO_RESET_RE.search(text)
+        if m:
+            days = int(m.group(1))
+            return time.strftime("%Y-%m-%d", time.localtime(time.time() + days * 86400))
+    return time.strftime(
+        "%Y-%m-%d", time.localtime(time.time() + ECHO_RESET_FALLBACK_DAYS * 86400)
+    )
+
+
+def _echo_load_marks(logger: logging.Logger) -> Dict:
+    """读「已清节点」标记（workflow.db meta，JSON）；损坏/过期一律按无标记。
+
+    标记只是跳过优化，不是真值闸：每次开打前还有详情面板「开始收录」在场与否
+    这道实测判断（2026-11-13 口径）。用户手动打的节点标记不知道，最多重打一场。
+    """
+    try:
+        from ..storage.workflow_db import WorkflowDB
+
+        raw = WorkflowDB(str(WORKFLOW_DB_PATH)).get_task_meta(ECHO_META_KEY)
+        marks = json.loads(raw) if raw else {}
+        cleared = marks.get("cleared")
+        period_end = str(marks.get("period_end") or "")
+        if not isinstance(cleared, list) or not period_end:
+            return {}
+        if period_end < time.strftime("%Y-%m-%d"):  # 活动期已过 → 标记作废
+            return {}
+        return {"period_end": period_end, "cleared": [str(c) for c in cleared]}
+    except Exception as exc:  # noqa: BLE001 - 标记读不到不影响作战，只当无标记
+        logger.debug(f"[白荆回廊·俱乐部] 回声猎区已清标记读取失败（按无标记）: {exc}")
+        return {}
+
+
+def _echo_save_marks(logger: logging.Logger, period_end: str, cleared: List[str]) -> None:
+    """写「已清节点」标记；失败只告警——下次最多重打已清节点，无害。"""
+    try:
+        from ..storage.workflow_db import WorkflowDB
+
+        WorkflowDB(str(WORKFLOW_DB_PATH)).set_task_meta(
+            ECHO_META_KEY,
+            json.dumps(
+                {"period_end": period_end, "cleared": sorted(set(cleared))},
+                ensure_ascii=False,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[白荆回廊·俱乐部] 回声猎区已清标记写入失败: {exc}")
+
+
+def _echo_node_labels(hwnd, items: List[Dict]) -> List[Dict]:
+    """当前帧地图区内的节点标签（含「纯净回声」），按 x 从左到右排序。
+
+    右界 0.66 避开详情面板（面板标题也叫「纯净回声·X」，不避开会混进节点序）；
+    窗口取不到（失效/测试桩）时退化为只按文本匹配不过滤区域。
+    """
+    region = _abs_region(hwnd, ECHO_NODE_REGION)
+    out: List[Dict] = []
+    for it in items or []:
+        text = str(it.get("text") or "")
+        if float(it.get("confidence") or 0) < 0.5 or ECHO_NODE_LABEL not in text:
+            continue
+        if region:
+            ax, ay, aw, ah = region
+            cx, cy = it.get("center") or (0, 0)
+            if not (ax <= cx <= ax + aw and ay <= cy <= ay + ah):
+                continue
+        out.append(it)
+    out.sort(key=lambda it: (it.get("center") or (0, 0))[0])
+    return out
+
+
+def _echo_letter_of(text: str) -> Optional[str]:
+    """从「纯净回声·A」式文本提节点字母；认不出返回 None。
+
+    分隔符放行 ≤2 个非字母数字字符（·/./-），且字母后不能再跟字母——防 OCR
+    把两个标签并成一条时取错字母。
+    """
+    m = re.search(r"纯净回声[^\dA-Za-z]{0,2}([A-Ea-e])(?![A-Za-z])", text)
+    return m.group(1).upper() if m else None
+
+
+def _echo_pick_label(labels: List[Dict], letter: str) -> Optional[Dict]:
+    """定位目标节点标签：OCR 文本里的字母优先，x 序兜底（仅当 5 个标签全在）。
+
+    x 序兜底的依据：11-13 两张实机截图里 A~E 标签 x 严格递增；地图平移不影响
+    相对顺序。凑不齐 5 个且字母认不出时宁可不点（交证据），绝不猜。
+    """
+    for it in labels:
+        if _echo_letter_of(str(it.get("text") or "")) == letter:
+            return it
+    if len(labels) == len(ECHO_NODE_LETTERS):
+        return labels[ECHO_NODE_LETTERS.index(letter)]
+    return None
+
+
+def _echo_wait_map(
+    logger: logging.Logger, hwnd, stop_check, timeout: float = ECHO_WAIT_MAP
+) -> Tuple[bool, List[Dict], str]:
+    """轮询等猎区地图双证据确认；返回 (ok, 确认帧 items, 重置过期日)。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _stopped(stop_check):
+            return False, [], ""
+        items = _scene_results(logger, hwnd)
+        if _echo_map_confirmed(items):
+            return True, items, _echo_reset_expiry(items)
+        time.sleep(1.0)
+    return False, [], ""
+
+
+def _echo_panel_claim(
+    logger: logging.Logger, hwnd, stop_check, timeout: float = ECHO_WAIT_PANEL
+) -> Optional[Dict]:
+    """点节点标签后等详情面板「开始收录」；没有 = 锁定/不可打（顺序链终止）。
+
+    锁定节点在地图上照样有标签（11-13 截图 B~E 带锁），点开没有「开始收录」
+    才是不可打的实锤，所以这道闸不能省。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _stopped(stop_check):
+            return None
+        hit = _ocr_best_match(
+            logger, ECHO_CLAIM_TEXTS, hwnd,
+            frac_region=ECHO_CLAIM_REGION, min_conf=0.55,
+        )
+        if hit:
+            return hit
+        time.sleep(1.0)
+    return None
+
+
+def _echo_wait_battle_settled(
+    logger: logging.Logger, hwnd, stop_check, deadline: float
+) -> Tuple[bool, str, List[Dict]]:
+    """战斗开始后自适应等收敛：结算/奖励/浮层逐个点掉，回猎区地图算完成。
+
+    战后落点未实机探明（用户不确定），按证据自适应：结算页按拟合回归同款点
+    空白、奖励页点「点击屏幕继续」、物品浮层按 ESC（复用拟合的关浮层），
+    地图双证据一出现即成功；全程心跳日志，超时交调用方落证据。
+    """
+    from .baijing_fitting import (  # 延迟导入：fitting 懒引用本模块，防环
+        _dismiss_item_popup,
+        _page_now,
+        P_RESULT_CONTINUE,
+        P_REWARD_CONTINUE,
+    )
+
+    last_heartbeat = 0.0
+    last_page, last_items = "unknown", []
+    while time.time() < deadline:
+        if _stopped(stop_check):
+            return False, "用户停止", last_items
+        page, items = _page_now(logger, hwnd)
+        last_page, last_items = page, items
+        if _echo_map_confirmed(items):
+            return True, "map", items
+        if page == "result":
+            _click_ratio(logger, hwnd, P_RESULT_CONTINUE, "回声猎区结算页点空白")
+            time.sleep(2.0)
+            continue
+        if page == "reward":
+            _click_ratio(logger, hwnd, P_REWARD_CONTINUE, "回声猎区奖励页继续")
+            time.sleep(2.0)
+            continue
+        if page == "item_popup":
+            _dismiss_item_popup(logger, hwnd)
+            continue
+        cont = next(
+            (it for it in items or [] if "点击屏幕继续" in str(it.get("text") or "")),
+            None,
+        )
+        if cont and page == "unknown":
+            _pyautogui_click_guarded(*cont["center"])
+            logger.info("[白荆回廊·俱乐部] 回声猎区：点「点击屏幕继续」推进过场")
+            time.sleep(1.5)
+            continue
+        now = time.time()
+        if now - last_heartbeat >= ECHO_HEARTBEAT_SEC:
+            texts = _echo_texts(items)
+            extra = next((t for t in texts if "波次" in t or "%" in t), "")
+            logger.info(f"[白荆回廊·俱乐部] 回声猎区战斗挂机中… 页面={page} {extra}")
+            last_heartbeat = now
+        time.sleep(1.0)
+    return False, f"战斗未收敛（{last_page}）", last_items
+
+
+def _echo_zone_fight_node(
+    logger: logging.Logger, hwnd, letter: str, claim_xy, stop_check=None
+) -> Tuple[bool, str]:
+    """从点「开始收录」起打完一个节点：编队页 → 开战 → 挂机 → 回猎区地图。
+
+    编队段复用拟合回归（用户 2026-11-13 拍板「编队选择页面可以复用拟合回归」）：
+    同款编队页判定、「作战开始」、布阵稳定等待+补点。回声猎区可能没有布阵页
+    （未实机探明），所以「作战开始」后同时等 deploy/battle 谁先出现。
+    返回 (是否完成, 失败原因)。
+    """
+    from .baijing_fitting import (
+        _click,
+        _page_now,
+        _wait_deploy_settled,
+        _wait_page,
+        BATTLE_START_MAX_ATTEMPTS,
+        BATTLE_VERIFY_DELAY_SEC,
+        P_BATTLE_START,
+        P_TEAM_START,
+        WAIT_DEPLOY,
+        WAIT_TEAM,
+    )
+
+    _pyautogui_click_guarded(*claim_xy)
+    logger.info(f"[白荆回廊·俱乐部] 回声猎区节点 {letter}：已点「开始收录」，等编队页")
+    ok, page, _items = _wait_page(logger, hwnd, "team", WAIT_TEAM, stop_check)
+    if not ok:
+        return False, f"节点 {letter} 未进入编队页（{page}）"
+    if not _click(logger, hwnd, P_TEAM_START, "作战开始"):
+        return False, f"节点 {letter} 「作战开始」点击失败"
+    deadline = time.time() + max(WAIT_DEPLOY, 10.0)
+    page = "unknown"
+    entered = False
+    while time.time() < deadline:
+        if _stopped(stop_check):
+            return False, "用户停止"
+        page, _items = _page_now(logger, hwnd)
+        if page in ("deploy", "battle"):
+            entered = True
+            break
+        time.sleep(1.0)
+    if not entered:
+        return False, f"节点 {letter} 点「作战开始」后未进布阵/战斗（{page}）"
+    if page == "deploy":
+        # 回声猎区战斗页对 OCR 是盲页（2026-11-13 #283 取证帧只有
+        # 「01/02/uid/关卡号」4 个文本，拟合的「当前波次/战术终端」特征全无），
+        # 「开始战斗」点完不能靠页面分类判进战斗——改判「布阵页已离开」：
+        # 当帧不再是 team/deploy 即算开打（战斗自动挂机，收敛交给
+        # _echo_wait_battle_settled 等回地图）。稳定等待沿用拟合的
+        # _wait_deploy_settled（11-09 布阵按钮未稳点击被吞的教训）。
+        if not _wait_deploy_settled(logger, hwnd, stop_check):
+            return False, "用户停止"
+        ok_started = False
+        last_page = "deploy"
+        for attempt in range(1, BATTLE_START_MAX_ATTEMPTS + 1):
+            if _stopped(stop_check):
+                return False, "用户停止"
+            if not _click(logger, hwnd, P_BATTLE_START, "开始战斗"):
+                return False, f"节点 {letter} 「开始战斗」点击失败"
+            time.sleep(BATTLE_VERIFY_DELAY_SEC)
+            last_page, _items = _page_now(logger, hwnd)
+            if last_page in ("battle", "result") or last_page not in ("team", "deploy"):
+                ok_started = True
+                logger.info(
+                    f"[白荆回廊·俱乐部] 回声猎区节点 {letter}：开始战斗第 {attempt} 次"
+                    f"点击后布阵页已离开（页面={last_page}），按已进战斗处理"
+                )
+                break
+            logger.warning(
+                f"[白荆回廊·俱乐部] 回声猎区节点 {letter}：开始战斗第 "
+                f"{attempt}/{BATTLE_START_MAX_ATTEMPTS} 次点击后仍停在「{last_page}」"
+                f"{'，准备补点' if attempt < BATTLE_START_MAX_ATTEMPTS else ''}"
+            )
+        if not ok_started:
+            return False, (
+                f"节点 {letter} 布阵页未离开（{last_page}，"
+                f"开始战斗已点 {BATTLE_START_MAX_ATTEMPTS} 次）"
+            )
+    ok, reason, _items = _echo_wait_battle_settled(
+        logger, hwnd, stop_check, time.time() + ECHO_BATTLE_TIMEOUT
+    )
+    if not ok:
+        return False, f"节点 {letter} {reason}"
+    logger.info(f"[白荆回廊·俱乐部] 回声猎区节点 {letter} 战斗完成，已回猎区地图")
+    return True, ""
+
+
+def _echo_zone_run_content(logger: logging.Logger, hwnd, stop_check=None) -> Dict:
+    """回声猎区内容主体：确认地图 → 已清标记跳过 → A→E 逐节点打 → 回地图。
+
+    顺序链口径（用户 2026-11-13「先打abcde按顺序打」）：节点解锁是链式的
+    （11-13 截图：A 可打、B~E 带锁），某节点点开面板没有「开始收录」= 锁定/
+    不可打，后面节点必然也没解锁，整链到此为止——这是正常收尾不是失败。
+    每打完一个节点把字母写进已清标记（过期日取地图「重置时间剩余N天」）。
+    中央 boss「不协和音·鱼叉将军」用户没让打，本轮不动。
+
+    返回 {"status": success/skipped/failed, "detail", "fought", "skipped"}。
+    """
+    out: Dict = {"status": "failed", "detail": "", "fought": [], "skipped": []}
+    ok, items, expiry = _echo_wait_map(logger, hwnd, stop_check)
+    if not ok:
+        out["detail"] = "进页后未见猎区地图（标题+独有词双证据不满足）"
+        _record_step_failure(logger, hwnd, "俱乐部回声猎区:地图确认", out["detail"])
+        return out
+    marks = _echo_load_marks(logger)
+    cleared = list(marks.get("cleared") or [])
+    out["skipped"] = [c for c in ECHO_NODE_LETTERS if c in cleared]
+    if out["skipped"]:
+        logger.info(
+            f"[白荆回廊·俱乐部] 回声猎区：已清标记跳过 {out['skipped']}"
+            f"（period_end={marks.get('period_end')}）"
+        )
+    fought: List[str] = []
+    chain_end = ""       # 非失败的顺序链终止原因
+    failed = False
+    for letter in ECHO_NODE_LETTERS:
+        if _stopped(stop_check):
+            chain_end = "用户停止"
+            break
+        if letter in cleared:
+            continue
+        items = _scene_results(logger, hwnd)
+        if not _echo_map_confirmed(items):
+            # 上一场打完可能停在过渡页/结算收尾，宽限一次重识别
+            time.sleep(2.0)
+            items = _scene_results(logger, hwnd)
+            if not _echo_map_confirmed(items):
+                failed = True
+                out["detail"] = f"打节点 {letter} 前未回到猎区地图，节点链中止"
+                _record_step_failure(
+                    logger, hwnd, f"俱乐部回声猎区:节点{letter}前地图确认", out["detail"]
+                )
+                break
+        labels = _echo_node_labels(hwnd, items)
+        label = _echo_pick_label(labels, letter)
+        if label is None:
+            failed = True
+            out["detail"] = f"节点 {letter} 标签未定位（地图布局可能变化，需补证据）"
+            _record_step_failure(
+                logger, hwnd, f"俱乐部回声猎区:节点{letter}定位", out["detail"]
+            )
+            break
+        _pyautogui_click_guarded(*label["center"])
+        logger.info(f"[白荆回廊·俱乐部] 回声猎区：点击节点 {letter} 标签 @ {label['center']}")
+        claim = _echo_panel_claim(logger, hwnd, stop_check)
+        if claim is None:
+            chain_end = f"节点 {letter} 无「开始收录」（锁定或不可打），顺序链到此为止"
+            logger.info(f"[白荆回廊·俱乐部] 回声猎区：{chain_end}")
+            break
+        ok, reason = _echo_zone_fight_node(
+            logger, hwnd, letter, claim["center"], stop_check=stop_check
+        )
+        if not ok:
+            failed = True
+            out["detail"] = reason
+            _record_step_failure(
+                logger, hwnd, f"俱乐部回声猎区:节点{letter}战斗", reason
+            )
+            break
+        fought.append(letter)
+        cleared = sorted(set(cleared) | {letter})
+        _echo_save_marks(logger, expiry, cleared)
+    out["fought"] = fought
+    if failed:
+        out["status"] = "failed"          # detail 已在 break 处写好失败原因
+    elif chain_end:
+        out["status"] = "success" if fought else "skipped"
+        out["detail"] = chain_end
+    elif fought:
+        out["status"] = "success"
+        out["detail"] = f"节点链走完：本场打 {fought}，标记跳过 {out['skipped']}"
+    else:
+        out["status"] = "skipped"
+        out["detail"] = "无可打节点（全部已清或未解锁）"
+    return out
+
+
 def _run_club_activity_echo_zone(logger: logging.Logger, hwnd, stop_check=None) -> Dict:
-    """俱乐部活动「回声猎区」分支入口（2026-11-11 活动开启，分支先行、内容未实现）。
+    """俱乐部活动「回声猎区」分支（2026-11-11 入口，2026-11-13 内容落地）。
 
     在俱乐部页上检测右侧「俱乐部活动」卡片的「回声猎区」标题：命中 → 点击进
-    活动页 → 快照取证 → 立即退出回主界面；未命中（活动结束/换期）→ 不点击直接
-    跳过。活动页布局尚未实机探明，**刻意不做页面判定**（无已验证标记集，避免
-    违反页面判定铁律），进页证据靠快照 jpg；活动内容（刷本/领奖/退出链路）等
-    实机截图补齐后再写。
-
-    返回 {"status", "detail", "entered", "returned_main"}：status = skipped（未
-    检测到入口或流程未实现的占位）/ failed（点击后未能退回主界面，需人工恢复）。
-    失败只挂在本分支结果里，不影响每日任务领取的主状态。
+    猎区地图 → 按 A→E 顺序清节点（`_echo_zone_run_content`，编队链路复用拟合
+    回归）→ 退出回主界面；未命中（活动结束/换期）→ 不点击直接跳过。
+    分支结果挂 result["echo"]，失败不连坐每日任务主状态（10-22 起口径）。
     """
-    result = {"status": "skipped", "detail": "", "entered": False, "returned_main": None}
+    result: Dict = {
+        "status": "skipped", "detail": "", "entered": False,
+        "returned_main": None, "echo": None,
+    }
     if _stopped(stop_check):
         result["detail"] = "用户停止"
         return result
@@ -3211,22 +3682,28 @@ def _run_club_activity_echo_zone(logger: logging.Logger, hwnd, stop_check=None) 
         logger.info(f"[白荆回廊·俱乐部] {result['detail']}")
         return result
     _pyautogui_click_guarded(*hit["center"])
-    logger.info(f"[白荆回廊·俱乐部] 点击「回声猎区」活动入口 @ {hit['center']}（流程未实现，进页取证后即退出）")
+    logger.info(f"[白荆回廊·俱乐部] 点击「回声猎区」活动入口 @ {hit['center']}")
     result["entered"] = True
-    time.sleep(2.5)  # 活动页加载（无已验证标记，只等一个固定窗口再取证）
+    time.sleep(2.5)  # 俱乐部页 → 猎区地图过场（地图确认有自己的轮询等待）
     _capture_daily_list_snapshot(logger, hwnd, prefix=CLUB_ACTIVITY_SNAPSHOT_PREFIX)
-    # 立即退出：活动页与俱乐部页共用左上「返回」，_leave_club_page 页无关
+    content = _echo_zone_run_content(logger, hwnd, stop_check=stop_check)
+    result["echo"] = content
+    result["status"] = content["status"]
+    result["detail"] = f"回声猎区：{content['detail']}"
+    if content["status"] == "failed":
+        result["detail"] += "（分支失败不影响每日任务主状态）"
+        logger.warning(f"[白荆回廊·俱乐部] {result['detail']}")
+    else:
+        logger.info(f"[白荆回廊·俱乐部] {result['detail']}")
+    # 退出：猎区地图与俱乐部页共用左上「返回」，_leave_club_page 页无关
     # （主界面检测 + 返回/ESC 循环），可直接复用；失败时后续步骤各自
     # _ensure_main_ui 自保兜底（10-22 起的口径）。
     back_ok = _leave_club_page(logger, hwnd, stop_check=stop_check)
     result["returned_main"] = back_ok
     if not back_ok:
         result["status"] = "failed"
-        result["detail"] = "已点击回声猎区入口但未能退回主界面（活动页退出链路未实现，需人工恢复）"
+        result["detail"] = "回声猎区分支结束但未能退回主界面（需人工恢复）"
         logger.warning(f"[白荆回廊·俱乐部] {result['detail']}")
-    else:
-        result["detail"] = "已进活动页取证并退出（活动内容未实现，占位分支）"
-        logger.info(f"[白荆回廊·俱乐部] {result['detail']}")
     return result
 
 

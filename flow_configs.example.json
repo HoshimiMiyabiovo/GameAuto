@@ -927,6 +927,85 @@
     ],
     "close_process_on_finish": false
   },
+  "HSR_VERSION_SHOP": {
+    "enabled": true,
+    "_comment": "2026-11-12 用户需求：崩铁常驻商店新增「戏言成真」页签（未熄的虹辉兑换），买金品质三件 自塑尘脂x1(1200) + 遗器残骸x100 x2(120) + 孤星明尘x100 x2(100)，每期共 1640 虹辉；42 天一刷、与崩铁版本更新同步。调度走 version_cycle 门控（background_template_runner）：更新日历版本号变化才跑（公告已出未开服顺延），日历不可用 42 天 CD 兜底，成功才写 version_cycle:HSR_VERSION_SHOP 标记。与 HSR_MONTHLY（余烬兑换/自塑尘脂合成，2026-11-04 停用交三月七）互不影响；紫品质/信用点商品不买。",
+    "exe_from_app": "HonkaiStarRail",
+    "window_title_keywords": [],
+    "window_process_names": [
+      "StarRail.exe"
+    ],
+    "startup_wait_sec": 15,
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8
+    ],
+    "match_confidences": [
+      0.88,
+      0.84,
+      0.8
+    ],
+    "steps": [
+      {
+        "name": "进入崩铁主界面",
+        "action": "starrail_enter_main",
+        "login_timeout_sec": 600,
+        "timeout_sec": 600,
+        "post_delay_sec": 3.0,
+        "on_fail": "fail",
+        "max_attempts": 1,
+        "_comment": "复用 StarRailLauncher 的进入方法（复刻三月七）：点击进入 → 月卡/欢迎弹窗 → 主界面特征连续 2 次命中；已在主界面时首轮即通过。"
+      },
+      {
+        "name": "戏言成真兑换金品质三件",
+        "action": "monthly_exchange",
+        "log_label": "戏言成真",
+        "shop_entry_text": "商店",
+        "nav_text": "兑换商店",
+        "nav_region_frac": [
+          0.0,
+          0.18,
+          0.2,
+          0.95
+        ],
+        "tab_text": "戏言成真",
+        "tab_content_markers": [
+          "自塑尘脂",
+          "孤星明尘"
+        ],
+        "forbidden_texts": [
+          "银河铁道之夜",
+          "时节不居",
+          "但战斗还未结束",
+          "无可取代的东西",
+          "以世界之名"
+        ],
+        "confirm_template": "assets/templates/崩铁-兑换确认.png",
+        "exit_marker_template": "assets/templates/崩铁-主界面.png",
+        "timeout_sec": 600,
+        "post_delay_sec": 2.0,
+        "on_fail": "fail",
+        "max_attempts": 1,
+        "items": [
+          {
+            "name": "自塑尘脂",
+            "count": 1
+          },
+          {
+            "name": "遗器残骸",
+            "count": 2
+          },
+          {
+            "name": "孤星明尘",
+            "count": 2
+          }
+        ],
+        "_comment": "ESC → 商店 → 左侧兑换商店 → 顶部戏言成真（页签最右，参考图 data/artifacts/ref_starrail_xiyan_20261112.png）。引擎内容优先路径：tab_content_markers 用自塑尘脂/孤星明尘（戏言成真独有；信用点两页都有不能当判据），点页签后以看到专属商品为准。**故意不配 tab_template**：截图只有选中态（白字+下划线），引擎的模板路径要求未选中态外观（点击后等模板消失），裁了会破坏协议；OCR 优先，若实机 RapidOCR 认错（余烬→余煨同款问题）再补 tab_point_frac≈(0.605,0.157)（页签/入口比例坐标有内容校验兜底，属禁盲点铁律允许范围）。forbidden_texts 沿用余烬兑换的五星光锥五件，防落光锥呈现页。确认弹窗复用崩铁-兑换确认.png（余烬兑换同款弹窗，2026-11-01 实机弹窗上 1.000/商店页 0.636，底部确认 + y 闸 + OCR 兜底都在引擎内）。**未实机验证**：首跑按商店证据图与日志校准。"
+      }
+    ],
+    "close_process_on_finish": true
+  },
   "ZZZ_MONTHLY": {
     "enabled": true,
     "_comment_start_from_main": "2026-11-04 用户要求所有流程统一从主世界开始：已在主世界（电台图标命中）就直接跳到第 3 步兑换，不再点「点击进入游戏」。",

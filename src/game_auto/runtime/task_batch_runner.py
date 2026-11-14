@@ -42,6 +42,7 @@ from .background_template_runner import (
     run_cj_background,
     run_genshin_monthly_background,
     run_hsr_monthly_background,
+    run_hsr_version_shop_background,
     run_nte_monthly_background,
     run_wool_background,
     run_wool_flow_background,
@@ -376,6 +377,108 @@ def _append_weekly_report(
         warnings.append(line)
 
 
+# ── 版本周期流程（崩铁戏言成真，42 天/版本更新对齐，2026-11-12）────────
+# 与附加月流程同构：每条流程独立 flow_key、独立 `version_cycle:<KEY>` 标记、
+# 独立成败；主流程（月商店/周常）失败、已完成、被禁用都不会阻断这里。
+# 门控本体在 background_template_runner._run_version_cycle_flow（版本号变化
+# 才跑 + 未开服顺延 + 日历不可用 42 天 CD 兜底），本层只管 enabled 短路、
+# 维护顺延与调度接线。
+_EXTRA_VERSION_CYCLE_FLOWS: Dict[str, Tuple[Tuple[str, str], ...]] = {
+    "HonkaiStarRail": (("HSR_VERSION_SHOP", "崩铁戏言成真商店"),),
+}
+_EXTRA_VERSION_CYCLE_RUNNERS: Dict[str, Callable[..., Tuple[bool, str]]] = {
+    "HSR_VERSION_SHOP": run_hsr_version_shop_background,
+}
+
+# 本批次已检查过版本商店的游戏（批次开始时清空，收尾补漏不再重复触发）。
+_VERSION_CYCLE_CHECKED: set = set()
+
+
+def _run_pending_version_cycle_flow(
+    controller, app_key: str, flow_key: str, label: str
+) -> Optional[Tuple[str, bool]]:
+    """版本商店到期时补跑一次，返回 (报告行, 是否成功)；不到期/禁用返回 None。"""
+    if controller.stop_current_task:
+        return None
+    # enabled=false 在调度层短路（恶名狩猎同款）：只靠 run_flow 的检查会把
+    # 「流程已禁用」计成失败写 ❌，且不写标记导致每批次重试。
+    try:
+        from .foreground_flow_runner import _load_flow_config
+
+        cycle_cfg = _load_flow_config(flow_key)
+    except Exception as exc:  # noqa: BLE001 - 读配置失败不能挡住原有调度
+        controller.logger.debug("[%s] 读取版本周期流程配置失败: %s", label, exc)
+        cycle_cfg = None
+    if cycle_cfg is not None and not cycle_cfg.get("enabled", True):
+        controller.logger.info("[%s] 流程已禁用，跳过", label)
+        return None
+    # 维护/更新窗口内不启动客户端（镜像月商店口径）：新版本的采购顺延到
+    # 开服后的下一次批次，标记不写、自动重试。
+    try:
+        from ..services.game_update_calendar import get_maintenance_state
+
+        maintenance = get_maintenance_state(app_key)
+    except Exception as exc:  # noqa: BLE001 - 日历模块不可用就当没维护
+        controller.logger.debug("[%s] 维护状态检查失败: %s", label, exc)
+        maintenance = None
+    if maintenance:
+        controller.logger.info("[%s] 游戏维护中，版本商店顺延到下次批次", label)
+        return None
+    controller.logger.info("[%s] 版本商店到期，随日常自动补跑一次", label)
+    runner = _EXTRA_VERSION_CYCLE_RUNNERS.get(flow_key)
+    if runner is None:
+        controller.logger.warning("[%s] 没有对应的执行入口（flow_key=%s），跳过", label, flow_key)
+        return None
+    try:
+        ok, msg = runner(controller.logger)
+    except Exception as exc:  # noqa: BLE001 - 版本商店失败不能拖垮当天一条龙
+        controller.logger.warning("[%s] 执行异常: %s", label, exc)
+        return (f"{label:20} ❌ 执行异常: {exc}", False)
+    return (f"{label:20} {'✅' if ok else '❌'} {msg}", ok)
+
+
+def _run_extra_version_cycle_flows(
+    controller, app_key: str, report: List[str], warnings: List[str]
+) -> None:
+    """跑该游戏的版本周期流程（崩铁戏言成真）。
+
+    `_VERSION_CYCLE_CHECKED` 仍按 app 记，收尾补漏不会重复触发。
+    """
+    for flow_key, label in _EXTRA_VERSION_CYCLE_FLOWS.get(app_key, ()):
+        if controller.stop_current_task:
+            return
+        one = _run_pending_version_cycle_flow(controller, app_key, flow_key, label)
+        if one is not None:
+            _emit_monthly_line(controller, one, report, warnings)
+
+
+def _sweep_pending_version_cycle_flows(
+    controller, report: List[str], warnings: List[str]
+) -> None:
+    """批次收尾补漏：当天没进批次的游戏，版本商店到期也要补跑（同月商店补漏口径）。
+
+    2026-11-02 月商店的洞在版本周期同样成立：流程只在「该游戏当天在批次里」
+    时触发，用户没勾/批次被打断就永远轮不到。已购过的只读一次标记直接返回
+    （零窗口操作）。
+    """
+    if controller.stop_current_task:
+        return
+    pending = [
+        app_key for app_key in _EXTRA_VERSION_CYCLE_FLOWS
+        if app_key not in _VERSION_CYCLE_CHECKED
+    ]
+    if not pending:
+        return
+    controller.logger.info(
+        "[一条龙] 收尾补跑到期的版本商店：%s", "、".join(pending)
+    )
+    for app_key in pending:
+        if controller.stop_current_task:
+            controller.logger.info("[一条龙] 收尾补跑版本商店期间用户已请求停止，中止")
+            return
+        _run_extra_version_cycle_flows(controller, app_key, report, warnings)
+
+
 def run_weekly_click_sequence(
     name: str,
     logger,
@@ -615,7 +718,9 @@ def _verify_script_log_result(app_key: str, effective_script_choice: Optional[st
     """
     try:
         from ..games import get_profile
-        from ..services.daily_progress_tracker import DailyTaskRecord, GameDailyRecord
+        from ..services.daily_progress_tracker import (
+            KEY_STATUS_TASKS, DailyTaskRecord, GameDailyRecord,
+        )
 
         profile = get_profile(app_key)
         if profile is None or not profile.daily_parser:
@@ -651,6 +756,27 @@ def _verify_script_log_result(app_key: str, effective_script_choice: Optional[st
             ) for t in tasks if isinstance(t, dict)],
             errors=list(data.get("errors") or []),
         )
+        # 无限暖暖：KEY_STATUS_TASKS["nikki"]="朝夕心愿" 是 2026-10-06 用户拍板的
+        # 复核核心依据。但 completion_state() 只裁决 success/failed 二态：脚本被
+        # 更新弹窗打断时 whimbox 没有汇总块，parser 给的是 pending（2026-11-13 实锤
+        # 朝夕心愿 100/500 + 7 项 pending），会 break 到计数口径返回 "pending"；
+        # 而本函数只在 == "failed" 时改判，于是「核心任务根本没做完」被静默当成
+        # 成功、也不进统一重试。这里补上第三态：关键任务存在但状态不是
+        # success/already/skipped 一律改判失败。只限暖暖——异环/绝区零的
+        # KEY_STATUS 任务是领取类，pending 时贸然重跑会撞「已领取不可重入」
+        # （2026-10-03 事故），它们继续走原 completion_state 口径。
+        if profile.game_key == "nikki":
+            key_names = KEY_STATUS_TASKS.get("nikki") or ()
+            for t in rec.tasks:
+                if (t.task_name or t.task_key) not in key_names:
+                    continue
+                if t.status in ("success", "already", "skipped"):
+                    return None
+                extra = t.extra if isinstance(t.extra, dict) else {}
+                cur, total = extra.get("current"), extra.get("total")
+                progress = f"（{cur}/{total}）" if cur is not None and total else ""
+                return f"{tag} 朝夕心愿未完成{progress}（状态 {t.status}）"
+
         if rec.completion_state() != "failed":
             return None
         errs = [str(e) for e in (data.get("errors") or []) if str(e).strip()]
@@ -1095,6 +1221,7 @@ def run_task_batch(
 
     # 新批次开始：本批次已检查过月商店的游戏清空（收尾补漏要用）。
     _MONTHLY_CHECKED.clear()
+    _VERSION_CYCLE_CHECKED.clear()
 
     has_regular_tasks = any(not is_standalone_task(app_key) for app_key, _ in target_apps)
     if has_regular_tasks:
@@ -1154,6 +1281,8 @@ def run_task_batch(
             _append_monthly_report(controller, app_key, report, warnings)
             # 每周流程（恶名狩猎）同理：今日已完成也可能本周还没打。
             _append_weekly_report(controller, app_key, report, warnings)
+            # 版本周期流程（崩铁戏言成真）同理：版本刚更新时日常往往已完成。
+            _run_extra_version_cycle_flows(controller, app_key, report, warnings)
             if index < len(target_apps) - 1:
                 _interruptible_sleep(controller, inter_task_delay_sec)
             continue
@@ -1193,6 +1322,8 @@ def run_task_batch(
         _append_monthly_report(controller, app_key, report, warnings)
         # 每周三次的恶名狩猎（每周只跑一次，内部打满当周次数）
         _append_weekly_report(controller, app_key, report, warnings)
+        # 版本周期流程（崩铁戏言成真）：版本刚更新、日常照常跑完之后顺手买。
+        _run_extra_version_cycle_flows(controller, app_key, report, warnings)
 
         if index < len(target_apps) - 1:
             # 任务间隔冷却：期间持续清理刚结束任务弹出的残留启动器，避免干扰下一个脚本
@@ -1257,6 +1388,8 @@ def run_task_batch(
     # 收尾补跑月商店：当天没进批次的游戏（用户没勾/批次被打断）也要在本月内买过。
     # 放在统一重试之后，避免和重试里的日常抢窗口。
     _sweep_pending_monthly_flows(controller, report, warnings)
+    # 收尾补跑版本周期流程（崩铁戏言成真）：同口径，当天没进批次也要补。
+    _sweep_pending_version_cycle_flows(controller, report, warnings)
 
     # 批次结束卸载 OCR 引擎归还显存：与 ok-ww（鸣潮）/ok-ef 等独立 GPU 进程
     # 错峰，避免两个 CUDA 进程叠加撞显存墙。下次批次首次 OCR 自动重建。
