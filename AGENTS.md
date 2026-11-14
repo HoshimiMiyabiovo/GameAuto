@@ -26,6 +26,14 @@
 [games/registry.py](file:///e:/GithubProject/game_auto/src/game_auto/games/registry.py) 自动发现，
 settings / bridge / 批处理 / 更新日历无需再改映射表。
 
+## Git 推送代理坑
+
+- 全局 git 代理 `http.proxy=http://127.0.0.1:7897`（Clash 系）。代理客户端没开时
+  push 报 `Failed to connect to github.com:443 over proxy 127.0.0.1`（端口无监听）。
+- 绕开：`git -c http.proxy= -c https.proxy= push origin master`（2026-11-14 实测
+  直连可用、推送成功）。用临时 `-c` 参数，**别动全局代理配置**——代理客户端在线
+  时仍走它；空串 `-c http.proxy=` 只覆盖单次命令。
+
 ## 变更记录
 
 每次改动在 [docs/changelog.md](docs/changelog.md) 追加一行（只写"做了什么/为什么"）。
