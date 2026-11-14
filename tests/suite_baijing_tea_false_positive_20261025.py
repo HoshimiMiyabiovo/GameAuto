@@ -22,7 +22,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-import game_auto.runtime.baijing_daily as bd  # noqa: E402
+import game_auto.runtime.baijing_task_handlers as bd  # noqa: E402
+import game_auto.runtime.baijing_common as bcommon  # noqa: E402
+import game_auto.runtime.baijing_scene as bscene  # noqa: E402
+import game_auto.runtime.baijing_tasklist as btasklist  # noqa: E402
 
 LOG = logging.getLogger("tea-false-positive-test")
 FAILURES = []
@@ -80,10 +83,25 @@ class TeaEnv:
         bd._ensure_window = lambda logger, hwnd: hwnd
         bd._window_region = lambda hwnd: (0, 0, 1920, 1080)
         bd.time = FakeTime()
+        # 2026-11-14 拆分：同名桩镜像到符号实际所属模块（common/scene/tasklist）——
+        # 各模块函数在自己的模块全局里解析名字，只打 handlers 不生效。
+        for _k in ("_find_row_button", "_pyautogui_click_guarded", "_wait_page_markers",
+                   "_ocr_best_match", "_click_ratio", "_return_to_task_panel",
+                   "_record_step_failure", "_ensure_window", "_window_region",
+                   "_scene_results", "_stopped", "time"):
+            for _m in (bcommon, bscene, btasklist):
+                if hasattr(_m, _k):
+                    if (_m.__name__, _k) not in self._saved:
+                        self._saved[(_m.__name__, _k)] = (_m, getattr(_m, _k))
+                    setattr(_m, _k, getattr(bd, _k))
 
     def restore(self):
         for k, v in self._saved.items():
-            setattr(bd, k, v)
+            if isinstance(k, tuple):
+                _m, _orig = v
+                setattr(_m, k[1], _orig)
+            else:
+                setattr(bd, k, v)
 
     def _wait(self, logger, hwnd, markers, timeout=6.0, stop_check=None, frac_region=None):
         if markers == bd.TEA_SELECT_MARKERS:
@@ -185,7 +203,7 @@ def test_4_constants():
           "午后茶憩" not in bd.REST_ROOM_MARKERS, bd.REST_ROOM_MARKERS)
     x, y = bd.REST_ROOM_TEA_ENTRY
     check("茶憩立牌卡在右下", 0.82 <= x <= 0.95 and 0.76 <= y <= 0.90, (x, y))
-    bx, by = bd.REST_ROOM_BACK
+    bx, by = bscene.REST_ROOM_BACK
     check("返回在左上角", bx <= 0.16 and by <= 0.10, (bx, by))
 
 

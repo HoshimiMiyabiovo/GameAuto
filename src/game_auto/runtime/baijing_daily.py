@@ -1,62 +1,63 @@
-"""白荆回廊视觉版日常流程（2026-10-18 重构）。
+# -*- coding: utf-8 -*-
+"""白荆回廊·日常主流程（零售礼包 + 任务调度 + 视觉版一条龙）。
 
-替代旧的固定坐标序列回放（assets/click_sequences/白荆回廊-日常.json：100+ 步录制坐标，
-录于游戏版本 1.0.2.1082；UI 改版后坐标整体失效，且回放窗口相对坐标时窗口布局
-一变就整体偏移，失败只能整段重来）。
+职责：①有猫零售「每日外勤赠礼」免费礼包领取（含防重复标记）；②
+process_task_list 按静态目录调度专项任务（handler 在 baijing_task_handlers）；
+③ run_baijing_daily_vision_flow 主入口（主界面→日常→俱乐部→零售→回主界面），
+baijing_flow.run_baijing_full_flow 的日常段就是它。
 
-新流程（起点：主界面，由 run_baijing_ingame_flow 抵达）：
-  1. _ensure_main_ui      确认/恢复到主界面（复用 baijing_flow.detect_baijing_main_ui）
-  2. open_daily_task_list 点击右侧「任务」按钮（OCR 优先 + 模板兜底），
-                           等待日常任务列表打开（OCR 特征文字 + 快照留证）
-  3. process_task_list    列表内操作：一键领取 → 逐个领取；
-                           「前往」类未完成任务只记录不点击（跳转子活动需要
-                           专门逻辑，见 _handle_goto_tasks 说明）
-  4. close_task_list      关闭任务列表（关闭按钮/ESC），确认回到主界面
-  4.5. claim_club_daily_reward  活跃度 100 里程碑领完之后顺手领俱乐部每日任务奖励
-                           （主界面左上第 4 个图标进俱乐部 → 弹窗点空白继续 →
-                           点「俱乐部每日任务」卡片，卡片变「今日任务已完成」）
-  5. buy_daily_free_gift_pack  回主界面后顺手领有猫零售的每日免费礼包
-                           「每日外勤赠礼」（底栏「有猫零售」→ 精选礼包 →
-                           有猫精选 → 卡底「免费」→ 弹窗「购买」）
-
-识别策略：
-  - 「任务」按钮用 RapidOCR 文字识别优先。注意主界面中部有「阶段任务154/200」
-    也含「任务」二字，全屏搜索会误点，因此全窗识别后按窗口右侧区域
-    （TASK_BUTTON_REGION，fx>=0.70）过滤命中，并对命中文本做黑名单排除。
-    不要「先裁剪区域再 OCR」——实测裁剪会改变检测结果（右侧裁剪后
-    「一任务」直接丢失）。
-  - 模板兜底：assets/templates/白荆回廊-任务按钮.png（按 1920x1080 参考分辨率裁剪，
-    红色角标已 inpaint 抹除，避免每日数字变化导致失配）。匹配时按窗口宽度
-    换算缩放因子，适配不同分辨率。
-  - 全程不写死绝对坐标，点击坐标一律来自 OCR/模板匹配结果。
-
-进度记录：结果写 daily_progress（game_key=baijing），与旧序列版一致。
-日常任务目录（2026-10-18 实测提取，会随游戏版本漂移）用于滚动扫描匹配
-(X/Y) 进度；**活跃度以每日任务面板顶部的「累计活跃度」大数字为准**，
-目录分值相加只作读不到面板时的兜底（2026-10-27 实锤：目录 90、面板 105）。
-活跃度口径（2026-10-18 用户确认）：里程碑 20/40/60/80/100 五档，**满 100 即
-领完全部日常里程碑奖励**；current 按 100 封顶，原始实得（可超 100）留在
-extra.earned，目录核算值留在 extra.activity_catalog。日常 tab 处理完毕后还会切到「叶脉联结」tab 做 任务总览 → 全部领取
-（该页奖励与日常 tab 不互通）。
+2026-11-14 拆分后本文件只留**主流程胶水**；基础设施/场景恢复/任务列表/
+专项 handler/俱乐部与回声猎区分别在 baijing_common / baijing_scene /
+baijing_tasklist / baijing_task_handlers / baijing_echo。文件尾部的
+re-export 块是对外符号面的**过渡性 facade**（shop/cat_exchange 与测试套件
+仍从 baijing_daily import；mock 类测试必须 patch 符号的**归属模块**，
+patch daily 已不生效）。
 """
-
-import ctypes
-import json
 import logging
-import os
-import re
 import time
 from typing import Dict, List, Optional, Tuple
 
-import cv2
-import numpy as np
 import pyautogui
-import win32api
-import win32con
-import win32gui
-from PIL import Image
 
 from ..settings.paths import BAIJING_VERIFY_DIR, TEMPLATES_DIR, WORKFLOW_DB_PATH
+from .foreground_flow_runner import _pyautogui_click_guarded
+from .ocr_click_tester import _normalize_text, grab_screen, ocr_window_content
+from .baijing_common import (
+    MAX_CLOSE_ATTEMPTS,
+    _abs_region,
+    _capture_daily_list_snapshot,
+    _click_ratio,
+    _dismiss_overlay,
+    _ensure_window,
+    _ocr_best_match,
+    _pick_result,
+    _record_step_failure,
+    _scene_results,
+    _stopped,
+    _template_center,
+    _wait_page_markers,
+)
+from .baijing_scene import _ensure_main_ui
+from .baijing_tasklist import (
+    DAILY_ACTIVITY_TARGET,
+    _claim_rewards_midway,
+    _ensure_task_list_open,
+    _read_activity_number,
+    _scroll_row_list_to_top,
+    _return_to_task_panel,
+    close_task_list,
+    open_daily_task_list,
+    scan_daily_task_states,
+)
+from .baijing_task_handlers import (
+    _claim_leaf_vein_rewards,
+    _handle_friend_medal_task,
+    _handle_lab_harvest_task,
+    _handle_memory_exp_task,
+    _handle_stage_battle_task,
+    _handle_tea_break_task,
+)
+from .baijing_echo import claim_club_daily_reward
 from .baijing_flow import (
     BAIJING_GAME_KEY,
     _baijing_today_key,
@@ -66,303 +67,7 @@ from .baijing_flow import (
     _window_region,
     detect_baijing_main_ui,
 )
-from .foreground_flow_runner import _pyautogui_click_guarded
-from .ocr_click_tester import _normalize_text, grab_screen, ocr_window_content
 
-# ── 「任务」按钮模板（1920x1080 参考分辨率裁剪，红色角标已抹除） ──
-TASK_BUTTON_TEMPLATE = str(TEMPLATES_DIR / "白荆回廊-任务按钮.png")
-TEMPLATE_REFERENCE_WIDTH = 1920
-TEMPLATE_MATCH_THRESHOLD = 0.82
-
-# 「任务」按钮 OCR 搜索区域（窗口相对比例 fx0, fy0, fx1, fy1）：右侧竖排按钮区。
-# 必须限定右侧——主界面中部「阶段任务154/200」也含「任务」二字。
-TASK_BUTTON_REGION = (0.70, 0.45, 1.00, 0.92)
-# OCR 命中文本黑名单：含这些字样的跳过（防误点「阶段任务」）
-TASK_TEXT_EXCLUDE = ("阶段",)
-
-# 日常任务列表打开后的特征文字（任一命中即认为列表已打开）。
-# **只放面板独有强特征，且任何候选都不能含「任务」二字**——2026-10-21 实锤：
-# 候选里放「日常任务/任务列表/距离任务重置」等含"任务"的词会被 _ocr_best_match
-# 的反向子串规则击穿：主界面右下角「任务」按钮文字只有 2 字，规则
-# "OCR 文本 ∈ 候选 且 ≥2 字符"让它命中任何含"任务"的长候选，
-# _wait_task_list 假阳性判"列表已打开"→ 后续找行全部空转（当天 3/15 根因之一）。
-# 「一键领取/全部领取/领取奖励」只在列表面板出现，主界面没有，保留安全。
-TASK_LIST_MARKERS = (
-    "累计活跃度", "主线指引", "一键领取", "全部领取", "领取奖励",
-)
-# 列表核心特征：只用于"确认已经从子页面回到列表"。不含「一键领取/领取奖励」这类
-# 在弹窗或奖励界面也可能出现的词，避免把别的界面当成列表（2026-10-24）。
-TASK_LIST_CORE_MARKERS = ("累计活跃度", "主线指引")
-# 列表内领取类按钮（先具体后泛化，防「一键领取」被当成单个「领取」）
-CLAIM_ALL_TEXTS = ("一键领取", "全部领取", "一键全领")
-CLAIM_TEXTS = ("领取",)
-# 搜索单个「领取」时要排除的字样（避免点到「一键领取」上重复计数）。
-# 「已领取」是行内**状态文字**不是按钮——2026-10-25 实锤：领取循环把 (750,840) 的
-# 「已领取」标签当「领取」点了 3+ 轮，画面毫无变化，白烧轮次（一轮≈14s）。
-# 真实按钮文字「领取」「领取奖励」都不含"已领取"子串，排除无副作用。
-CLAIM_EXCLUDE = ("一键", "全部", "已领取")
-# 「前往」类任务：只记录不点击（跳转子活动需专门逻辑，暂不自动执行）
-GOTO_TEXTS = ("前往",)
-
-# ── 日常任务静态目录（2026-10-18 从游戏内实测提取；任务项/分值会随版本漂移） ──
-# 2026-10-27 实锤：游戏当天是「完成2次战斗」，目录写的是「完成3次战斗」。
-# 目录只用于跑流程和兜底核算，**活跃度记录必须以面板大数字为准**（见
-# _read_activity_number）；发现对不上时先看 daily_scan_*_日期.jpg 逐屏快照。
-# 每项: key=内部标识, name=任务名, activity=活跃度分值, match=OCR 匹配关键词。
-# OCR 实测坑：「午后茶歇」会被识别成「午后茶憩」、「记忆烙痕提升」会被识别成
-# 「记忆熔痕提开」，关键词一律取稳定片段。
-# 研发室任务的徽章是紫角无数字样式，分值 10 由用户 2026-10-18 确认。
-DAILY_TASK_CATALOG: List[Dict] = [
-    {"key": "login",              "name": "登录游戏",                              "activity": 5,   "match": ["登录游戏"]},
-    # 2026-10-25 实跑截图：日常里同时存在「完成3次战斗」(3/3, 10) 和
-    # 「完成5次战斗」(4/5, 20)。2026-10-27 用户指出战斗项每天可能是 2/3/4 次
-    # 中的一种（不会同时显示）：当天列表实际是「完成2次战斗 (0/2)」，旧目录
-    # 只认「完成3次战斗」→ 匹配不到/靠 OCR 误读成 3/3。这里把 2/3/4 归到
-    # 同一个 10 分槽位（key 保留 battle_3 兼容历史数据），5 次战斗仍是独立 20 分。
-    # 4 次战斗的分值尚未实测，暂按 10；真实活跃度以面板大数字为准。
-    {"key": "battle_3",           "name": "完成2/3/4次战斗",                       "activity": 10,  "match": ["完成2次战斗", "完成3次战斗", "完成4次战斗"]},
-    {"key": "battle_5",           "name": "完成5次战斗",                           "activity": 20,  "match": ["完成5次战斗"]},
-    {"key": "friend_medal",       "name": "赠送1次友情勋章",                       "activity": 10,  "match": ["友情勋章", "勋章"]},
-    {"key": "excellent_road",     "name": "完成1次「卓越道路」",                   "activity": 10,  "match": ["卓越道路"]},
-    {"key": "kill_60",            "name": "累计击败60名敌方目标",                  "activity": 10,  "match": ["击败60", "击败"]},
-    {"key": "lab_harvest",        "name": "在白荆穹顶的初级研发室或高级研发室收获1次产物", "activity": 10,  "match": ["研发室"]},
-    {"key": "tea_break",          "name": "邀请任一同调者共享一次「午后茶歇」",      "activity": 15,  "match": ["午后茶"]},
-    {"key": "gallery_tour",       "name": "完成1次回廊漫巡",                       "activity": 20,  "match": ["回廊漫巡", "漫巡"]},
-    {"key": "imaging_action",     "name": "完成1次任意难度的「显影行动」",          "activity": 5,   "match": ["显影行动"]},
-    {"key": "memory_exp",         "name": "为记忆烙痕提升1次经验",                  "activity": 15,  "match": ["经验"]},
-    {"key": "skill_upgrade",      "name": "同调者的任意非异核技能升级1次",          "activity": 10,  "match": ["非异核", "技能升级"]},
-    {"key": "free_trade",         "name": "完成1次任意难度的「自由贸易」",          "activity": 5,   "match": ["自由贸易"]},
-    {"key": "material_guarantee", "name": "完成1次「定向物资保障」",                "activity": 5,   "match": ["物资保障"]},
-    {"key": "litho_protocol",     "name": "完成1次「光刻协议」",                    "activity": 5,   "match": ["光刻协议"]},
-    {"key": "restroom_mini_game", "name": "游玩一次休息室中任一小游戏",             "activity": 5,   "match": ["小游戏"]},
-]
-# 每日活跃度理论总分（2026-10-18 实测：研发室徽章无数字但分值 10，用户确认）。
-# 实得可超过领满线（用户实测跑完日常到 130）。
-DAILY_ACTIVITY_TOTAL = sum(t["activity"] for t in DAILY_TASK_CATALOG if t["activity"])
-# 每日活跃度领满线：里程碑奖励为 20/40/60/80/100 五档，满 100 即领完全部
-# 日常里程碑奖励（叶脉联结页「日常任务累计活跃度达到100」任务可印证，2026-10-18
-# 用户确认）。进度百分比按 领满线/100 计算，实得超过 100 按 100 记。
-DAILY_ACTIVITY_TARGET = 100
-# task_key → activity 快速查找
-DAILY_ACTIVITY_BY_KEY = {t["key"]: t["activity"] for t in DAILY_TASK_CATALOG}
-# 「白荆穹顶」设施弹窗特征文字（点研发室「前往」后出现，2026-10-18 实测截图）
-# 不能用「白荆穹顶」当弹窗特征：任务行描述「在白荆穹顶的初级研发室…」和收取
-# 成功提示「资源已存入白荆穹顶仓库」都含这四个字，弹窗关掉后仍会被判成"还开着"，
-# 从而多按 ESC 把任务列表一起关掉（2026-10-24 实锤）。
-LAB_DIALOG_MARKERS = ("当前设施生产情况", "一键收取")
-# 弹窗关闭提示文字（X 按钮紧贴其右侧）
-LAB_DIALOG_HINT = "点击按钮或空白区域关闭"
-
-# ── 记忆烙痕经验任务（2026-10-18 用户截图实测） ──
-# 强化弹窗特征（等级提升/特质提升 tab、指定等级、强化费用）
-MEMORY_DIALOG_MARKERS = ("等级提升", "特质提升", "指定等级", "强化费用")
-# 烙痕列表页特征（前往落地页：顶部工具栏）
-MEMORY_LIST_MARKERS = ("只看红点", "排序与筛选", "按等级", "前往技能列表")
-# 详情页「强化烙痕」按钮模板（底部右侧；注意是"烙痕"不是"熔垣"，
-# 2026-10-18 用户指正：低分辨率下图样字容易看错。OCR 对这几个字识别也差，用模板）
-MEMORY_ENHANCE_BUTTON_TPL = str(TEMPLATES_DIR / "白荆回廊-强化烙痕按钮.png")
-# 烙痕列表页候选点击位（窗口相对比例）：2026-10-18 用户截图实测校准。
-# 首卡「第三杯咖啡」(SSR 01级) 名称在 (402,442) @1919x1079 → (0.21, 0.41)。
-# 网格列距约 0.15、行距约 0.38；首卡点不到时依次试后面的卡片。
-MEMORY_LIST_CLICK_CANDIDATES = (
-    (0.21, 0.41),   # 首卡（左上，实测 01 级肯定不会满级）
-    (0.36, 0.41),   # 第二列
-    (0.52, 0.41),   # 第三列
-    (0.21, 0.79),   # 第二行首卡
-    (0.36, 0.79),
-)
-# 详情页「强化烙痕」按钮的 OCR 兜底区域（右下角）。模板失配时用文字确认，
-# OCR 常把「烙痕」认成「熔垣」，两个词都收。
-MEMORY_ENHANCE_BTN_REGION = (0.55, 0.75, 1.00, 1.00)
-# 「指定等级」行：截图上重置中心 (1189,669)/1919x1079 ≈ (0.620,0.620)，
-# OCR 置信度长期只有 0.55（阈值 0.55 边缘），限定区域 + 0.45 阈值降低漏检。
-MEMORY_RESET_REGION = (0.55, 0.58, 0.68, 0.66)
-MEMORY_ENHANCE_TEXTS = ("强化烙痕", "强化熔垣")
-# 「+」按钮相对「重置」的水平偏移（占窗口宽度比例；实测 1425-1190=235px @1919 宽）
-PLUS_BUTTON_DX_RATIO = 0.1225
-# 突破弹窗（2026-11-08 12:41 首跑实锤 #221）：烙痕升到整十级（10/20/30…）时点
-# 「强化烙痕」弹的不是强化窗而是「等级提升」突破确认——顶部页签就叫「等级提升」，
-# 会被 MEMORY_DIALOG_MARKERS 误认成强化窗，随后 重置/+ 全部落空。用户口径：
-# 能突破（确认按钮蓝色可点）就确认后继续强化；材料不够不能突破就取消换一张。
-# 判定标记只在突破窗出现；「等级提升」两个窗都有，绝不能算突破证据。
-MEMORY_BREAKTHROUGH_MARKERS = ("突破效果变化", "烙痕等级上限", "消耗以下材料")
-# 弹窗按钮（窗口比例，2026-11-08 取证帧 @1919x1079）：确认中心 (1173,860) →
-# (0.611,0.796)；取色点在确认文字左侧的按钮底色空白 (1056,860)→(0.55,0.796)；
-# 取消中心 (741,860)→(0.386,0.796)。按钮文字「确 认/取 消」带空格，OCR 匹配
-# 走 _ocr_best_match 的 _normalize_text（去空白），上午 XM「Uni ty」同款坑。
-MEMORY_BREAKTHROUGH_CONFIRM = (0.611, 0.796)
-MEMORY_BREAKTHROUGH_CONFIRM_SAMPLE = (0.55, 0.796)
-MEMORY_BREAKTHROUGH_CANCEL = (0.386, 0.796)
-# 强化弹窗的两个页签（2026-11-11 10:15 取证帧 #271 @1919x1079）：
-# 「等级提升」@(447,206)、「特质提升」@(758,205)。弹窗**默认停在「特质提升」**，
-# 此时画面只有「特质变动/特质升级/消耗材料/当前选择」，没有「指定等级/重置/+」，
-# 直接按 MEMORY_RESET_REGION 找「重置」→ 推算「+」必然落空（用户：切到等级提升页就好）。
-# 「重置/[+]/最大」只存在于「等级提升」页签。区域按 (x0,y0,x1,y1) 窗口比例
-# （_abs_region 的语义，与 MEMORY_RESET_REGION 一致），只圈顶部页签行，
-# 避免正文里的同名词被误点。
-MEMORY_LEVEL_TAB_REGION = (0.15, 0.13, 0.45, 0.26)
-MEMORY_LEVEL_TAB_TEXT = ("等级提升",)
-MEMORY_LEVEL_TAB_FALLBACK = (0.233, 0.191)
-MEMORY_LEVEL_TAB_MARKERS = ("指定等级", "重置", "最大")
-
-# ── 午后茶憩任务（2026-10-18 用户截图实测） ──
-# 流程：任务行「前往」→「是否前往茶憩?」确定 → 角色选择页点首个角色 →
-#       茶憩场景喝茶 → 等待后再来一杯 → 茶憩结束摘要随意点击 → 休息室 → 返回 → 确认 → 主界面
-TEA_CONFIRM_MARKERS = ("是否前往茶憩",)                  # 前往确认弹窗
-# 角色选择页特征。2026-10-25 19:08 实跑稳定命中页底帮助文字
-# 「同调者位阶达到S2后，可以开始提升技能等级。」（conf 0.93），
-# 「位阶」这类短词 OCR 有抖动（同日 17:51 那轮 45s 没命中），补长词兜底。
-TEA_SELECT_MARKERS = ("今日可邀份额", "位阶", "默契值", "同调者位阶")
-# 2026-10-25 19:50 失败截图：点「确定」后有时直接进休息室 3D 场景（不是角色
-# 选择页）。2026-10-26 12:50 进一步实锤：休息室里要点右下「午后茶憩」立牌卡，
-# 点左下角色头像只会进入「关注」特写镜头，茶憩场景永远等不到（休息室判定与
-# 入口坐标见下方「REST_ROOM_*」）。
-TEA_SCENE_MARKERS = ("茶憩纪念函",)                      # 茶憩场景
-TEA_TOPIC_MARKERS = ("选择话题", "结束茶憩")             # 话题菜单（场景中弹出）
-TEA_SUMMARY_MARKERS = ("茶憩结束", "点击退出")           # 结束摘要
-TEA_DRINK_TEXTS = ("喝茶", "再来一杯", "请喝茶", "干杯")  # 喝茶交互文字（场景内动态出现）
-# 2026-11-03 实锤：点首个角色卡后画面停在「20 个文字区域」的页面 23 秒（不是茶憩
-# 场景），之后按老逻辑点底部对话框 (0.50,0.92)，反而把页面退回休息室。这里只认
-# 语义明确的词，**不碰「确认」**——同页有「将离开休息室」的确认框，误点会直接
-# 退回上一层。
-# 2026-11-07 13:20 当帧（20261107_132050）修正认识：点角色卡后页面根本不跳页——
-# 当帧就是角色选择页本身（首位角色卡已打勾、今日可邀份额 3/3、底部说明文字
-# 「每名同调者一天仅能邀请一次…」就在这页上），之前认定的"角色详情页"多半就是它。
-# 真正的前进按钮是右下「喝茶」圆钮，把它加进候选（OCR 哪天认出竖排字就直接点）。
-TEA_INVITE_TEXTS = ("喝茶", "邀请", "开始茶憩", "一同品茶", "邀约")
-# 2026-11-04 实锤：角色详情页的说明文字
-# 「每名同调者一天仅能邀请一次，重复邀请请使用通用邀请函」也含「邀请」，
-# 旧逻辑按子串命中后点了这行正文，页面原地不动 → 茶憩永远进不去。
-# 邀请入口只认短按钮名；含这些字样的一律不是按钮。
-TEA_INVITE_EXCLUDE_TEXTS = ("一天仅能邀请一次", "重复邀请", "邀请函", "邀约函")
-# 「邀请函」兜住一族道具名：通用邀请函/定向邀请函……11-06 09:13 实锤 legacy 子串
-# 匹配把详情页道具「定向邀请函」(0.82) 当邀请按钮点了（5 个字，≤12 过滤拦不住），
-# 等于没点，之后喝茶轮询在错误页面上盲点漫游。真正的按钮是「邀请/开始茶憩」。
-TEA_INVITE_MAX_CHARS = 12
-# 关键点击位（窗口相对比例，实测 @1919x1079）
-TEA_CONFIRM_OK = (0.623, 0.634)          # 前往确认-确定 (1196,684)
-TEA_FIRST_CHARACTER = (0.412, 0.417)     # 角色选择页首个角色卡 (790,450)
-# 2026-11-07 13:20 当帧（960x540）实测：角色选择页右下「喝茶」圆钮中心。竖排
-# 艺术字，当帧 OCR 15 个文字区域里完全没有它——OCR 候选命中不了，只能按比例兜底。
-TEA_SELECT_DRINK_RATIO = (0.827, 0.800)
-TEA_FIRST_TOPIC = (0.753, 0.360)         # 话题菜单第一个话题 (1445,388)
-TEA_DIALOGUE_CLICK = (0.50, 0.92)        # 对话框区域（点击推进对话）
-TEA_SUMMARY_CLICK = (0.50, 0.60)         # 摘要区域（点击退出）
-# 喝茶轮数与每杯间隔（用户流程：喝一次 → 等待 → 再来一杯）
-TEA_DRINK_ROUNDS = 2
-TEA_DRINK_WAIT_SEC = 10.0
-TEA_DRINK_POLL_SEC = 20.0
-# 茶憩要经过游戏加载：2026-10-20 实测 ASHECHOES 加载条从 47% 到 99% 超过 20s，
-# 原先 10s 的等待会把“还在加载”误判成“没进角色选择页”，随后点返回取消进入。
-TEA_SELECT_TIMEOUT_SEC = 45.0
-TEA_SCENE_TIMEOUT_SEC = 25.0
-
-# ── 休息室 / 关注特写：ESC 无效的场景态（2026-10-26 实锤修复） ──────────
-# 12:50 那轮茶憩掉进休息室后，代码点了左下角色头像 → 进入「关注」特写（画面只剩
-# 莫红袖 + 右上「退出关注」），场景/摘要都等不到；随后 _return_to_task_panel 连按
-# 5 次 ESC 也出不来（这两个界面都不吃 ESC），任务列表反复重开失败，整轮日常只剩
-# 2/16、活跃度 20/100，俱乐部/零售/叶脉联结全部被拖死。
-# 用户 12:53 截图给出正确操作：茶憩入口是右下「午后茶憩」立牌卡，离开要点左上
-# 「返回」再在确认框点「确认」。坐标按该截图（960x540）实测换算。
-REST_ROOM_MARKERS = ("拜访他人", "布置模式")     # 休息室独有；「午后茶憩」任务行里也有，不能当特征
-REST_ROOM_TEA_ENTRY = (0.883, 0.830)             # 右下「午后茶憩」立牌卡中心 (848,448)
-REST_ROOM_BACK = (0.101, 0.048)                  # 左上「返回」文字中心 (97,26)
-REST_ROOM_BACK_REGION = (0.0, 0.0, 0.20, 0.15)   # 「返回」搜索区（左上角，避开其它文字）
-REST_ROOM_LEAVE_CONFIRM = (0.623, 0.634)         # 「将离开休息室」确认框「确认」（与茶憩确认框同布局）
-FOCUS_MODE_MARKERS = ("退出关注",)               # 角色特写镜头，右上「退出关注」
-FOCUS_MODE_REGION = (0.70, 0.0, 1.0, 0.25)       # 「退出关注」在右上角
-
-# ── 场景登记表补充（2026-10-27，失败取证驱动）─────────────────────────
-# 烙痕详情页：记忆烙痕经验任务的强化画面。10-27 10:18 取证实锤：+1/确认都点中
-# 了（画面出现"等级提升"），但页面不在登记表里 → 恢复认不出 → 连环拖死茶憩/
-# 叶脉联结。特征取详情页独占的页签文字。
-# 2026-10-29 20:03 取证帧（强化烙痕·技能同调页签）没有「特质提升/烙痕等级」，
-# 只有页签「基础属性｜漫巡属性｜漫巡技能｜烙痕唤醒｜技能同调」→ 补两个独占页签。
-# 「基础属性」「技能同调」比较通用，不用；「漫巡属性」「烙痕唤醒」只在详情页出现。
-MEMORY_DETAIL_MARKERS = ("特质提升", "烙痕等级", "漫巡属性", "烙痕唤醒")
-# 叶脉联结计划升级的整屏动画：2026-10-29 20:12 取证帧只有「16｜计划等级提升」，
-# 点击屏幕任意位置继续，不处理会一直挡着下面的页面。
-LEVEL_UP_MARKERS = ("计划等级提升",)
-# 烙痕列表页：2026-10-30 10:25 取证（记忆烙痕任务从详情返回后卡在这里）。
-# 独占特征取顶部工具栏；左上「返回」回任务面板。
-MEMORY_LIST_MARKERS = ("前往技能列表", "只看红点", "排序与筛选")
-# 定巡之礼活动弹窗：2026-10-30 10:35 取证（流程漂进活动页认不出）。
-# 没有「返回」，右上角有红色 X；坐标按 1919x1079 截图换算。
-# 2026-11-06 09:15 再取证（flow_failures #197，恢复途中加载完弹出的同款弹窗）：
-# 第 2 天「可领取」@(630,762) conf 0.75，直接 X 等于丢奖——2026-11-07 用户拍板
-# 「遇到就给他领了呗」：先领再关。
-EVENT_DIALOG_MARKERS = ("定巡之礼",)
-EVENT_DIALOG_CLOSE = (0.913, 0.239)
-EVENT_DIALOG_CLAIM_MARKERS = ("可领取",)   # 只在规则命中定巡之礼后查找，不会误伤其它页面
-# 活动公告横幅（2026-11-04 #163 取证：生死轮回×叶脉联结计划，加载完弹出；
-# 用户 2026-11-07 拍板「他只是个活动公告，点一下就好了」）。特征只取公告独有
-# 的关闭提示/勾选文案——「叶脉联结计划」绝不能当特征：叶脉联结页面上就有这
-# 五个字（10-20 曾实锤误命中），拿它当特征会在领叶脉奖励时误点空白。
-# 公告是模态的「点击空白区域关闭」：点左边缘空白（11-04 帧 x<340/1920 无
-# 任何 UI），不碰横幅本体（正文/「前往获取」点下去会进活动页）。
-EVENT_ANNOUNCE_MARKERS = ("点击空白区域关闭", "本期不再显示")
-EVENT_ANNOUNCE_BLANK = (0.10, 0.50)   # 11-04 帧实测：横幅左界 ≈ x0.18，左边缘是空白
-# 加载过场（10-31/11-01/11-03/11-04/11-06 五次「未匹配任何已知场景」失败全是它，
-# #120/#129/#153/#163/#197）：提示文字每日轮换（刻印属性/漫巡中/真实伤害…）、
-# 进度 99%/%86 不稳，都不能当特征。只等待不点击——加载中点哪都无效。
-# 2026-11-10 10:00:32 实锤：只用拉丁 logo「ASHECHOES」当特征当天 **0 次命中**。
-# 生产 onnxocr v6 把中央 logo 认成「白荆廊」(0.85)/「白荆回廊」(0.71)/「白荆回廓」，
-# 拉丁小字整帧被读成「24919904」，同帧只有 47%→98% 和轮换提示。故把中文 logo
-# 的三种实测 OCR 变体全部登记，拉丁词保留给能认出来的帧。**别用泛化短词「白荆」**：
-# 固定页面上若常驻这俩字，加载规则会一直命中，_scene_exit_loading 白等满 60s；
-# panel/main 在 _match_scene_rule 之前先短路，但仍只挑加载页独占的中央大字。
-LOADING_SCREEN_MARKERS = ("ASHECHOES", "ASH ECHOES", "白荆廊", "白荆回廊", "白荆回廓")
-LOADING_WAIT_TIMEOUT_SEC = 60.0
-# 茶憩 3D 房间：任务流程用「茶憩纪念函」当进场特征，但 10-27 10:22 的当帧
-# OCR 只认出房间常驻陈设（飞镖/棒球），纪念函没进识别结果——登记表用并集兜底，
-# 任意命中即判茶憩房间（话题名"古典余温"每日轮换，不能当特征）。
-TEA_ROOM_REGISTRY_MARKERS = ("茶憩纪念函", "飞镖", "棒球")
-# 有猫零售页：10-26 20:10 取证，流程漂进零售页后认不出（当帧：返回｜有猫推荐｜
-# 精选礼包｜有猫精选｜每日外勤赠礼）。左侧栏目文字是该页独占，主界面没有。
-CAT_RETAIL_MARKERS = ("有猫精选", "精选礼包", "有猫推荐")
-
-# ── 显影行动任务（2026-10-18 用户截图实测） ──
-# 流程：任务行「前往」→ 关卡选择页（E-1~E-10）→ 点右下「快速战斗」→
-#       「快速战斗设置」弹窗（指定次数默认 1）→ 再点弹窗内「快速战斗」→
-#       战斗结算页随意点击 → ESC 逐层返回。
-IMAGING_STAGE_MARKERS = ("进入关卡", "行动力")              # 关卡选择页
-IMAGING_DIALOG_MARKERS = ("快速战斗设置", "指定次数")        # 快速战斗设置弹窗
-IMAGING_SETTLEMENT_MARKERS = ("任务完成", "战斗结算", "结算", "挑战成功", "获得道具")
-# 关键点击位（窗口相对比例，实测 @1919x1079）
-IMAGING_QUICK_BATTLE_BTN = (0.784, 0.893)   # 关卡页「快速战斗」(1505,963)
-# 2026-11-03 实锤：物资保障点上面这个固定比例，弹出的是「进入关卡/行动力」确认框，
-# 不是「快速战斗设置」——同一天的显影/自由贸易/光刻都正常，说明不同关卡页布局不一样，
-# 比例落点会压到邻居按钮。有文字就先点 OCR 命中的 center，比例只做兜底。
-IMAGING_QUICK_BATTLE_TEXTS = ("快速战斗",)
-IMAGING_QUICK_BATTLE_REGION = (0.55, 0.72, 1.0, 1.0)   # 关卡页右下按钮区
-IMAGING_DIALOG_OK_BTN = (0.617, 0.799)      # 弹窗内「快速战斗」确认 (1185,862)
-# 2026-10-25 用户弹窗截图（1707x960）：指定次数 1 右侧第一个蓝色圆钮是「+」，
-# 再右边是「最大」。点一次 + 即 1→2；四个关卡里只给第一场加一次，凑满 5 次战斗。
-IMAGING_DIALOG_PLUS_BTN = (0.580, 0.570)
-# 只用于 OCR 复核「指定次数」的值，避免窗口其他数字（行动力/49 等）干扰
-IMAGING_DIALOG_COUNT_REGION = (0.43, 0.50, 0.57, 0.63)
-IMAGING_ANYWHERE_CLICK = (0.50, 0.50)       # 结算页随意点击（屏幕中心）
-# 关卡战斗类任务清单（操作相同，2026-10-18 用户确认）：
-# (task_key, 行内关键词, 展示名)
-STAGE_BATTLE_TASKS = (
-    ("imaging_action", "显影行动", "显影行动"),
-    ("free_trade", "自由贸易", "自由贸易"),
-    ("material_guarantee", "物资保障", "定向物资保障"),
-    ("litho_protocol", "光刻协议", "光刻协议"),
-)
-
-# ── 叶脉联结领取（2026-10-18 用户截图实测） ──
-# 日常完毕后：点左侧「叶脉联结」tab →「任务总览」→「全部领取」。
-# 叶脉联结页含本日/本周/本期任务（如「日常任务累计活跃度达到100」），
-# 奖励与日常 tab 不互通，必须单独领。
-LEAF_TAB_TEXTS = ("叶脉联结", "叶脉连结")              # 左侧 tab（游戏内是"联结"）
-LEAF_PAGE_MARKERS = ("本日任务", "联结计划", "任务总览", "当前经验")  # 叶脉联结页特征
-LEAF_OVERVIEW_BTN = (0.384, 0.793)   # 任务总览 (736,856)
-LEAF_CLAIM_ALL_BTN = (0.709, 0.796)  # 全部领取 (1360,859)
-# 「叶脉联结」tab 搜索区域：只取左侧 tab 列，排除底部 VEINOS 图标
-# （2026-10-19 曾把 (188,848) 的 logo 误认成「叶脉联结计划」；该点在 fy≈0.79）
-LEAF_TAB_REGION = (0.0, 0.20, 0.16, 0.72)
-LEAF_TAB_FALLBACK = (0.10, 0.55)     # 实测 tab 中心 (208,596)@1919x1079 → (0.108,0.553)
 # ── 有猫零售「每日外勤赠礼」免费礼包（2026-10-18 用户截图实测） ──
 # 流程：主界面底栏「有猫零售」→ 左侧「精选礼包」→ 顶部 tab「有猫精选」→
 #       首张卡「每日外勤赠礼」点底部「免费」→ 购买弹窗点「购买」→ 关奖励弹窗 → 返回主界面。
@@ -375,231 +80,96 @@ LEAF_TAB_FALLBACK = (0.10, 0.55)     # 实测 tab 中心 (208,596)@1919x1079 →
 # (0.267,0.833)。只认卡底那个 → 搜索区域限定 fy 0.70~0.90（角标与弹窗里的
 # 「免费」(0.597,0.625) 都被排除在外）。
 SHOP_ENTRY_TEXTS = ("有猫零售",)
+
+
 # 主界面底栏区域：夹在「精神深潜」(0.595) 与「活动中心」(0.828) 之间
 SHOP_ENTRY_REGION = (0.62, 0.88, 0.80, 1.00)
+
+
 SHOP_ENTRY_FALLBACK = (0.712, 0.935)
+
+
 # 零售页特征文字（不用「客服」：主界面左下角有「Q客服」，子串匹配会假命中）
 SHOP_PAGE_MARKERS = ("有猫推荐", "精选礼包", "已购礼包自动收起", "X晶体验值")
+
+
 SHOP_SIDE_TEXTS = ("精选礼包",)
+
+
 SHOP_SIDE_REGION = (0.0, 0.10, 0.20, 0.95)   # 左侧功能列
+
+
 SHOP_SIDE_FALLBACK = (0.105, 0.217)
+
+
 SHOP_TAB_TEXTS = ("有猫精选",)
+
+
 SHOP_TAB_REGION = (0.20, 0.15, 0.80, 0.26)   # 顶部 tab 行
+
+
 SHOP_TAB_FALLBACK = (0.670, 0.203)
+
+
 # 「有猫精选」页首张卡的名字（用它确认 tab 切对了：停在「活动限时」时首卡是「集结共鸣助力」）
 SHOP_FREE_PACK_TEXTS = ("每日外勤赠礼",)
+
+
 # 首张卡区域 + 「免费」按钮搜索区域（含礼包名/剩余/底部价格按钮，不含顶部角标）。
 # 整排搜索而非只搜首列：礼包顺序若变化仍能点到卡底价格按钮，fy 与弹窗里的「免费」错开。
 SHOP_FREE_BTN_REGION = (0.18, 0.70, 1.00, 0.90)
+
+
 SHOP_FREE_BTN_TEXTS = ("免费",)
+
+
 # 已买完时的字样（找不到「免费」时用来区分"已领取"与"没找到"）
 SHOP_SOLD_OUT_TEXTS = ("剩余0件", "已售罄", "已购买", "已领完")
+
+
 # 购买确认弹窗特征（点卡底「免费」后出现）。
 # **不要把「购买」当弹窗特征**：买完后卡片按钮变「已购买」，子串匹配会永远命中，
 # 弹窗判定永远为"仍在"→ 每次都判失败重试。用弹窗独有的「内容:」「合计」。
 SHOP_DIALOG_MARKERS = ("内容", "合计")
+
+
 SHOP_DIALOG_REGION = (0.15, 0.20, 0.92, 0.80)   # 弹窗覆盖范围
+
+
 SHOP_DIALOG_BUY_TEXTS = ("购买",)
+
+
 SHOP_DIALOG_BUY_REGION = (0.35, 0.55, 0.95, 0.85)
+
+
 SHOP_BUY_FALLBACK = (0.606, 0.707)   # (1162,763)@1919x1079（弹窗截图底部少 11px，按窗口高折算）
+
+
 # 「最大」购买数量按钮：弹窗内 + 号右侧的蓝色双箭头图标（无文字可 OCR）。
 # 2026-10-20 用户反馈——不点它每次都只买 1 件。实测中心 (1368,566)@1919x1079。
 # 仅俱乐部商店（baijing_shop）使用；每日免费礼包无数量选择，不要套用。
 SHOP_MAX_QTY_FALLBACK = (0.713, 0.524)
+
+
 # 零售页左上「返回」
 SHOP_BACK_REGION = (0.0, 0.0, 0.20, 0.10)
+
+
 # 打开零售页的最大尝试次数
 SHOP_MAX_ATTEMPTS = 2
 
-# ── 俱乐部每日任务（2026-10-18 用户截图实测） ──
-# 流程：主界面左上角第 4 个图标（俱乐部）→ 弹「新物品已存入S.E.E.D.仓库」点空白继续 →
-#       俱乐部页面点「俱乐部每日任务」卡片领取 → 卡片变「今日任务已完成」→ 返回主界面。
-# 下面比例全部来自 1919x1079 实测截图 + RapidOCR 探针复核：
-#   入口图标 (0.183,0.047)（图标无文字，靠模板定位，比例兜底；红点已 inpaint 抹除，
-#   整图只有一个峰 conf=0.924，不会误点旁边的邮件/好友/铃铛图标）
-#   俱乐部页 返回 (0.102,0.049)｜俱乐部每日任务 卡片标题 (0.555,0.294)｜卡片中心 (0.573,0.381)
-#   领完后卡片显示「今日任务已完成」(0.573,0.381)
-#   页面特征：俱乐部等级 0.103,0.372｜俱乐部首席 0.102,0.578｜共响金 0.087,0.510｜
-#             俱乐部活动 0.720,0.292｜俱乐部商店 0.898,0.931｜俱乐部成员 0.563,0.932
-CLUB_ENTRY_TEMPLATE = str(TEMPLATES_DIR / "白荆回廊-俱乐部入口.png")
-CLUB_ENTRY_REGION = (0.13, 0.00, 0.24, 0.10)   # 左上角图标区（只放第 4 个图标，排掉邻居）
-CLUB_ENTRY_FALLBACK = (0.183, 0.047)
-# 页面特征：**不要用底部「俱乐部成员/俱乐部商店/俱乐部支援」**——弹「新物品已存入
-# 仓库」提示时这三行照样能被 OCR 读到，会把弹窗状态误判成已进页面，后面点卡片会被
-# 弹窗挡住。用「弹窗期间认不出的那几个字」当特征（实测 210011 弹窗帧全都没认出来）。
-CLUB_PAGE_MARKERS = ("俱乐部每日任务", "俱乐部活动", "俱乐部等级", "俱乐部首席", "共响金")
-CLUB_DAILY_TASK_TEXTS = ("俱乐部每日任务",)
-CLUB_DONE_TEXTS = ("今日任务已完成",)
-CLUB_CLAIM_TEXTS = ("领取",)
-CLUB_CARD_REGION = (0.45, 0.25, 0.75, 0.52)   # 每日任务卡片
-CLUB_CARD_FALLBACK = (0.573, 0.381)
-# 弹窗/加载中的空白推进点（顶部居中空白，避开返回按钮与货币栏）
-CLUB_BLANK_CLICK = (0.50, 0.13)
-CLUB_BACK_REGION = (0.0, 0.0, 0.20, 0.10)
-CLUB_SNAPSHOT_PREFIX = "club_daily"
 
-# ── 俱乐部活动「回声猎区」分支入口（2026-11-11 用户截图实测，活动重置剩余 12 天） ──
-# 俱乐部页右侧「俱乐部活动」卡片整张可点：卡片边界 frac x 0.484~0.967 / y 0.264~0.497，
-# 「回声猎区」大字标题中心 ≈ (0.819, 0.370)。分支只做"检测入口 → 点进活动页 →
-# 快照取证 → 立即退出"，活动内容（刷本/领奖）未实现，等实机探明活动页布局再补。
-CLUB_ACTIVITY_ECHO_TEXTS = ("回声猎区",)
-# 检测区域限定在活动卡片内（顶部避开「今日俱乐部奖励已领取」横幅 y≈0.215~0.245）；
-# 单词检测但带区域限定（页面判定铁律允许模式：标题+区域限定），且 OCR 未命中
-# **不做比例盲点**——活动结束后卡片可能消失/换内容，瞎点会点进未知页面。
-CLUB_ACTIVITY_DETECT_REGION = (0.50, 0.26, 1.0, 0.52)
-CLUB_ACTIVITY_SNAPSHOT_PREFIX = "club_activity_echo"
-
-# ── 回声猎区内容（2026-11-13 用户实机截图实测：A~E 顺序解锁，boss 暂不打） ──
-# 用户拍板口径：「先打 abcde 按顺序打，点进去是编队选择页面，可以复用拟合回归」。
-# 链路：地图点节点标签 → 右侧详情面板「开始收录」→ 编队页（拟合回归同款：
-# 作战开始 → [布阵页] → 开始战斗 → 挂机 → 结算）→ 回地图 → 下一个节点。
-ECHO_MAP_TITLE = ("回声猎区",)
-# 地图页判定 = 标题 + ≥1 地图独有词（双证据，铁律禁单标题——俱乐部页入口卡片
-# 也有「回声猎区」四个字；证据 = 2026-11-13 用户地图页截图）。
-ECHO_MAP_BODY = ("纯净回声", "重置时间剩余", "猎区累计分贝奖励")
-# 节点标签「纯净回声·X」定位：优先信 OCR 文本里的字母；字母认不全时按 x 从左
-# 到右对应 A~E（两张截图 x 序严格递增）。**禁固定比例兜底**——选中节点后地图
-# 会平移（A 标签 11-13 两张截图分别在 x≈0.107 / x≈0.046），比例必漂。
-ECHO_NODE_LABEL = "纯净回声"
-ECHO_NODE_LETTERS = ("A", "B", "C", "D", "E")
-# 节点标签搜索区：地图中下部，右界 0.66 避开右侧详情面板（面板左缘 ≈0.68，
-# 面板标题也叫「纯净回声·X」，不避开会把面板标题混进节点序）。
-ECHO_NODE_REGION = (0.0, 0.35, 0.66, 0.95)
-# 详情面板「开始收录」按钮：OCR 优先，比例兜底 = 11-13 截图按钮中心 (1620,985)；
-# 搜索区 y≥0.55 避开面板上部「关卡详情/推荐刻印评价」。
-ECHO_CLAIM_TEXTS = ("开始收录",)
-ECHO_CLAIM_FALLBACK = (0.844, 0.912)
-ECHO_CLAIM_REGION = (0.60, 0.55, 1.0, 1.0)
-# 「重置时间剩余N天」→ 已清标记过期日；读不到按 3 天保守失效（宁可重打不可漏打）
-ECHO_RESET_RE = re.compile(r"重置时间剩余\s*(\d+)\s*天")
-ECHO_RESET_FALLBACK_DAYS = 3
-ECHO_META_KEY = "baijing_echo_zone:cleared"   # meta 存 JSON {"period_end","cleared"}
-# 等待/超时（秒）
-ECHO_WAIT_MAP = 25.0         # 俱乐部页 → 猎区地图（有过场加载）
-ECHO_WAIT_PANEL = 6.0        # 点节点标签 → 详情面板出现（锁定节点无面板）
-ECHO_HEARTBEAT_SEC = 20.0    # 战斗挂机心跳
-ECHO_BATTLE_TIMEOUT = 480.0  # 单节点战斗上限（拟合 25 波 420s，boss 级留余量）
-
-# ── 中央 boss「不协和音·鱼叉将军」+ 奖励领取（2026-11-14 提权会话实测） ──
-# boss 是计分战不是胜负战：按钮叫「开始降噪」非「开始收录」，产出「有效分贝/
-# 总分贝」计入个人声量；面板左侧「个人声量奖励」阶梯 1000~9000 按档领取。
-ECHO_BOSS_TITLE = "不协和音"          # boss 名：地图标签与面板标题同名（禁单标题判页）
-# boss 面板判定 = 标题 + ≥1 面板独有词。地图点 boss 标题只展开「已收录」条
-# （无面板独有词，不会误判成面板）；战后总结页无 boss 标题，同样不匹配。
-ECHO_BOSS_PANEL_MARKS = ("开始降噪", "重新降噪", "快速降噪", "本期最高分贝", "个人声量奖励")
-ECHO_BOSS_FIGHT_TEXTS = ("开始降噪",)
-ECHO_BOSS_FIGHT_DONE_MARKS = ("重新降噪", "快速降噪")  # 在场 = 本期已打过，跳过战斗
-ECHO_BOSS_SCORE_TOP_TIER = 9000       # 声量阶梯顶档；本期最高分贝达标 → 战斗无收益跳过
-# boss 图标比例（点标题只弹「已收录」条时点图标开面板；实测中心 (842,430)）
-ECHO_BOSS_ICON_FALLBACK = (0.439, 0.398)
-ECHO_BOSS_FIGHT_FALLBACK = (0.725, 0.876)   # 「开始降噪」按钮（实测 (1392,946)）
-ECHO_BOSS_BACK_FALLBACK = (0.101, 0.047)    # boss 面板/总结页左上「返回」（实测 (193,51)）
-# 声量阶梯金额列：纯数字 9000~1000 限 x<0.20（避开右侧本期/今日分贝与排名数值）
-ECHO_BOSS_LADDER_REGION = (0.0, 0.28, 0.20, 0.88)
-ECHO_BOSS_LADDER_TIERS = ("9000", "7000", "5000", "3000", "1000")
-# 金额 → 奖励图标点击偏移（实测「7000」(145,477) → 图标 (263,497)）
-ECHO_BOSS_LADDER_CLICK_OFFSET = (118, 20)
-# OCR 认不出档位时的固定比例兜底（面板布局稳定，无地图平移问题）
-ECHO_BOSS_LADDER_FALLBACK = ((0.137, 0.345), (0.137, 0.460), (0.136, 0.572),
-                             (0.139, 0.688), (0.138, 0.802))
-ECHO_BOSS_SETTLE_TIMEOUT = 720.0      # boss 计分战实测 ~4min（开场 CG ~90s），留足余量
-# 「编队成员数量不足，是否自动编队？」弹窗（boss 编队页常为空，11-14 实锤）
-ECHO_AUTOFORM_TEXTS = ("编队成员数量不足",)
-ECHO_AUTOFORM_CONFIRM_FALLBACK = (0.623, 0.632)   # 弹窗「确认」（实测 (1196,683)）
-# 地图左下「猎区累计分贝奖励」页：入口 OCR 定位（禁盲点），「一键领取」幂等
-ECHO_MAP_REWARD_ENTRY = ("猎区累计分贝奖励",)
-ECHO_MAP_REWARD_CLAIM_ALL = ("一键领取",)
-ECHO_MAP_REWARD_CLAIM_ALL_FALLBACK = (0.801, 0.812)   # 实测 (1538,877)
-ECHO_MAP_REWARD_CLOSE_FALLBACK = (0.832, 0.171)       # 奖励页右上 X（实测 (1597,185)）
-
-# ── 友情勋章（2026-10-20 用户实测截图） ──
-# 主界面左上角功能图标行：设置(0.052) / 邮件(0.095) / 好友(0.138) / 俱乐部(0.183)。
-# 好友图标无文字，按实测比例点击；好友页顶部右侧「一键领取/赠送」用 OCR 定位。
-# 好友页特征：左侧「好友列表」+ 右上「一键领取/赠送」。
-FRIEND_ENTRY_FALLBACK = (0.138, 0.047)
-FRIEND_PAGE_MARKERS = ("好友列表", "一键领取/赠送")
-FRIEND_GIFT_TEXTS = ("一键领取/赠送", "一键领取赠送", "一键领取", "一键赠送")
-# 点击「一键领取/赠送」后的结果弹窗按钮（按优先级给 OCR 匹配）
-FRIEND_POPUP_TEXTS = ("确定", "确认", "知道了", "关闭", "点击屏幕继续", "收下")
-# 弹窗按钮搜索区（放宽到接近全屏中部，兼容底部确认按钮）
-FRIEND_POPUP_REGION = (0.15, 0.12, 0.85, 0.92)
-# 失败提示只在更小的中部区域判断，且只用赠送独有词组，避免好友签名误伤
-FRIEND_POPUP_TEXT_REGION = (0.20, 0.18, 0.80, 0.82)
-FRIEND_POPUP_FAILURE_TEXTS = (
-    "赠送失败", "领取失败", "赠送次数", "已达上限", "已用完", "没有好友", "无法赠送",
-)
-
-# 任务行区域（窗口相对比例）：右侧列表区，避开左侧 tab/活跃度面板和底部固定栏
-TASK_ROW_REGION = (0.42, 0.12, 1.00, 0.80)
-# 「累计活跃度」大数字区域（窗口相对比例）：每日任务面板顶部的圆形数字。
-# 2026-10-27 实测 480x270 验证图中心 (148,66) → (0.308,0.244)，960x540 列表
-# 快照同位置；区域内只有大数字，不会碰到左侧 tab / 下方里程碑奖励卡。
-ACTIVITY_NUMBER_REGION = (0.22, 0.15, 0.42, 0.34)
-# 面板特征：只有这些字样在屏上才认为大数字来自每日任务面板。
-# 防止面板被关掉后，把主界面/其它页面同区域里的数字误当活跃度。
-ACTIVITY_PANEL_MARKERS = ("累计活跃度", "主线指引", "距离任务重置", "一键领取")
-# 活跃度合理上限：当前版本理论总分 160，留余量；防止把道具图标上的 1000
-# 或其它界面数字当成活跃度。
-ACTIVITY_NUMBER_MAX = 300
-# 面板数字有入场动画（刚打开时会从 0 涨到真实值），多次读取取非零最大值。
-ACTIVITY_NUMBER_ATTEMPTS = 3
-ACTIVITY_NUMBER_INTERVAL = 0.8
-# 左侧 tab 列区域（用于确保停在「日常」页）
-TAB_COLUMN_REGION = (0.0, 0.15, 0.28, 0.85)
-# 滚动扫描：鼠标悬停位置取列表区中心，每次滚动量与最大滚动次数
-# TASK_SCROLL_STEPS 语义 = 滚轮格数（负数向下），经 _wheel_real 逐格发送 ±120
-TASK_SCROLL_STEPS = -3
-TASK_SCROLL_MAX = 5
-
-# ── 滚轮发送参数（2026-10-19 修复滚动失效） ──
-# 根因：pyautogui.scroll(-3) 在 Windows 上等价于
-# mouse_event(MOUSEEVENTF_WHEEL, dwData=-3)，而一格滚轮是 WHEEL_DELTA=120——
-# 不足 1/40 格，Unreal/Slate 列表积累不到阈值直接不动（2026-10-18/19 连续两天
-# 6 屏 OCR 完全相同的实锤）。ok-ef/ok-ww 的可靠做法（参考实现）：
-#   1. 发送前激活游戏窗口（try_activate / active_and_send_mouse_delta）
-#   2. 真实光标 SetCursorPos 落位并驻留（run_at_window_pos 驻留 0.5s）
-#   3. 逐格发 ±WHEEL_DELTA（mouse_event / mouse.wheel）
-#   4. PostMessage WM_MOUSEWHEEL 到窗口兜底（wParam=MAKELONG(0, 120*n),
-#      lParam=MAKELONG(客户区x, 客户区y)）
-#   5. 调用方用 OCR 验证列表内容真的变了，没变就升级/止损，不烧无效屏
-WHEEL_NOTCH = win32con.WHEEL_DELTA           # 120，一格滚轮
-SCROLL_CURSOR_DWELL = 0.3                    # 光标落位后驻留，等游戏注册 hover
-SCROLL_NOTCH_PAUSE = 0.06                    # 逐格滚轮之间的间隔
-SCROLL_POST_DELAY = 1.2                      # 滚轮发完等列表滚动动画稳定
 
 # 列表内操作最大轮数（每轮最多执行一个动作）
 MAX_LIST_ROUNDS = 12
-# 打开列表的最大尝试次数（点击「任务」→等列表出现）
-MAX_OPEN_ATTEMPTS = 3
-# 关闭列表回到主界面的最大尝试次数
-MAX_CLOSE_ATTEMPTS = 3
-
-# 任务列表快照（压缩 JPEG，按日期覆盖，便于日常核对流程是否导航正确）
-DAILY_LIST_SNAPSHOT_MAX_WIDTH = 960
-DAILY_LIST_SNAPSHOT_QUALITY = 72
 
 
-def _record_step_failure(logger: logging.Logger, hwnd, step: str, detail: str) -> None:
-    """白荆各步骤失败时补一条结构化失败记录（截图 + 当帧文字），供事后聚合分析。"""
-    try:
-        from .flow_diagnostics import record_failure
-
-        record_failure(
-            logger,
-            flow_key="BaiJingDaily",
-            step=step,
-            error=detail,
-            hwnd=hwnd,
-            game_key=BAIJING_GAME_KEY,
-            save_image=bool(hwnd),
-            extra={"kind": "baijing_daily_step"},
-        )
-    except Exception as e:
-        logger.debug(f"[白荆回廊·日常] 失败记录写入失败（已忽略）: {e}")
 
 
 def _daily_gift_meta_key() -> str:
     return f"baijing_daily_gift:{_baijing_today_key()}"
+
+
 
 
 def _daily_gift_marked_done() -> bool:
@@ -612,6 +182,8 @@ def _daily_gift_marked_done() -> bool:
         return False
 
 
+
+
 def _mark_daily_gift_done(logger: logging.Logger) -> None:
     try:
         from ..storage.workflow_db import WorkflowDB
@@ -621,2339 +193,6 @@ def _mark_daily_gift_done(logger: logging.Logger) -> None:
         logger.debug(f"[白荆回廊·日常] 写入每日礼包 meta 失败（已忽略）: {e}")
 
 
-def _baijing_task_status_today(task_key: str) -> Optional[str]:
-    """读今日 daily_progress 里白荆某任务的最终状态（读不到/异常返回 None）。
-
-    用于"一天只能做一次"的动作（如每日免费礼包）在 force_rerun/重复运行时
-    避免把"已领过导致入口消失"误报成失败（2026-10-25 17:49 实锤）。
-    """
-    try:
-        from ..services.daily_progress_tracker import get_tracker
-
-        snap = get_tracker(str(WORKFLOW_DB_PATH)).load_today()
-        rec = snap.games.get(BAIJING_GAME_KEY)
-        if not rec:
-            return None
-        for task in rec.tasks:
-            if task.task_key == task_key:
-                return task.status
-    except Exception:
-        return None
-    return None
-
-
-def _stopped(stop_check) -> bool:
-    try:
-        return bool(stop_check and stop_check())
-    except Exception:
-        return False
-
-
-def _abs_region(hwnd, frac: Tuple[float, float, float, float]) -> Optional[Tuple[int, int, int, int]]:
-    """窗口相对比例区域 → 屏幕绝对区域 (left, top, width, height)。窗口失效返回 None。"""
-    region = _window_region(hwnd)
-    if not region:
-        return None
-    left, top, width, height = region
-    fx0, fy0, fx1, fy1 = frac
-    ax0, ay0 = int(left + fx0 * width), int(top + fy0 * height)
-    ax1, ay1 = int(left + fx1 * width), int(top + fy1 * height)
-    return (ax0, ay0, max(0, ax1 - ax0), max(0, ay1 - ay0))
-
-
-def _window_valid(hwnd) -> bool:
-    try:
-        import win32gui
-        return bool(hwnd) and win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd)
-    except Exception:
-        return False
-
-
-def _ensure_window(logger: logging.Logger, hwnd):
-    """校验窗口句柄，失效则重找；返回有效句柄或 None。"""
-    if _window_valid(hwnd):
-        return hwnd
-    fresh = _resolve_baijing_window(logger)
-    if fresh:
-        logger.info(f"[白荆回廊·日常] 窗口句柄已刷新 {hwnd} -> {fresh}")
-    return fresh
-
-
-def _ocr_best_match(
-    logger: logging.Logger,
-    texts,
-    hwnd,
-    frac_region: Optional[Tuple[float, float, float, float]] = None,
-    min_conf: float = 0.5,
-    exclude=(),
-) -> Optional[Dict]:
-    """全窗 OCR 一次，按候选文字 + 相对区域 + 黑名单过滤，返回置信度最高的命中（dict）。
-
-    匹配规则：先精确匹配（OCR 文本 == 候选文字），无精确命中再子串匹配
-    （候选文字 ∈ OCR 文本，或 OCR 文本 ∈ 候选文字且至少 2 字符）。
-    精确优先很重要：实测「确认」按钮会被对话框正文「将离开休息室，是否确认退出?」
-    以更高置信度截胡，点到正文中间等于没点按钮。
-    exclude 中的字样出现在 OCR 文本里则跳过该命中。
-
-    注意：不做「先裁剪区域再 OCR」——实测裁剪会改变检测模型的结果
-    （右侧区域裁剪后「一任务」直接丢失、中部「阶段任务」只剩「4/200」），
-    全窗识别 + 对结果按区域过滤才稳（与 ocr_find_any_text 单次多候选同策略）。
-    """
-    results = ocr_window_content(logger, hwnd=hwnd)
-    if not results:
-        return None
-    abs_region = _abs_region(hwnd, frac_region) if frac_region else None
-    targets = [_normalize_text(t) for t in texts if _normalize_text(t)]
-    best_exact = None
-    best_exact_conf = -1.0
-    best_sub = None
-    best_sub_conf = -1.0
-    for r in results:
-        try:
-            conf = float(r.get("confidence") or 0.0)
-        except Exception:
-            conf = 0.0
-        if conf < min_conf:
-            continue
-        center = r.get("center")
-        if abs_region and center:
-            ax0, ay0, aw, ah = abs_region
-            if not (ax0 <= center[0] <= ax0 + aw and ay0 <= center[1] <= ay0 + ah):
-                continue
-        tnorm = _normalize_text(str(r.get("text") or ""))
-        if not tnorm:
-            continue
-        if any(x and _normalize_text(x) in tnorm for x in exclude):
-            continue
-        for target in targets:
-            if tnorm == target:
-                if conf > best_exact_conf:
-                    best_exact, best_exact_conf = r, conf
-                break
-            if target in tnorm or (tnorm in target and len(tnorm) >= 2):
-                if conf > best_sub_conf:
-                    best_sub, best_sub_conf = r, conf
-                break
-    best = best_exact if best_exact is not None else best_sub
-    if best is not None:
-        logger.info(
-            f"[白荆回廊·日常] OCR 命中 {best['text']!r} "
-            f"({float(best.get('confidence') or 0):.2f}) @ {best['center']}"
-        )
-    return best
-
-
-def _template_center(
-    logger: logging.Logger,
-    hwnd,
-    template_path: str,
-    frac_region: Optional[Tuple[float, float, float, float]] = None,
-    threshold: float = TEMPLATE_MATCH_THRESHOLD,
-) -> Optional[Tuple[int, int]]:
-    """在窗口（可限定相对区域）内做多尺度模板匹配，返回屏幕绝对中心坐标。"""
-    if not template_path or not os.path.exists(template_path):
-        logger.warning(f"[白荆回廊·日常] 模板文件不存在: {template_path}")
-        return None
-    region = _window_region(hwnd)
-    if not region:
-        return None
-    try:
-        shot = grab_screen(region=region)
-    except Exception as e:
-        logger.debug(f"[白荆回廊·日常] 模板匹配截图失败: {e}")
-        return None
-    scr = cv2.cvtColor(np.asarray(shot), cv2.COLOR_RGB2GRAY)
-    if frac_region:
-        fx0, fy0, fx1, fy1 = frac_region
-        h, w = scr.shape[:2]
-        x0, y0 = int(fx0 * w), int(fy0 * h)
-        x1, y1 = int(fx1 * w), int(fy1 * h)
-        sub = scr[y0:y1, x0:x1]
-    else:
-        sub, x0, y0 = scr, 0, 0
-    if sub.size == 0:
-        return None
-    try:
-        tpl = cv2.cvtColor(
-            np.asarray(Image.open(template_path).convert("RGB")), cv2.COLOR_RGB2GRAY
-        )
-    except Exception as e:
-        logger.warning(f"[白荆回廊·日常] 模板加载失败: {template_path} ({e})")
-        return None
-    # 模板按 1920 宽参考分辨率裁剪；按当前窗口宽度换算缩放，±8% 容错
-    base_scale = region[2] / float(TEMPLATE_REFERENCE_WIDTH)
-    for scale in (base_scale, base_scale * 1.08, base_scale * 0.92):
-        t = tpl
-        if abs(scale - 1.0) > 1e-3:
-            interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC
-            t = cv2.resize(tpl, None, fx=scale, fy=scale, interpolation=interp)
-        if t.shape[0] > sub.shape[0] or t.shape[1] > sub.shape[1]:
-            continue
-        result = cv2.matchTemplate(sub, t, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(result)
-        if max_val >= threshold:
-            th, tw = t.shape[:2]
-            cx = region[0] + x0 + int(max_loc[0]) + tw // 2
-            cy = region[1] + y0 + int(max_loc[1]) + th // 2
-            logger.info(
-                f"[白荆回廊·日常] 模板命中 {os.path.basename(template_path)} "
-                f"scale={scale:.3f} conf={max_val:.3f} @ ({cx},{cy})"
-            )
-            return (cx, cy)
-    return None
-
-
-def _capture_daily_list_snapshot(
-    logger: logging.Logger, hwnd, prefix: str = "daily_list"
-) -> Optional[str]:
-    """任务列表/商店页打开后抓一张压缩快照落盘（按日期覆盖），便于核对导航是否正确。"""
-    try:
-        region = _window_region(hwnd)
-        img = grab_screen(region=region)
-        w, h = img.size
-        if w > DAILY_LIST_SNAPSHOT_MAX_WIDTH:
-            img = img.resize(
-                (DAILY_LIST_SNAPSHOT_MAX_WIDTH, max(1, int(h * DAILY_LIST_SNAPSHOT_MAX_WIDTH / w))),
-                Image.LANCZOS,
-            )
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        BAIJING_VERIFY_DIR.mkdir(parents=True, exist_ok=True)
-        out_path = BAIJING_VERIFY_DIR / f"{prefix}_{_baijing_today_key()}.jpg"
-        img.save(str(out_path), "JPEG", quality=DAILY_LIST_SNAPSHOT_QUALITY, optimize=True)
-        logger.info(f"[白荆回廊·日常] 快照已保存: {out_path.name}")
-        return str(out_path)
-    except Exception as e:
-        logger.debug(f"[白荆回廊·日常] 任务列表快照保存失败: {e}")
-        return None
-
-
-def _read_activity_number(logger: logging.Logger, hwnd) -> Optional[int]:
-    """读取每日任务面板顶部的「累计活跃度」大数字（游戏真实值）。
-
-    数据流：全窗 OCR（遵守 ocr_click_tester「不裁剪识别」的约定）→ 按
-    ACTIVITY_NUMBER_REGION 过滤 center → 只接受纯数字 token（被拆成多个
-    数字块时按 x 拼接）→ 多次读取取非零最大值。返回 None 表示读不到，
-    调用方退回静态目录核算，绝不写假值。
-
-    2026-10-27 背景：静态目录把当天已完成任务算成 90，游戏面板实际 105
-    （五档里程碑全部已领取）。目录会随版本漂移（当天游戏是「完成2次战斗」，
-    目录写的是「完成3次战斗」），面板数字才是权威口径；480x270 的压缩
-    验证图上 RapidOCR 已能读出 105（conf≈0.71），实时窗口更大更稳。
-    """
-    hwnd = _ensure_window(logger, hwnd)
-    if not hwnd:
-        return None
-    abs_region = _abs_region(hwnd, ACTIVITY_NUMBER_REGION)
-    if not abs_region:
-        return None
-    ax0, ay0, aw, ah = abs_region
-    readings: List[int] = []
-    for attempt in range(ACTIVITY_NUMBER_ATTEMPTS):
-        if attempt:
-            time.sleep(ACTIVITY_NUMBER_INTERVAL)
-        try:
-            results = ocr_window_content(logger, hwnd=hwnd)
-        except Exception as exc:
-            logger.debug(f"[白荆回廊·日常] 面板活跃度 OCR 失败: {exc}")
-            continue
-        # 先确认当前屏确实是每日任务面板，避免面板被关掉后误读其它数字
-        texts = [_normalize_text(str(r.get("text") or "")) for r in results]
-        if not any(
-            any(marker in text for marker in ACTIVITY_PANEL_MARKERS)
-            for text in texts
-        ):
-            logger.debug("[白荆回廊·日常] 未识别到每日任务面板特征，跳过活跃度读取")
-            continue
-        tokens: List[Tuple[float, str, float]] = []
-        for r in results:
-            center = r.get("center")
-            if not center:
-                continue
-            if not (ax0 <= center[0] <= ax0 + aw and ay0 <= center[1] <= ay0 + ah):
-                continue
-            text = _normalize_text(str(r.get("text") or ""))
-            if re.fullmatch(r"\d{1,3}", text):
-                tokens.append((center[0], text, float(r.get("confidence") or 0)))
-        if not tokens:
-            continue
-        # 优先用字符数最多的数字 token（105 优先于被截断的 10/05），同长度看置信度；
-        # 没有多位 token 时兼容被拆成 1/0/5 三块的情况。
-        multi = [t for t in tokens if len(t[1]) >= 2]
-        if multi:
-            multi.sort(key=lambda t: (-len(t[1]), -t[2], -int(t[1])))
-            readings.append(int(multi[0][1]))
-            continue
-        joined = "".join(t[1] for t in sorted(tokens, key=lambda t: t[0]))
-        if 1 <= len(joined) <= 3:
-            value = int(joined)
-            if 0 <= value <= ACTIVITY_NUMBER_MAX:
-                readings.append(value)
-    positives = [v for v in readings if v > 0]
-    if not positives:
-        if readings:
-            logger.warning(
-                f"[白荆回廊·日常] 面板活跃度只读到 0（可能仍在入场动画）{readings}，"
-                f"退回目录核算"
-            )
-        return None
-    chosen = max(positives)
-    logger.info(f"[白荆回廊·日常] 面板累计活跃度读取: {readings} → 采用 {chosen}")
-    return chosen
-
-
-def _capture_stage_battle_dialog(logger: logging.Logger, hwnd) -> Optional[str]:
-    """快速战斗设置弹窗首次出现时抓图并打印 OCR 文字（定位“指定次数”控件）。
-
-    只按天抓一次；文件存在就跳过，避免四个关卡战斗重复写盘/刷日志。
-
-    注意：这是「日常留档」（baijing_verify，一天一张），不是失败证据。
-    异常/失败取证走 `_record_step_failure` → `flow_diagnostics.record_failure`
-    （flow_failures 表 + flow_failures 目录 + OCR 标注图）。
-    """
-    try:
-        out_path = BAIJING_VERIFY_DIR / f"battle_dialog_{_baijing_today_key()}.jpg"
-        if out_path.is_file():
-            return str(out_path)
-        img = grab_screen(region=_window_region(hwnd))
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        BAIJING_VERIFY_DIR.mkdir(parents=True, exist_ok=True)
-        img.save(str(out_path), "JPEG", quality=85, optimize=True)
-        logger.info(f"[白荆回廊·日常] 快速战斗设置弹窗快照: {out_path.name}")
-        results = ocr_window_content(logger, hwnd=hwnd)
-        for r in results[:30]:
-            logger.info(
-                f"  - {r.get('text')!r} ({float(r.get('confidence') or 0):.2f}) @ {r.get('center')}"
-            )
-        return str(out_path)
-    except Exception as e:
-        logger.debug(f"[白荆回廊·日常] 快速战斗弹窗快照失败: {e}")
-        return None
-
-
-def _confirm_action_power_use(logger: logging.Logger, hwnd, stop_check=None, max_clicks: int = 2) -> bool:
-    """点掉「体力/行动力不足 → 确认使用补充道具」弹窗（最多点 max_clicks 次）。
-
-    2026-11-03 用户确认：游戏推荐的是限时行动力药，可以直接用，不必等过期。
-    只匹配「确认使用」这条文案，不碰泛化的「确认」——同一套页面里还有
-    「将离开休息室」之类的退出确认，误点会把流程退回上一层。
-    注意：这里默认「确认使用」消耗的是限时/免费补充道具；若哪天游戏改成
-    默认消耗付费道具，需要在此处加文案白名单（例如必须同时出现「限时」），
-    日志里已记录命中的原文，便于事后核对。
-    返回是否至少点过一次。
-    """
-    clicked = False
-    for _ in range(max_clicks):
-        if _stopped(stop_check):
-            break
-        hit = _ocr_best_match(logger, ("确认使用",), hwnd, min_conf=0.5)
-        if not hit:
-            break
-        _pyautogui_click_guarded(*hit["center"])
-        logger.info(
-            f"[白荆回廊·日常] 行动力/体力不足，已确认使用补充道具 {hit['text']!r} @ {hit['center']}"
-        )
-        clicked = True
-        time.sleep(1.5)
-    return clicked
-
-
-def _find_task_button(logger: logging.Logger, hwnd, stop_check=None):
-    """定位「任务」按钮：OCR 优先（结果限定右侧区域），模板兜底。返回 ((x, y), 方式) 或 None。"""
-    hit = _ocr_best_match(
-        logger, ("任务",), hwnd, frac_region=TASK_BUTTON_REGION, min_conf=0.55, exclude=TASK_TEXT_EXCLUDE
-    )
-    if hit:
-        center = hit.get("center")
-        if center:
-            return (int(center[0]), int(center[1])), "ocr"
-    center = _template_center(logger, hwnd, TASK_BUTTON_TEMPLATE, frac_region=TASK_BUTTON_REGION)
-    if center:
-        return (int(center[0]), int(center[1])), "template"
-    return None
-
-
-def _wait_task_list(
-    logger: logging.Logger,
-    hwnd,
-    timeout: float = 8.0,
-    stop_check=None,
-    snapshot: bool = True,
-) -> bool:
-    """等待日常任务列表打开（OCR 特征文字）。
-
-    snapshot=False 时跳过快照落盘（process_task_list 的每任务快检用，
-    避免每轮覆盖 daily_list 快照）。
-    """
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if _stopped(stop_check):
-            return False
-        hwnd = _ensure_window(logger, hwnd)
-        if not hwnd:
-            return False
-        hit = _ocr_best_match(logger, TASK_LIST_MARKERS, hwnd, min_conf=0.55)
-        if hit:
-            logger.info(
-                f"[白荆回廊·日常] 任务列表已打开（特征文字 {hit['text']!r} @ {hit['center']}）"
-            )
-            if snapshot:
-                _capture_daily_list_snapshot(logger, hwnd)
-            return True
-        time.sleep(1.0)
-    return False
-
-
-def _ensure_task_list_open(
-    logger: logging.Logger,
-    hwnd,
-    stop_check=None,
-    timeout: float = 3.0,
-) -> bool:
-    """确认任务列表在屏，不在则重开（2026-10-22，治 10-21 空转根因）。
-
-    10-21 实锤：研发室收取后面板被关回主界面，但 _wait_task_list 曾被主界面
-    「任务」按钮文字骗过（假阳性），后续每个任务的找行都在错误界面上滚动
-    6 次 ×3.5s 空转。现在每个任务处理前都强特征快检，丢了就重开列表。
-    """
-    if _wait_task_list(logger, hwnd, timeout=timeout, stop_check=stop_check, snapshot=False):
-        return True
-    logger.warning("[白荆回廊·日常] 任务列表不在屏，尝试重新打开")
-    if open_daily_task_list(logger, hwnd, stop_check=stop_check):
-        return _wait_task_list(logger, hwnd, timeout=timeout, stop_check=stop_check, snapshot=False)
-    # 重开失败通常不是"列表按钮找不到"，而是界面卡在某个子页面（2026-10-24 烙痕详情页）：
-    # 先 ESC/关闭恢复到主界面，再从主界面重开，别让后续任务一路空转跳过。
-    logger.warning("[白荆回廊·日常] 重开任务列表失败，先恢复主界面再重试")
-    # 茶憩残留的休息室/关注特写里根本没有「任务」按钮，先按场景登记表离开再重开
-    # （2026-10-26 12:51 实锤：不处理则每个任务都"重开失败→跳过"，整轮只剩 2/16）
-    state, acted = recover_scene(logger, hwnd, stop_check=stop_check, context="重开任务列表")
-    if acted or state in ("main", "panel"):
-        if open_daily_task_list(logger, hwnd, stop_check=stop_check):
-            return _wait_task_list(logger, hwnd, timeout=timeout, stop_check=stop_check, snapshot=False)
-    if _ensure_main_ui(logger, hwnd, stop_check=stop_check):
-        if open_daily_task_list(logger, hwnd, stop_check=stop_check):
-            return _wait_task_list(logger, hwnd, timeout=timeout, stop_check=stop_check, snapshot=False)
-    return False
-
-
-def _parse_task_rows(logger: logging.Logger, results: List[Dict]) -> List[Dict]:
-    """    把全窗 OCR 结果按行聚类成任务行（行间距约 108px，±40px 聚类安全）。
-    区域过滤由调用方（scan_daily_task_states）做；行内文本按 x 排序拼接——
-    实测「完成1次「卓越道路」」的进度「(1/1)」常被 OCR 拆成独立文本框。
-    """
-    rows: List[Dict] = []
-    for r in results:
-        try:
-            cx, cy = float(r["center"][0]), float(r["center"][1])
-        except Exception:
-            continue
-        placed = False
-        for row in rows:
-            if abs(row["y"] - cy) <= 40:
-                row["items"].append(r)
-                row["n"] += 1
-                row["y"] = (row["y"] * (row["n"] - 1) + cy) / row["n"]
-                placed = True
-                break
-        if not placed:
-            rows.append({"y": cy, "n": 1, "items": [r]})
-    parsed = []
-    for row in rows:
-        items = sorted(row["items"], key=lambda i: i["center"][0])
-        parsed.append({
-            "y": row["y"],
-            "text": "".join(str(i.get("text") or "") for i in items),
-            "items": items,
-        })
-    return parsed
-
-
-def _match_rows_to_catalog(logger: logging.Logger, rows: List[Dict]) -> Dict[str, Dict]:
-    """把任务行匹配到静态目录，解析 (X/Y) 进度与按钮状态。
-
-    done 判定：进度 X>=Y，或行内有「领取奖励」按钮（完成待领）。
-    """
-    states: Dict[str, Dict] = {}
-    for row in rows:
-        tnorm = _normalize_text(row["text"])
-        if not tnorm:
-            continue
-        for task in DAILY_TASK_CATALOG:
-            if not any(_normalize_text(k) in tnorm for k in task["match"]):
-                continue
-            m = re.search(r"(\d+)\s*/\s*(\d+)", tnorm)
-            cur, need = (int(m.group(1)), int(m.group(2))) if m else (0, 1)
-            has_claim = any(
-                "领取" in _normalize_text(str(i.get("text") or ""))
-                and "一键" not in _normalize_text(str(i.get("text") or ""))
-                for i in row["items"]
-            )
-            states[task["key"]] = {
-                "done": bool(cur >= need or has_claim),
-                "progress": f"{cur}/{need}",
-                "claimable": has_claim,
-                "activity": task["activity"],
-            }
-            break
-    return states
-
-
-def _cursor_pos() -> Tuple[int, int]:
-    """当前鼠标屏幕坐标。"""
-    pt = ctypes.wintypes.POINT()
-    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-    return (int(pt.x), int(pt.y))
-
-
-def _set_cursor_pos(x: int, y: int) -> None:
-    ctypes.windll.user32.SetCursorPos(int(x), int(y))
-
-
-def _wheel_real(logger: logging.Logger, hwnd, x: int, y: int, notches: int) -> bool:
-    """真实光标落位后逐格发滚轮（mouse_event ±WHEEL_DELTA）。
-
-    notches 为正向上、负向下；按格数循环发送，每格间隔 SCROLL_NOTCH_PAUSE。
-    发送前聚焦游戏窗口，光标落位后驻留 SCROLL_CURSOR_DWELL 让游戏注册 hover，
-    结束后恢复原光标位置（不把鼠标留在游戏画面中央）。
-    """
-    if notches == 0:
-        return True
-    try:
-        _focus_game_window(logger, hwnd)
-        original = _cursor_pos()
-        try:
-            _set_cursor_pos(x, y)
-            time.sleep(SCROLL_CURSOR_DWELL)
-            sign = 1 if notches > 0 else -1
-            for _ in range(abs(int(notches))):
-                ctypes.windll.user32.mouse_event(
-                    win32con.MOUSEEVENTF_WHEEL, 0, 0, sign * WHEEL_NOTCH, 0
-                )
-                time.sleep(SCROLL_NOTCH_PAUSE)
-        finally:
-            _set_cursor_pos(*original)
-        return True
-    except Exception as exc:
-        logger.debug(f"[白荆回廊·日常] 真实滚轮发送失败 @ ({x},{y}) {notches} 格: {exc}")
-        return False
-
-
-def _wheel_post(logger: logging.Logger, hwnd, x: int, y: int, notches: int) -> bool:
-    """PostMessage WM_MOUSEWHEEL 兜底（ok-ef/ok-ww post_message 后端同款）。
-
-    lParam 用窗口客户区坐标；ok-ef 实测 PostMessage 鼠标消息在窗口未真实
-    激活时可能被游戏丢弃，因此发送前同样先聚焦。
-    """
-    if not hwnd or notches == 0:
-        return False
-    try:
-        _focus_game_window(logger, hwnd)
-        client_x, client_y = win32gui.ScreenToClient(hwnd, (int(x), int(y)))
-        wparam = win32api.MAKELONG(0, int(notches) * WHEEL_NOTCH)
-        lparam = win32api.MAKELONG(client_x, client_y)
-        win32gui.PostMessage(hwnd, win32con.WM_MOUSEWHEEL, wparam, lparam)
-        logger.debug(
-            f"[白荆回廊·日常] PostMessage 滚轮 hwnd={hwnd} "
-            f"客户区坐标=({client_x},{client_y}) 格数={notches}"
-        )
-        return True
-    except Exception as exc:
-        logger.debug(f"[白荆回廊·日常] PostMessage 滚轮失败: {exc}")
-        return False
-
-
-def _row_region_signature(logger: logging.Logger, hwnd) -> str:
-    """任务行区域 OCR 文本签名，用于判断滚动是否真的改变了列表内容。"""
-    try:
-        results = ocr_window_content(logger, hwnd=hwnd)
-        region = _abs_region(hwnd, TASK_ROW_REGION)
-        if region:
-            ax0, ay0, aw, ah = region
-            results = [
-                r for r in results
-                if r.get("center")
-                and ax0 <= r["center"][0] <= ax0 + aw
-                and ay0 <= r["center"][1] <= ay0 + ah
-            ]
-        texts = sorted(
-            _normalize_text(str(r.get("text") or ""))
-            for r in results
-            if _normalize_text(str(r.get("text") or ""))
-        )
-        return "|".join(texts)
-    except Exception:
-        return ""
-
-
-def _scroll_list_at(logger: logging.Logger, hwnd, x: int, y: int, notches: int) -> bool:
-    """在 (x, y) 滚动任务列表，真实滚轮优先、PostMessage 兜底。
-
-    返回 True = 至少一种方式发送成功（不保证列表真的动了，调用方需要
-    用 OCR 验证；见 _scroll_list_with_verify）。
-    """
-    if _wheel_real(logger, hwnd, x, y, notches):
-        return True
-    logger.info("[白荆回廊·日常] 真实滚轮发送失败，改用 PostMessage 兜底")
-    return _wheel_post(logger, hwnd, x, y, notches)
-
-
-def _scroll_list_with_verify(logger: logging.Logger, hwnd, notches: int) -> bool:
-    """滚动任务列表并用 OCR 验证内容真的变了。
-
-    返回 True = 列表内容已变化（滚动生效）；
-    返回 False = 真实滚轮 + PostMessage 都发过，内容仍无变化
-    （已滚到列表底部，或滚动未生效——调用方按需止损）。
-    """
-    region = _abs_region(hwnd, TASK_ROW_REGION)
-    if not region:
-        return False
-    sx, sy = region[0] + region[2] // 2, region[1] + region[3] // 2
-    before = _row_region_signature(logger, hwnd)
-    if _wheel_real(logger, hwnd, sx, sy, notches):
-        time.sleep(SCROLL_POST_DELAY)
-        if _row_region_signature(logger, hwnd) != before:
-            return True
-        logger.info("[白荆回廊·日常] 真实滚轮后列表内容无变化，尝试 PostMessage 兜底")
-        if _wheel_post(logger, hwnd, sx, sy, notches):
-            time.sleep(SCROLL_POST_DELAY)
-            if _row_region_signature(logger, hwnd) != before:
-                logger.info("[白荆回廊·日常] PostMessage 滚轮生效")
-                return True
-    return False
-
-
-def scan_daily_task_states(
-    logger: logging.Logger,
-    hwnd,
-    stop_check=None,
-    max_scrolls: int = TASK_SCROLL_MAX,
-    capture_prefix: Optional[str] = None,
-) -> Dict[str, Dict]:
-    """滚动任务列表并逐屏 OCR，聚合日常任务的状态。
-
-    每屏识别后与静态目录匹配，直到找齐或滚动耗尽；每次滚动后用 OCR 签名
-    验证列表内容真的变了，无效即止损（见 _scroll_list_with_verify）。
-    capture_prefix 非空时每屏额外存一张快照（daily_scan_1_日期.jpg …），
-    用于事后核对目录与游戏实际任务/分值的差异（2026-10-27 本地 90 vs 游戏 105）。
-    返回 {task_key: {"done", "progress", "claimable", "activity"}}。
-    """
-    states: Dict[str, Dict] = {}
-    for i in range(max_scrolls + 1):
-        if _stopped(stop_check):
-            break
-        hwnd = _ensure_window(logger, hwnd)
-        if not hwnd:
-            break
-        results_all = ocr_window_content(logger, hwnd=hwnd)
-        results = results_all
-        region = _abs_region(hwnd, TASK_ROW_REGION)
-        if region:
-            ax0, ay0, aw, ah = region
-            results = [
-                r for r in results
-                if r.get("center")
-                and ax0 <= r["center"][0] <= ax0 + aw
-                and ay0 <= r["center"][1] <= ay0 + ah
-            ]
-        rows = _parse_task_rows(logger, results)
-        found = _match_rows_to_catalog(logger, rows)
-        new_keys = [k for k in found if k not in states]
-        states.update(found)
-        if capture_prefix:
-            _capture_daily_list_snapshot(
-                logger, hwnd, prefix=f"{capture_prefix}_{i + 1}"
-            )
-        logger.info(
-            f"[白荆回廊·日常] 任务扫描第 {i + 1} 屏: 识别 {len(found)} 行, "
-            f"新增 {len(new_keys)} 个任务, 累计 {len(states)}/{len(DAILY_TASK_CATALOG)}"
-        )
-        # 首屏零行 + 全窗 OCR 连列表强特征都没有 = 扫的根本不是任务列表
-        # （2026-10-25 事故：面板被误关后重扫对着非列表页滚了 6 屏全 0 行、
-        # ~25s 纯浪费）。复用本屏已有的全窗 OCR 结果判断，零额外识别开销；
-        # 立即止损并落 flow_failures，别再往下滚。
-        if i == 0 and not found:
-            all_texts = [str(r.get("text") or "") for r in results_all]
-            if not any(
-                any(m in t for m in TASK_LIST_CORE_MARKERS) for t in all_texts
-            ):
-                logger.error(
-                    "[白荆回廊·日常] 首屏 0 行且全窗无列表强特征（累计活跃度/主线指引），"
-                    "当前界面不是任务列表，中止扫描"
-                )
-                _record_step_failure(
-                    logger, hwnd, "日常任务扫描",
-                    "首屏 0 行且无列表强特征：扫描时界面不是任务列表",
-                )
-                break
-        if len(states) >= len(DAILY_TASK_CATALOG):
-            break
-        if i >= max_scrolls:
-            break
-        # 向下滚动一屏并验证内容真的变了（悬停列表区中心，每轮现算）。
-        # 滚动无效时不再烧后续屏——2026-10-18/19 的教训：pyautogui.scroll(-3)
-        # 的 dwData 不足一格滚轮，6 屏 OCR 完全相同纯属浪费。
-        region = _abs_region(hwnd, TASK_ROW_REGION)
-        if region:
-            scroll_pos = (region[0] + region[2] // 2, region[1] + region[3] // 2)
-        else:
-            scroll_pos = (960, 540)
-        logger.info(
-            f"[白荆回廊·日常] 列表下滚 {abs(TASK_SCROLL_STEPS)} 格 @ {scroll_pos}"
-        )
-        if not _scroll_list_with_verify(logger, hwnd, TASK_SCROLL_STEPS):
-            logger.warning(
-                "[白荆回廊·日常] 滚动后列表内容无变化（真实滚轮 + PostMessage 均试过），"
-                "已到底部或滚动未生效，停止继续扫描"
-            )
-            break
-    if len(states) < len(DAILY_TASK_CATALOG):
-        missing = [t["name"] for t in DAILY_TASK_CATALOG if t["key"] not in states]
-        logger.warning(
-            f"[白荆回廊·日常] 扫描覆盖不全 ({len(states)}/{len(DAILY_TASK_CATALOG)}): "
-            f"未识别 {missing}（列表滚动可能无效）"
-        )
-    return states
-
-
-def _ensure_daily_tab(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """确保任务面板停在「日常」页：看「累计活跃度」在不在，不在则点左侧「日常」tab。"""
-    if _stopped(stop_check):
-        return False
-    if _ocr_best_match(logger, ("累计活跃度",), hwnd, min_conf=0.55):
-        return True
-    tab = _ocr_best_match(
-        logger, ("日常",), hwnd, frac_region=TAB_COLUMN_REGION, min_conf=0.5, exclude=("周常",)
-    )
-    if not tab:
-        logger.warning("[白荆回廊·日常] 未找到「日常」tab，可能面板未打开")
-        return False
-    _pyautogui_click_guarded(*tab["center"])
-    logger.info(f"[白荆回廊·日常] 点击左侧「日常」tab @ {tab['center']}")
-    # tab 切换有 1-2s 过渡；原实现固定等 1.2s 只查一次，2026-10-20 实操中
-    # 任务面板默认停在「叶脉联结」，点日常后检查失败但页面随后已切到日常。
-    for _ in range(3):
-        time.sleep(1.2)
-        hwnd = _ensure_window(logger, hwnd)
-        if not hwnd:
-            return False
-        if _ocr_best_match(logger, ("累计活跃度",), hwnd, min_conf=0.55):
-            return True
-    return False
-
-
-def _find_row_button_once(
-    logger: logging.Logger, hwnd, row_keyword: str, button_text: str
-) -> Optional[Tuple[int, int]]:
-    """当前屏内定位任务行按钮：先找含 row_keyword 的行，再取同行(±45px)的 button_text。"""
-    results = ocr_window_content(logger, hwnd=hwnd)
-    region = _abs_region(hwnd, TASK_ROW_REGION)
-    if region:
-        ax0, ay0, aw, ah = region
-        results = [
-            r for r in results
-            if r.get("center")
-            and ax0 <= r["center"][0] <= ax0 + aw
-            and ay0 <= r["center"][1] <= ay0 + ah
-        ]
-    row_y = None
-    for r in results:
-        if _normalize_text(row_keyword) in _normalize_text(str(r.get("text") or "")):
-            row_y = r["center"][1]
-            break
-    if row_y is None:
-        return None
-    btn = _normalize_text(button_text)
-    for r in results:
-        text = _normalize_text(str(r.get("text") or ""))
-        if btn in text and abs(r["center"][1] - row_y) <= 45:
-            logger.info(
-                f"[白荆回廊·日常] 定位到 {row_keyword!r} 行的 {button_text!r} 按钮 @ {r['center']}"
-            )
-            return (int(r["center"][0]), int(r["center"][1]))
-    return None
-
-
-def _scroll_row_list_to_top(logger: logging.Logger, hwnd) -> bool:
-    """把任务列表滚到顶部（发送足够多的向上滚轮，顶部会 clamp）。"""
-    region = _abs_region(hwnd, TASK_ROW_REGION)
-    if not region:
-        return False
-    sx, sy = region[0] + region[2] // 2, region[1] + region[3] // 2
-    # 扫描最多下滚 TASK_SCROLL_MAX 次；回顶按“满量 + 2 屏”发，确保从底部也能 clamp 到顶。
-    notches = abs(TASK_SCROLL_STEPS) * (TASK_SCROLL_MAX + 2)
-    logger.info(f"[白荆回廊·日常] 回滚任务列表到顶部（向上 {notches} 格）")
-    ok = _wheel_real(logger, hwnd, sx, sy, notches)
-    if not ok:
-        ok = _wheel_post(logger, hwnd, sx, sy, notches)
-    if ok:
-        time.sleep(SCROLL_POST_DELAY)
-    return ok
-
-
-def _find_row_button(
-    logger: logging.Logger, hwnd, row_keyword: str, button_text: str, stop_check=None
-) -> Optional[Tuple[int, int]]:
-    """定位任务行内的按钮：先看当前屏，否则回顶部并逐屏校验扫描整个列表。
-
-    扫描阶段会把列表滚到底部，而每个「前往」处理器返回面板时的滚动位置不确定。
-    2026-10-20 的教训：回顶部只发 6 格（扫描累计下滚了 12 格），第 3 行的
-    研发室永远不在视野里；下层战斗行也只试 3 屏 + 不校验的 PostMessage。
-    现在改为：足量回顶 → 逐屏下滚并用 OCR 校验内容真的变化 → 到底后再回顶重扫一次。
-    """
-    if _stopped(stop_check):
-        return None
-    pos = _find_row_button_once(logger, hwnd, row_keyword, button_text)
-    if pos:
-        return pos
-    if not _abs_region(hwnd, TASK_ROW_REGION):
-        logger.warning(f"[白荆回廊·日常] 未找到含 {row_keyword!r} 的任务行")
-        return None
-    # 1) 足量回顶（顶部 clamp，滚过头无害）
-    if not _scroll_row_list_to_top(logger, hwnd):
-        logger.warning(f"[白荆回廊·日常] 无法回滚任务列表顶部，放弃定位 {row_keyword!r}")
-        return None
-    pos = _find_row_button_once(logger, hwnd, row_keyword, button_text)
-    if pos:
-        return pos
-    # 2) 从顶部逐屏下滚；每屏用 OCR 校验列表真的移动，滚到底再回顶重扫一次
-    retried_from_top = False
-    moved_screens = 0
-    for attempt in range(1, TASK_SCROLL_MAX + 2):
-        if _stopped(stop_check):
-            return None
-        hwnd = _ensure_window(logger, hwnd)
-        if not hwnd:
-            return None
-        moved = _scroll_list_with_verify(logger, hwnd, TASK_SCROLL_STEPS)
-        if not moved:
-            # 已到底（或滚动未生效）。若还没重扫过，回顶再完整扫一轮。
-            if retried_from_top or moved_screens >= TASK_SCROLL_MAX:
-                break
-            retried_from_top = True
-            logger.info(
-                f"[白荆回廊·日常] 已扫到列表底部仍未找到 {row_keyword!r}，回顶重扫一轮"
-            )
-            if not _scroll_row_list_to_top(logger, hwnd):
-                break
-            pos = _find_row_button_once(logger, hwnd, row_keyword, button_text)
-            if pos:
-                return pos
-            continue
-        moved_screens += 1
-        logger.info(
-            f"[白荆回廊·日常] 未找到 {row_keyword!r} 行，列表下滚重试 ({attempt}/{TASK_SCROLL_MAX + 1})"
-        )
-        pos = _find_row_button_once(logger, hwnd, row_keyword, button_text)
-        if pos:
-            return pos
-    logger.warning(f"[白荆回廊·日常] 滚动后仍未找到 {row_keyword!r} 行的 {button_text!r} 按钮")
-    return None
-
-
-def _close_lab_dialog(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """关闭「白荆穹顶」弹窗：X 按钮（提示文字右侧）→ 空白处 → ESC。"""
-    for attempt in range(3):
-        if _stopped(stop_check):
-            return False
-        hwnd = _ensure_window(logger, hwnd)
-        if not hwnd:
-            return False
-        # 已经回到任务列表 → 弹窗肯定关了。必须先判列表再看弹窗特征，
-        # 否则列表行里的“白荆穹顶”等文字会让关闭循环继续按 ESC 把列表也关掉。
-        if _ocr_best_match(logger, TASK_LIST_CORE_MARKERS, hwnd, min_conf=0.55):
-            logger.info("[白荆回廊·日常] 任务列表已在屏，判定白荆穹顶弹窗已关闭")
-            return True
-        # 弹窗已关？
-        if not _ocr_best_match(logger, LAB_DIALOG_MARKERS, hwnd, min_conf=0.55):
-            return True
-        # 1) X 按钮：OCR 到关闭提示文字，点其右侧
-        hint = _ocr_best_match(logger, (LAB_DIALOG_HINT,), hwnd, min_conf=0.5)
-        if hint:
-            box = hint.get("box")
-            cx = int(box[2]) + 25 if box else int(hint["center"][0]) + 150
-            cy = int(hint["center"][1])
-            _pyautogui_click_guarded(cx, cy)
-            logger.info(f"[白荆回廊·日常] 点击白荆穹顶弹窗 X 按钮 @ ({cx},{cy})")
-            time.sleep(1.2)
-            if not _ocr_best_match(logger, LAB_DIALOG_MARKERS, hwnd, min_conf=0.55):
-                return True
-        # 2) 空白处：弹窗下沿下方（避开行内按钮与底部固定栏）
-        region = _abs_region(hwnd, TASK_ROW_REGION)
-        if region:
-            bx, by = region[0] + region[2] // 3, region[1] + region[3] - 30
-            _pyautogui_click_guarded(bx, by)
-            logger.info(f"[白荆回廊·日常] 点击空白区域关闭弹窗 @ ({bx},{by})")
-            time.sleep(1.2)
-            if not _ocr_best_match(logger, LAB_DIALOG_MARKERS, hwnd, min_conf=0.55):
-                return True
-        # 3) ESC 收尾
-        _focus_game_window(logger, hwnd)
-        pyautogui.press("escape")
-        logger.info("[白荆回廊·日常] 按 ESC 关闭白荆穹顶弹窗")
-        time.sleep(1.2)
-    return not _ocr_best_match(logger, LAB_DIALOG_MARKERS, hwnd, min_conf=0.55)
-
-
-def _handle_lab_harvest_task(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """研发室收获任务：点行内「前往」→ 白荆穹顶弹窗 → 一键收取 → 关闭回列表。
-
-    2026-10-18 用户实测截图：点「前往」后弹「白荆穹顶」设施面板（当前设施生产
-    情况 + 前往穹顶 + 一键收取）。注意是「一键收取」不是任务奖励的「一键领取」。
-    收取后点 X/空白关闭弹窗即回到日常任务列表，该任务随后可出现「领取奖励」。
-    """
-    goto_pos = _find_row_button(logger, hwnd, "研发室", "前往", stop_check=stop_check)
-    if not goto_pos:
-        return False
-    _pyautogui_click_guarded(goto_pos[0], goto_pos[1])
-    logger.info(f"[白荆回廊·日常] 点击研发室任务「前往」@ {goto_pos}")
-    # 等弹窗出现
-    deadline = time.time() + 8.0
-    dialog_ok = False
-    while time.time() < deadline:
-        if _stopped(stop_check):
-            return False
-        if _ocr_best_match(logger, LAB_DIALOG_MARKERS, hwnd, min_conf=0.55):
-            dialog_ok = True
-            break
-        time.sleep(1.0)
-    if not dialog_ok:
-        logger.warning("[白荆回廊·日常] 点击「前往」后未出现白荆穹顶弹窗")
-        return False
-    logger.info("[白荆回廊·日常] 白荆穹顶弹窗已打开")
-    # 一键收取（注意排除「前往穹顶」按钮）
-    hit = _ocr_best_match(logger, ("一键收取",), hwnd, min_conf=0.6)
-    if not hit:
-        logger.warning("[白荆回廊·日常] 弹窗内未找到「一键收取」")
-        _close_lab_dialog(logger, hwnd, stop_check=stop_check)
-        return False
-    _pyautogui_click_guarded(*hit["center"])
-    logger.info(f"[白荆回廊·日常] 点击「一键收取」@ {hit['center']}")
-    time.sleep(1.5)
-    # 关闭弹窗回列表
-    if not _close_lab_dialog(logger, hwnd, stop_check=stop_check):
-        logger.warning("[白荆回廊·日常] 白荆穹顶弹窗未能关闭")
-        return False
-    # 确认回到日常任务列表
-    if _wait_task_list(logger, hwnd, timeout=5.0, stop_check=stop_check):
-        logger.info("[白荆回廊·日常] 已回到日常任务列表，研发室收取完成")
-        return True
-    logger.warning("[白荆回廊·日常] 关闭弹窗后未确认回到日常任务列表")
-    return False
-
-
-def _wait_page_markers(
-    logger: logging.Logger,
-    hwnd,
-    markers,
-    timeout: float = 6.0,
-    stop_check=None,
-    frac_region: Optional[Tuple[float, float, float, float]] = None,
-) -> bool:
-    """轮询等待页面特征文字出现（任一命中）。"""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if _stopped(stop_check):
-            return False
-        hwnd = _ensure_window(logger, hwnd)
-        if not hwnd:
-            return False
-        if _ocr_best_match(logger, markers, hwnd, min_conf=0.55, frac_region=frac_region):
-            return True
-        time.sleep(1.0)
-    return False
-
-
-def _on_memory_detail_page(logger: logging.Logger, hwnd) -> bool:
-    """是否处于烙痕详情页：右下「强化烙痕」模板优先，OCR 文字兜底。"""
-    if (
-        _template_center(logger, hwnd, MEMORY_ENHANCE_BUTTON_TPL, threshold=0.85)
-        is not None
-    ):
-        return True
-    hit = _ocr_best_match(
-        logger,
-        MEMORY_ENHANCE_TEXTS,
-        hwnd,
-        frac_region=MEMORY_ENHANCE_BTN_REGION,
-        min_conf=0.55,
-    )
-    if hit:
-        logger.info(
-            f"[白荆回廊·日常] 烙痕详情页 OCR 命中 {hit['text']!r} @ {hit['center']}"
-        )
-        return True
-    return False
-
-
-def _find_plus_button(
-    logger: logging.Logger, hwnd, anchor: Optional[Tuple[int, int]] = None
-) -> Optional[Tuple[int, int]]:
-    """定位强化弹窗里的「+」按钮：由「重置」位置 + 固定水平偏移推算。
-
-    2026-10-30 用户截图实测定标（`docs/refs/baijing_memory_enhance_20261030.png`，
-    1919x1079）：「指定等级」行布局 [重置][Lv][+][最大]，重置中心 (1189,669)、
-    最大中心 (1529,670)、+ 中心约 (1424,669)——+ 与重置同行、右移 0.1225 倍窗宽。
-    点完重置后第二次 OCR 可能认不出「重置」（当日 0.56 低置信度），因此调用方
-    传入刚点过的重置坐标（anchor）直接推算，不再依赖第二次 OCR；无 anchor 时才
-    重新 OCR。
-    """
-    if anchor:
-        region = _window_region(hwnd)
-        if not region:
-            return None
-        cx = int(anchor[0] + PLUS_BUTTON_DX_RATIO * region[2])
-        cy = int(anchor[1])
-        logger.info(f"[白荆回廊·日常] 按「重置」锚点推算「+」按钮 @ ({cx},{cy})")
-        return (cx, cy)
-    hit = _ocr_best_match(
-        logger, ("重置",), hwnd, frac_region=MEMORY_RESET_REGION, min_conf=0.45
-    )
-    if not hit:
-        return None
-    region = _window_region(hwnd)
-    if not region:
-        return None
-    cx = int(hit["center"][0] + PLUS_BUTTON_DX_RATIO * region[2])
-    cy = int(hit["center"][1])
-    logger.info(f"[白荆回廊·日常] 推算「+」按钮位置 @ ({cx},{cy})")
-    return (cx, cy)
-
-
-def _ensure_memory_level_tab(
-    logger: logging.Logger, hwnd, stop_check=None
-) -> bool:
-    """确保强化弹窗停在「等级提升」页签；「重置 / +」只在这一页。
-
-    2026-11-11 10:15 取证帧（#271）：点「强化烙痕」后弹窗默认选中「特质提升」，
-    ``MEMORY_DIALOG_MARKERS`` 里的「等级提升」只是**另一个页签的标题**，旧流程
-    误以为强化窗已就绪，接着找「重置」→ 推算「+」→ 报「未找到 + 按钮」。
-    用户口径：切到「等级提升」页即可。切完必须复验该页独占内容，否则绝不盲点。
-    """
-    # 已在目标页（如弹窗记住了上次页签）：不点击，直接放行
-    if _ocr_best_match(logger, MEMORY_LEVEL_TAB_MARKERS, hwnd, min_conf=0.45):
-        return True
-    tab = _ocr_best_match(
-        logger, MEMORY_LEVEL_TAB_TEXT, hwnd,
-        frac_region=MEMORY_LEVEL_TAB_REGION, min_conf=0.5,
-    )
-    if tab:
-        _pyautogui_click_guarded(*tab["center"])
-        logger.info(f"[白荆回廊·日常] 强化弹窗切到「等级提升」页签 @ {tab['center']}")
-    else:
-        pos = _ratio_point(logger, hwnd, MEMORY_LEVEL_TAB_FALLBACK)
-        if not pos:
-            return False
-        _pyautogui_click_guarded(*pos)
-        logger.info(f"[白荆回廊·日常] 「等级提升」页签 OCR 未命中，比例兜底 @ {pos}")
-    # 切页后短轮询复验；看不到「指定等级/重置/最大」就不允许继续找「+」
-    for _ in range(3):
-        if _stopped(stop_check):
-            return False
-        if _ocr_best_match(logger, MEMORY_LEVEL_TAB_MARKERS, hwnd, min_conf=0.45):
-            return True
-        time.sleep(0.5)
-    return False
-
-
-def _same_click_target(a, b, tol: int = 25) -> bool:
-    """两个 OCR 命中是否在同一位置（用于判断上一次点击是否让界面发生了变化）。"""
-    if not a or not b:
-        return False
-    return abs(int(a[0]) - int(b[0])) <= tol and abs(int(a[1]) - int(b[1])) <= tol
-
-
-def _in_rest_room(logger: logging.Logger, hwnd) -> bool:
-    """是否停在休息室（茶憩所在场景）。
-
-    特征只用「拜访他人 / 布置模式」——这两个词是休息室独有；「午后茶憩」在
-    日常任务行里也出现，拿它判定会把任务列表误认成休息室。
-    界面恢复统一走下方 `recover_scene`（场景登记表），这里只给茶憩流程做即时判定。
-    """
-    return _ocr_best_match(logger, REST_ROOM_MARKERS, hwnd, min_conf=0.55) is not None
-
-
-# ── 场景退出登记表（2026-10-26）──────────────────────────────────────
-# 为什么要登记表：以前"认不出页面"只能盲按 ESC / 点关闭，遇到 ESC 无效的界面
-# （休息室、关注特写）就是今天 12:50 那出——连按 5 次 ESC 空转，整轮日常只剩 2/16。
-# 现在每轮只取一次 OCR 结果，按登记表匹配：认出是哪个界面就跑它的专属退出；
-# 一个都匹配不上（或反复退不出去）就把当帧截图 + 文字落进 flow_failures，
-# 下次照证据加一行登记，而不是靠猜。
-SCENE_RECOVERY_ROUNDS = 4          # 一次恢复最多处理几轮
-SCENE_UNKNOWN_ROUNDS = 2           # 连续几轮匹配不上 → 落证据并交回兜底
-SCENE_OCR_MIN_CONF = 0.5
-_SCENE_LOGGED: Dict[str, float] = {}        # 证据节流：context → 上次记录时间
-_SCENE_LOG_INTERVAL_SEC = 600.0
-
-
-def _scene_results(logger: logging.Logger, hwnd) -> List[Dict]:
-    """一轮恢复只截一次屏：所有场景判定共用这份 OCR 结果。
-
-    旧实现里 `_in_rest_room` / `_in_focus_mode` / `_ocr_best_match` 每个判定都
-    各自截屏 + OCR，恢复一轮要跑 4-6 次识别（十几秒）。
-    """
-    try:
-        return ocr_window_content(logger, hwnd=hwnd) or []
-    except Exception as exc:
-        logger.debug(f"[白荆回廊·日常] 场景识别 OCR 失败: {exc}")
-        return []
-
-
-def _pick_result(
-    logger: logging.Logger,
-    hwnd,
-    results: List[Dict],
-    markers,
-    frac_region: Optional[Tuple[float, float, float, float]] = None,
-    min_conf: float = SCENE_OCR_MIN_CONF,
-    exclude=(),
-    exact_only: bool = False,
-) -> Optional[Dict]:
-    """在已取到的 OCR 结果里挑一条命中（规则同 `_ocr_best_match`，但不再截屏）。
-
-    精确匹配优先于子串匹配：实测「确认」按钮会被对话框正文以更高置信度截胡。
-    区域过滤用屏幕绝对坐标（`ocr_window_content` 返回的 center 已加过窗口原点），
-    所以 frac_region 要先经 `_abs_region` 换算。
-    """
-    if not results:
-        return None
-    abs_region = _abs_region(hwnd, frac_region) if frac_region else None
-    targets = [_normalize_text(t) for t in markers if _normalize_text(t)]
-    best_exact = None
-    best_exact_conf = -1.0
-    best_sub = None
-    best_sub_conf = -1.0
-    for r in results:
-        try:
-            conf = float(r.get("confidence") or 0.0)
-        except Exception:
-            conf = 0.0
-        if conf < min_conf:
-            continue
-        center = r.get("center")
-        if abs_region and center:
-            ax0, ay0, aw, ah = abs_region
-            if not (ax0 <= center[0] <= ax0 + aw and ay0 <= center[1] <= ay0 + ah):
-                continue
-        tnorm = _normalize_text(str(r.get("text") or ""))
-        if not tnorm:
-            continue
-        if any(x and _normalize_text(x) in tnorm for x in exclude):
-            continue
-        for target in targets:
-            if tnorm == target:
-                if conf > best_exact_conf:
-                    best_exact, best_exact_conf = r, conf
-                break
-            # exact_only：只认「候选文字 ⊆ OCR 文本」，禁止反向包含。
-            # 用于「计划等级提升」这类长特征——普通子串匹配会让旧页面的
-            # 「等级提升」短文字误命中，进而点错屏幕。
-            if target in tnorm or (not exact_only and tnorm in target and len(tnorm) >= 2):
-                if conf > best_sub_conf:
-                    best_sub, best_sub_conf = r, conf
-                break
-    return best_exact if best_exact is not None else best_sub
-
-
-def _scene_exit_overlay(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """过场/结算遮罩：先点掉「点击屏幕继续」，否则底下的按钮全都点不到。"""
-    hit = _pick_result(logger, hwnd, results, ("点击屏幕继续",), min_conf=0.5)
-    if not hit:
-        return False
-    _pyautogui_click_guarded(*hit["center"])
-    logger.info(f"[白荆回廊·日常] 场景退出·过场遮罩：点「点击屏幕继续」@ {hit['center']}")
-    time.sleep(1.2)
-    return True
-
-
-def _scene_exit_level_up(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """计划等级提升整屏动画：点屏幕中心继续（多级连升时恢复循环会再点一次）。"""
-    hit = _pick_result(logger, hwnd, results, LEVEL_UP_MARKERS, min_conf=0.55)
-    if not hit:
-        return False
-    _click_ratio(logger, hwnd, (0.5, 0.5), "计划等级提升（点击继续）")
-    logger.info(f"[白荆回廊·日常] 场景退出·计划等级提升：点击继续（命中 {hit['text']!r}）")
-    time.sleep(1.2)
-    return True
-
-
-def _scene_exit_tea_summary(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """茶憩结束摘要：随意点关掉它（挂着会挡住休息室的返回按钮）。"""
-    hit = _pick_result(logger, hwnd, results, TEA_SUMMARY_MARKERS, min_conf=0.55)
-    if not hit:
-        return False
-    _click_ratio(logger, hwnd, TEA_SUMMARY_CLICK, "茶憩摘要（点击退出）")
-    logger.info(f"[白荆回廊·日常] 场景退出·茶憩摘要：关闭（命中 {hit['text']!r} @ {hit['center']}）")
-    time.sleep(1.5)
-    return True
-
-
-def _scene_exit_focus(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """关注特写：点右上「退出关注」回休息室全景（特写镜头下没有左上「返回」）。"""
-    hit = _pick_result(
-        logger, hwnd, results, FOCUS_MODE_MARKERS,
-        frac_region=FOCUS_MODE_REGION, min_conf=0.55,
-    )
-    if not hit:
-        return False
-    _pyautogui_click_guarded(*hit["center"])
-    logger.info(f"[白荆回廊·日常] 场景退出·关注特写：点「退出关注」@ {hit['center']}")
-    time.sleep(1.2)
-    return True
-
-
-def _scene_exit_rest_room(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """休息室：左上「返回」→ 退出确认框「确认」。这个界面吃不到 ESC，只能点按钮。"""
-    back = _pick_result(
-        logger, hwnd, results, ("返回",), frac_region=REST_ROOM_BACK_REGION, min_conf=0.5
-    )
-    if back:
-        _pyautogui_click_guarded(*back["center"])
-        logger.info(f"[白荆回廊·日常] 场景退出·休息室：点左上「返回」@ {back['center']}")
-    else:
-        _click_ratio(logger, hwnd, REST_ROOM_BACK, "休息室左上「返回」（比例兜底）")
-    time.sleep(1.5)
-    # 确认框是点了返回之后才弹出来的，必须重新识别一轮
-    fresh = _scene_results(logger, hwnd)
-    confirm = _pick_result(logger, hwnd, fresh, ("确认", "确定"), min_conf=0.6)
-    if confirm:
-        _pyautogui_click_guarded(*confirm["center"])
-        logger.info(
-            f"[白荆回廊·日常] 场景退出·休息室：确认框「{confirm['text']}」@ {confirm['center']}"
-        )
-    else:
-        _click_ratio(logger, hwnd, REST_ROOM_LEAVE_CONFIRM, "休息室退出确认（比例兜底）")
-    time.sleep(1.5)
-    return True
-
-
-def _exit_via_top_left_back(logger: logging.Logger, hwnd, results, scene_name: str) -> bool:
-    """通用「左上返回」退出：OCR 找返回按钮优先，找不到按实测比例点兜底。
-
-    适用于烙痕详情 / 有猫零售这类"返回键就在左上角、无确认框"的普通页面。
-    """
-    back = _pick_result(
-        logger, hwnd, results, ("返回",), frac_region=REST_ROOM_BACK_REGION, min_conf=0.5
-    )
-    if back:
-        _pyautogui_click_guarded(*back["center"])
-        logger.info(f"[白荆回廊·日常] 场景退出·{scene_name}：点左上「返回」@ {back['center']}")
-    else:
-        _click_ratio(logger, hwnd, REST_ROOM_BACK, f"{scene_name}左上「返回」（比例兜底）")
-    time.sleep(1.5)
-    return True
-
-
-def _scene_exit_memory_detail(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """烙痕详情页：点「返回」回烙痕列表；列表页也有登记，下一轮会继续退回任务面板。"""
-    return _exit_via_top_left_back(logger, hwnd, results, "烙痕详情")
-
-
-def _scene_exit_memory_list(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """烙痕列表页：点左上「返回」回任务面板。"""
-    return _exit_via_top_left_back(logger, hwnd, results, "烙痕列表")
-
-
-def _scene_exit_loading(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """加载过场：只等待不点击（点了也无效），轮询到特征消失（加载完）为止。
-
-    以前加载页会烧光恢复轮次被判 unknown（10-31～11-06 五次失败实锤），加载
-    完才弹出的真页面（如定巡之礼弹窗）从来没轮到被处理。等待有 60s 上限，
-    游戏真卡死时返回 False 交回兜底落证据，不会无限等。
-    """
-    deadline = time.time() + LOADING_WAIT_TIMEOUT_SEC
-    while time.time() < deadline:
-        if _stopped(stop_check):
-            return False
-        time.sleep(1.0)
-        if _pick_result(
-            logger, hwnd, _scene_results(logger, hwnd),
-            LOADING_SCREEN_MARKERS, min_conf=0.5,
-        ) is None:
-            logger.info("[白荆回廊·日常] 场景退出·加载过场：加载完成，交回下一轮识别")
-            return True
-    logger.warning(
-        f"[白荆回廊·日常] 场景退出·加载过场：等待 {LOADING_WAIT_TIMEOUT_SEC:.0f}s 仍在加载，交回兜底"
-    )
-    return False
-
-
-def _scene_exit_event_dialog(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """定巡之礼等活动弹窗：先领「可领取」的签到奖励，再点右上角 X 关闭。
-
-    2026-11-06 09:15 实拍帧第 2 天「可领取」，直接 X 等于丢奖（2026-11-07
-    用户拍板「遇到就给他领了呗」）。领取后弹窗状态会变（可能出获得奖励遮罩）
-    ——当帧里弹窗标记已不在时不盲点 X，交回下一轮恢复识别（遮罩/弹窗各有
-    登记规则接力）。
-    """
-    hit = _pick_result(logger, hwnd, results, EVENT_DIALOG_MARKERS, min_conf=0.55)
-    if not hit:
-        return False
-    claimed = 0
-    for _ in range(3):
-        claim = _pick_result(logger, hwnd, results, EVENT_DIALOG_CLAIM_MARKERS, min_conf=0.5)
-        if not claim:
-            break
-        _pyautogui_click_guarded(*claim["center"])
-        claimed += 1
-        logger.info(
-            f"[白荆回廊·日常] 场景退出·定巡之礼：领取「{claim.get('text')}」@ {claim['center']}"
-        )
-        time.sleep(1.5)
-        results = _scene_results(logger, hwnd)  # 领取后弹窗状态会变，必须重识别
-    if _pick_result(logger, hwnd, results, EVENT_DIALOG_MARKERS, min_conf=0.55):
-        _click_ratio(logger, hwnd, EVENT_DIALOG_CLOSE, "定巡之礼右上关闭")
-        logger.info(
-            f"[白荆回廊·日常] 场景退出·定巡之礼：关闭弹窗（命中 {hit['text']!r}，领取 {claimed} 项）"
-        )
-    else:
-        logger.info(
-            f"[白荆回廊·日常] 场景退出·定巡之礼：领取 {claimed} 项后弹窗已不在，交回下一轮识别"
-        )
-    time.sleep(1.2)
-    return True
-
-
-def _scene_exit_event_announce(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """活动公告横幅：点空白区域关闭（公告自己的提示就是这么写的）。
-
-    2026-11-07 用户拍板「他只是个活动公告，点一下就好了」。特征用公告独有的
-    「点击空白区域关闭/本期不再显示」，绝不用「叶脉联结计划」（叶脉页同名，
-    见 EVENT_ANNOUNCE_MARKERS 注释）。空白点取左边缘 (0.10,0.50)，避开横幅
-    本体（点正文/「前往获取」会进活动页）和主界面顶栏/底栏。
-    """
-    hit = _pick_result(logger, hwnd, results, EVENT_ANNOUNCE_MARKERS, min_conf=0.55)
-    if not hit:
-        return False
-    _click_ratio(logger, hwnd, EVENT_ANNOUNCE_BLANK, "活动公告点空白关闭")
-    logger.info(f"[白荆回廊·日常] 场景退出·活动公告：点空白关闭（命中 {hit['text']!r}）")
-    time.sleep(1.2)
-    return True
-
-
-def _scene_exit_tea_room(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """茶憩 3D 房间：左上「返回」→ 退出确认框「确认」（与休息室同一套离开交互）。
-
-    退出后回到休息室——它也在登记表里，下一轮恢复会接着把休息室退掉。
-    """
-    back = _pick_result(
-        logger, hwnd, results, ("返回",), frac_region=REST_ROOM_BACK_REGION, min_conf=0.5
-    )
-    if back:
-        _pyautogui_click_guarded(*back["center"])
-        logger.info(f"[白荆回廊·日常] 场景退出·茶憩房间：点左上「返回」@ {back['center']}")
-    else:
-        _click_ratio(logger, hwnd, REST_ROOM_BACK, "茶憩房间左上「返回」（比例兜底）")
-    time.sleep(1.5)
-    # 确认框是点了返回之后才弹出来的，必须重新识别一轮（同休息室）
-    fresh = _scene_results(logger, hwnd)
-    confirm = _pick_result(logger, hwnd, fresh, ("确认", "确定"), min_conf=0.6)
-    if confirm:
-        _pyautogui_click_guarded(*confirm["center"])
-        logger.info(
-            f"[白荆回廊·日常] 场景退出·茶憩房间：确认框「{confirm['text']}」@ {confirm['center']}"
-        )
-    else:
-        _click_ratio(logger, hwnd, REST_ROOM_LEAVE_CONFIRM, "茶憩房间退出确认（比例兜底）")
-    time.sleep(1.5)
-    return True
-
-
-def _scene_exit_cat_retail(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """有猫零售页：点左上「返回」回主界面（零售入口只在主界面底栏，返回即到家）。"""
-    return _exit_via_top_left_back(logger, hwnd, results, "有猫零售")
-
-
-# 好友页：2026-11-13 10:18 取证（#282，友情勋章任务领完留在好友页，恢复认不出
-# 白等 90s）。OCR 实测「一键领取/赠送」的「一」常被截成「键领取/赠送」，两个
-# 变体都登记；判定走 detector ≥2 独有词（铁律），「好友列表」单词太泛不上表。
-FRIEND_SCENE_MARKERS = ("好友列表", "列表内查找好友", "今日赠礼", "键领取/赠送", "一键领取/赠送")
-
-
-def _friend_page_hit(logger: logging.Logger, hwnd, results: List[Dict]) -> Optional[Dict]:
-    """好友页 = 独有词 ≥2（「好友列表」单独出现不算——别的页面可能同名词）。"""
-    texts = [str(r.get("text") or "") for r in (results or [])]
-    hits = [m for m in FRIEND_SCENE_MARKERS if any(m in t for t in texts)]
-    if len(hits) < 2:
-        return None
-    return {"text": "好友页:" + "+".join(hits), "confidence": 1.0, "center": (0, 0)}
-
-
-def _scene_exit_friend(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
-    """好友页：点左上「返回」回主界面（好友入口在主界面左上图标行）。"""
-    return _exit_via_top_left_back(logger, hwnd, results, "好友页")
-
-
-def _loading_screen_hit(logger, hwnd, results: List[Dict]) -> Optional[Dict]:
-    """加载过场 = 中央 logo + 进度百分比，两样都在才算。
-
-    只看 logo 会把任何含「白荆回廊」字样的固定页面误判成加载（`_pick_result`
-    的子串匹配），随后 `_scene_exit_loading` 白等满 60s。进度数字本身每帧不稳
-    （11-10 实测 47%→98%），但「这一帧有百分比」是加载页的稳定事实，正好当
-    第二道闸；其它规则仍走普通 markers 匹配，不受影响。
-    """
-    hit = _pick_result(logger, hwnd, results, LOADING_SCREEN_MARKERS, min_conf=0.5)
-    if not hit:
-        return None
-    has_percent = any(
-        re.search(r"\d{1,3}\s*%", str(r.get("text") or ""))
-        for r in (results or [])
-    )
-    return hit if has_percent else None
-
-
-# 登记表顺序 = 匹配优先级：遮罩类先清，再清会挡住返回按钮的摘要，最后才是界面本身。
-# 新增界面只要加一行（特征必须挑该界面独占文字，原因见 REST_ROOM_MARKERS 注释），
-# 并在 artifacts/test_baijing_scene_registry_20261026.py 补一条用例锁住顺序。
-SCENE_RULES = (
-    # 加载过场排最前：加载中点哪都无效，先等它过去，别让真页面在 unknown 里被放弃
-    {"name": "加载过场", "markers": LOADING_SCREEN_MARKERS, "min_conf": 0.5,
-     "detector": _loading_screen_hit, "exit": _scene_exit_loading},
-    # 活动公告横幅在遮罩前：加载完它经常第一个弹出来挡路（11-04/11-06 两次实录）
-    {"name": "活动公告", "markers": EVENT_ANNOUNCE_MARKERS, "min_conf": 0.55, "exit": _scene_exit_event_announce},
-    {"name": "过场遮罩", "markers": ("点击屏幕继续",), "min_conf": 0.5, "exit": _scene_exit_overlay},
-    {"name": "计划等级提升", "markers": LEVEL_UP_MARKERS, "min_conf": 0.55,
-     "exact_only": True, "exit": _scene_exit_level_up},
-    {"name": "定巡之礼", "markers": EVENT_DIALOG_MARKERS, "min_conf": 0.55, "exit": _scene_exit_event_dialog},
-    {"name": "茶憩摘要", "markers": TEA_SUMMARY_MARKERS, "min_conf": 0.55, "exit": _scene_exit_tea_summary},
-    {"name": "关注特写", "markers": FOCUS_MODE_MARKERS, "min_conf": 0.55, "exit": _scene_exit_focus},
-    {"name": "休息室", "markers": REST_ROOM_MARKERS, "min_conf": 0.55, "exit": _scene_exit_rest_room},
-    {"name": "烙痕详情", "markers": MEMORY_DETAIL_MARKERS, "min_conf": 0.55, "exit": _scene_exit_memory_detail},
-    {"name": "烙痕列表", "markers": MEMORY_LIST_MARKERS, "min_conf": 0.55, "exit": _scene_exit_memory_list},
-    {"name": "茶憩房间", "markers": TEA_ROOM_REGISTRY_MARKERS, "min_conf": 0.55, "exit": _scene_exit_tea_room},
-    {"name": "有猫零售", "markers": CAT_RETAIL_MARKERS, "min_conf": 0.55, "exit": _scene_exit_cat_retail},
-    # 好友页排最后：独有词多页少见，detector ≥2 闸在（2026-11-13 #282 取证驱动）
-    {"name": "好友页", "markers": FRIEND_SCENE_MARKERS, "min_conf": 0.55,
-     "detector": _friend_page_hit, "exit": _scene_exit_friend},
-)
-
-
-def _match_scene_rule(logger: logging.Logger, hwnd, results: List[Dict]):
-    """按登记表顺序找第一个命中的场景，返回 (规则, 命中项)；都没有返回 (None, None)。"""
-    for rule in SCENE_RULES:
-        detector = rule.get("detector")
-        if detector is not None:
-            # 组合判据（如加载页 = logo + 百分比）自己决定要不要命中
-            hit = detector(logger, hwnd, results)
-            if hit:
-                return rule, hit
-            continue
-        hit = _pick_result(
-            logger, hwnd, results, rule["markers"],
-            min_conf=rule.get("min_conf", SCENE_OCR_MIN_CONF),
-            exact_only=bool(rule.get("exact_only", False)),
-        )
-        if hit:
-            return rule, hit
-    return None, None
-
-
-def _record_unknown_scene(logger: logging.Logger, hwnd, context: str, detail: str) -> None:
-    """认不出界面 / 反复退不出去时落证据（截图 + 当帧文字），同一上下文 10 分钟一次。
-
-    这是"下次遇到新页面只要加一行登记"的前提：没有证据就只能靠猜。
-    """
-    key = context or "default"
-    now = time.time()
-    # 用 None 而不是 0.0 当"从未记录"哨兵：测试里 time.time 被换成从 0 起步的
-    # 假时钟，`now - 0.0 < 600` 会把第一次记录也吞掉（真机上不会，但断言全瞎）。
-    last = _SCENE_LOGGED.get(key)
-    if last is not None and now - last < _SCENE_LOG_INTERVAL_SEC:
-        return
-    _SCENE_LOGGED[key] = now
-    _record_step_failure(logger, hwnd, f"场景恢复:{key}", detail)
-
-
-def _scene_failure_detail(
-    last_scene: str, last_unmatched_texts: str, last_acted: bool = False
-) -> str:
-    """恢复收尾的取证文案：不让上一轮的场景名冒充当帧结论。
-
-    抽成纯函数便于用真实当帧 OCR 文本回归（2026-11-10 10:00:32 事故）。
-    `last_acted` 区分「加载过场」的两种结局：等待超时返回 False（文案说
-    仍在加载）和加载完成后轮次恰好耗尽——后者不该说成 60s 超时
-    （2026-11-12 10:14 #279 实锤：实际 3s 就加载完了）。
-    """
-    if last_unmatched_texts:
-        return (
-            f"最后识别到「{last_scene}」，收尾时画面已变成未登记界面；"
-            f"当帧文字: {last_unmatched_texts[:200]}"
-        )
-    if last_scene == "加载过场" and not last_acted:
-        return f"加载过场等待 {LOADING_WAIT_TIMEOUT_SEC:.0f}s 后仍在加载，未强行点击"
-    return f"场景「{last_scene}」反复退出失败，仍无法回到任务面板/主界面"
-
-
-def recover_scene(
-    logger: logging.Logger,
-    hwnd,
-    stop_check=None,
-    context: str = "",
-    rounds: int = SCENE_RECOVERY_ROUNDS,
-    results: Optional[List[Dict]] = None,
-) -> Tuple[str, bool]:
-    """匹配当前场景并执行它的专属退出流程。
-
-    返回 (状态, 是否做过动作)：
-    - "panel"：日常任务列表在屏；
-    - "main"：主界面；
-    - "scene:<名称>"：命中过已知场景（可能仍没退出去，调用方按 acted 决定是否复检）；
-    - "unknown"：连续几轮认不出任何已知场景（已落证据，调用方走自己的兜底）。
-
-    `results` 让调用方把已经取到的一轮 OCR 传进来复用，避免重复截屏。
-    """
-    acted_any = False
-    last_scene = ""
-    last_acted = False
-    unknown_streak = 0
-    last_unmatched_texts = ""
-    cached = results
-    for _ in range(max(1, int(rounds))):
-        if _stopped(stop_check):
-            break
-        current = cached if cached is not None else _scene_results(logger, hwnd)
-        cached = None  # 只有调用方传进来的第一轮能复用，之后必须重新截屏
-        if _pick_result(logger, hwnd, current, TASK_LIST_CORE_MARKERS, min_conf=0.55):
-            return ("panel", acted_any)
-        is_main, _ = detect_baijing_main_ui(logger, hwnd, budget_sec=1.5)
-        if is_main:
-            return ("main", acted_any)
-        rule, _hit = _match_scene_rule(logger, hwnd, current)
-        if rule is None:
-            unknown_streak += 1
-            last_unmatched_texts = "｜".join(
-                str(r.get("text") or "") for r in (current or [])[:12]
-            )
-            if unknown_streak >= SCENE_UNKNOWN_ROUNDS:
-                texts = last_unmatched_texts
-                _record_unknown_scene(
-                    logger, hwnd, context or "未知场景",
-                    f"未匹配任何已知场景，需要补登记；当帧文字: {texts[:200]}",
-                )
-                return ("unknown", acted_any)
-            continue
-        last_unmatched_texts = ""
-        last_scene = str(rule["name"])
-        logger.info(f"[白荆回廊·日常] 识别到场景「{last_scene}」，执行专属退出")
-        try:
-            acted = bool(rule["exit"](logger, hwnd, current, stop_check=stop_check))
-        except Exception as exc:
-            logger.warning(f"[白荆回廊·日常] 场景「{last_scene}」退出流程异常: {exc}")
-            acted = False
-        acted_any = acted_any or acted
-        last_acted = acted
-        if not acted:
-            unknown_streak += 1
-            if unknown_streak >= SCENE_UNKNOWN_ROUNDS:
-                break
-        time.sleep(0.4)
-    if last_scene:
-        # 轮次耗尽 ≠ 失败：收尾当帧若已漂到面板/主界面/另一张登记表内场景，
-        # 说明每轮退出都在推进、只是预算烧完，落失败证据只会制造假案
-        # （2026-11-12 10:14 #279 实锤：茶憩房间→关注特写→休息室→加载过场
-        # 四轮全部成功，烧光 rounds 后恰逢定巡之礼弹出，被落成「仍在加载」
-        # 假失败，3 秒后调用方重试就把它领掉了）。只有仍卡在 last_scene 同名
-        # 规则上（真·退不出去）或画面未登记时才落证据。
-        fresh = _scene_results(logger, hwnd)
-        if _pick_result(logger, hwnd, fresh, TASK_LIST_CORE_MARKERS, min_conf=0.55):
-            return ("panel", acted_any)
-        if detect_baijing_main_ui(logger, hwnd, budget_sec=1.5)[0]:
-            return ("main", acted_any)
-        rule_now, _hit_now = _match_scene_rule(logger, hwnd, fresh)
-        if rule_now is not None and rule_now["name"] != last_scene:
-            logger.info(
-                f"[白荆回廊·日常] 恢复轮次耗尽，当帧已是登记表内场景「{rule_now['name']}」，"
-                "交回调用方继续下一轮恢复"
-            )
-            return (f"scene:{last_scene}", acted_any)
-        # 轮次耗尽时画面常已不是 last_scene（2026-11-10 10:00:32：最后识别到
-        # 「休息室」，点确认后游戏切进加载过场，取证截图也是 98% 加载页），
-        # 拿旧场景名配当帧截图会报出「对着加载页说休息室反复退出失败」。
-        detail = _scene_failure_detail(
-            last_scene, last_unmatched_texts, last_acted=last_acted
-        )
-        _record_unknown_scene(logger, hwnd, context or f"场景{last_scene}", detail)
-        return (f"scene:{last_scene}", acted_any)
-    return ("unknown", acted_any)
-
-
-def _return_to_task_panel(logger: logging.Logger, hwnd, stop_check=None, max_attempts: int = 5) -> bool:
-    """从子页面逐层返回日常任务面板：已在面板 → 主界面则重开「任务」→ 否则 ESC 退一层。
-
-    「确认」必须防原地死循环：2026-10-24 记忆烙痕强化后返回时，页面上有个不生效的
-    「确认」文字，原实现每轮都点它、从不按 ESC，界面卡在烙痕页 2 分钟，后续任务全跳过。
-    同一坐标连续命中说明上次点击没改变界面，本轮改走 ESC。
-    """
-    last_confirm: Optional[Tuple[int, int]] = None
-    last_back: Optional[Tuple[int, int]] = None
-    last_cont: Optional[Tuple[int, int]] = None
-    for attempt in range(1, max_attempts + 1):
-        if _stopped(stop_check):
-            return False
-        hwnd = _ensure_window(logger, hwnd)
-        if not hwnd:
-            return False
-        # 1) 已在任务面板？
-        if _ocr_best_match(logger, TASK_LIST_CORE_MARKERS, hwnd, min_conf=0.55):
-            return _ensure_daily_tab(logger, hwnd, stop_check=stop_check)
-        # 2) 在主界面 → 重开任务面板
-        is_main, _ = detect_baijing_main_ui(logger, hwnd, budget_sec=1.5)
-        if is_main:
-            _focus_game_window(logger, hwnd)
-            found = _find_task_button(logger, hwnd, stop_check)
-            if found:
-                (x, y), method = found
-                _pyautogui_click_guarded(x, y)
-                logger.info(f"[白荆回廊·日常] 重新点击「任务」按钮 [{method}] @ ({x},{y})")
-                time.sleep(2.0)
-                if _ocr_best_match(logger, TASK_LIST_CORE_MARKERS, hwnd, min_conf=0.55):
-                    return _ensure_daily_tab(logger, hwnd, stop_check=stop_check)
-                continue
-        # 2.4) 场景登记表：认出是哪个界面就跑它的专属退出流程
-        # （休息室/关注特写这类界面吃不到 ESC，2026-10-26 实锤：连按 5 次空转）
-        state, acted = recover_scene(logger, hwnd, stop_check=stop_check, context="返回任务面板")
-        if state == "panel":
-            return _ensure_daily_tab(logger, hwnd, stop_check=stop_check)
-        if state == "main" or acted:
-            continue
-        # 3) 过场动画遮罩：先点掉「点击屏幕继续」，否则底部按钮都点不到
-        cont = _ocr_best_match(logger, ("点击屏幕继续",), hwnd, min_conf=0.5)
-        if cont:
-            pos = (int(cont["center"][0]), int(cont["center"][1]))
-            if not _same_click_target(pos, last_cont):
-                last_cont = pos
-                _pyautogui_click_guarded(*pos)
-                logger.info(f"[白荆回廊·日常] 返回途中点击「点击屏幕继续」@ {pos}")
-                time.sleep(1.5)
-                continue
-            # 同一坐标反复出现 = 点不动的静态文字，落到下面走 ESC
-        # 4) 退出确认类弹窗（如「将离开休息室，是否确认退出?」）→ 点「确认」
-        confirm = _ocr_best_match(logger, ("确认",), hwnd, min_conf=0.6)
-        if confirm:
-            pos = (int(confirm["center"][0]), int(confirm["center"][1]))
-            if _same_click_target(pos, last_confirm):
-                logger.warning(
-                    "[白荆回廊·日常] 「确认」点击后界面未变化（疑似静态文字），本轮改按 ESC"
-                )
-            else:
-                last_confirm = pos
-                _pyautogui_click_guarded(*pos)
-                logger.info(f"[白荆回廊·日常] 点击退出确认框「确认」@ {pos}")
-                time.sleep(1.5)
-                if _ocr_best_match(logger, TASK_LIST_CORE_MARKERS, hwnd, min_conf=0.55):
-                    return _ensure_daily_tab(logger, hwnd, stop_check=stop_check)
-                continue
-        # 5) 页面左上角「返回」按钮（烙痕列表页/休息室等 ESC 不灵时用）
-        back = _ocr_best_match(
-            logger, ("返回",), hwnd, frac_region=(0.0, 0.0, 0.20, 0.15), min_conf=0.55
-        )
-        if back:
-            pos = (int(back["center"][0]), int(back["center"][1]))
-            if _same_click_target(pos, last_back):
-                logger.warning("[白荆回廊·日常] 「返回」点击后界面未变化，本轮改按 ESC")
-            else:
-                last_back = pos
-                _pyautogui_click_guarded(*pos)
-                logger.info(f"[白荆回廊·日常] 点击页面左上角「返回」@ {pos}")
-                time.sleep(1.5)
-                if _ocr_best_match(logger, TASK_LIST_CORE_MARKERS, hwnd, min_conf=0.55):
-                    return _ensure_daily_tab(logger, hwnd, stop_check=stop_check)
-                continue
-        # 6) ESC 退一层（不清 last_confirm：同一坐标的「确认」本次返回不再重复点）
-        _focus_game_window(logger, hwnd)
-        pyautogui.press("escape")
-        logger.info(f"[白荆回廊·日常] 按 ESC 返回上一层 (#{attempt}/{max_attempts})")
-        time.sleep(1.5)
-    return _ocr_best_match(logger, TASK_LIST_CORE_MARKERS, hwnd, min_conf=0.55) is not None
-
-
-def _ratio_point(logger: logging.Logger, hwnd, ratio: Tuple[float, float]) -> Optional[Tuple[int, int]]:
-    """窗口比例 → 屏幕绝对坐标（只换算不点击；窗口取不到返回 None）。"""
-    region = _window_region(hwnd)
-    if not region:
-        return None
-    return (
-        int(region[0] + ratio[0] * region[2]),
-        int(region[1] + ratio[1] * region[3]),
-    )
-
-
-def _pixel_is_blue(logger: logging.Logger, hwnd, rx: float, ry: float) -> bool:
-    """窗口比例坐标附近取色判蓝（突破确认按钮可点=蓝色底；置灰/抓屏异常=不可点）。
-
-    2026-11-08 取证帧确认按钮为高饱和蓝底白字；材料不足时应为置灰（未取证，
-    按保守方向处理：判不出可点就当不能突破，取消换一张——误判方向安全）。
-    """
-    region = _window_region(hwnd)
-    if not region:
-        return False
-    px = int(region[0] + rx * region[2])
-    py = int(region[1] + ry * region[3])
-    try:
-        img = grab_screen(region=(px - 6, py - 6, 13, 13)).convert("RGB")
-    except Exception as exc:  # noqa: BLE001 - 抓屏失败按不可点处理
-        logger.debug(f"[白荆回廊·日常] 突破按钮取色失败: {exc}")
-        return False
-    blue = sum(1 for r, g, b in img.getdata() if b > 140 and b - r > 40)
-    return blue >= 3
-
-
-def _is_breakthrough_dialog(logger: logging.Logger, hwnd) -> bool:
-    """当前弹窗是否「突破」确认窗（烙痕整十级）：专属标记 ≥2。
-
-    「等级提升」是突破弹窗的页签、也被 MEMORY_DIALOG_MARKERS 收录，两个窗都有，
-    绝不能当突破证据；「突破效果变化/烙痕等级上限/消耗以下材料」只在突破窗出现
-    （2026-11-08 12:41 取证帧三词全在，conf ≥0.9）。
-    """
-    results = ocr_window_content(logger, hwnd=hwnd)
-    if not results:
-        return False
-    texts = [_normalize_text(str(r.get("text") or "")) for r in results]
-    texts = [t for t in texts if t]
-    hits = sum(1 for m in MEMORY_BREAKTHROUGH_MARKERS if any(m in t for t in texts))
-    return hits >= 2
-
-
-def _find_memory_enhance_button(logger: logging.Logger, hwnd) -> Optional[Tuple[int, int]]:
-    """烙痕详情页「强化烙痕」按钮：模板优先，OCR 兜底（烙痕/熔垣两词都收）。"""
-    btn = _template_center(logger, hwnd, MEMORY_ENHANCE_BUTTON_TPL, threshold=0.85)
-    if btn:
-        return btn
-    ocr_btn = _ocr_best_match(
-        logger,
-        MEMORY_ENHANCE_TEXTS,
-        hwnd,
-        frac_region=MEMORY_ENHANCE_BTN_REGION,
-        min_conf=0.55,
-    )
-    if ocr_btn:
-        pos = (int(ocr_btn["center"][0]), int(ocr_btn["center"][1]))
-        logger.info(f"[白荆回廊·日常] 用 OCR 兜底定位「强化烙痕」@ {pos}")
-        return pos
-    return None
-
-
-def _back_to_memory_list(logger: logging.Logger, hwnd) -> bool:
-    """烙痕详情页点左上「返回」回列表页（换下一张烙痕用），**必须验证落点**。
-
-    2026-11-08 用户追问「防止一直在同一张上循环」：返回后若不验证列表特征，
-    停在详情页时下一轮点卡片坐标全是无效点击、详情页复核又把"没换成功"当
-    成功——剩余候选全耗在同一张烙痕上。所以点返回（最多重试 2 次）后必须
-    OCR 到列表页特征才算换卡成功；到不了返回 False，调用方立即终止落证据。
-    """
-    for _ in range(2):
-        try:
-            _exit_via_top_left_back(logger, hwnd, _scene_results(logger, hwnd), "烙痕详情")
-        except Exception as exc:  # noqa: BLE001 - 返回异常按未离开详情页处理
-            logger.debug(f"[白荆回廊·日常] 详情页返回异常: {exc}")
-        if _wait_page_markers(logger, hwnd, MEMORY_LIST_MARKERS, timeout=5.0):
-            logger.info("[白荆回廊·日常] 已返回烙痕列表页，换下一张")
-            return True
-    logger.warning("[白荆回廊·日常] 点返回后未回到烙痕列表页（防同卡循环，终止换卡）")
-    return False
-
-
-def _handle_memory_exp_task(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """记忆烙痕经验任务：前往 → 逐张卡尝试强化 → 重置 → +1 → 确认 → 动画 → 回面板。
-
-    2026-10-18 用户截图实测流程：点行内「前往」进入记忆烙痕列表页（3列卡片网格，
-    左上角首个卡片实测坐标 (402,442)@1919x1079），点卡片进详情页，点右下
-    「强化烙痕」打开等级提升弹窗，「重置」后点一次「+」，「确认」后播等级提升
-    动画，点击屏幕继续，然后逐层返回日常任务面板（该任务随后出现「领取奖励」，
-    由常规领取循环处理）。
-
-    2026-11-08 起逐卡循环（用户口径）：烙痕到整十数等级点「强化烙痕」弹的是
-    「突破」确认窗——能突破就确认后继续强化，材料不够不能突破就取消换一张；
-    全部候选卡试完仍没强化成功才判失败（#221 首跑实锤：首卡已 20/20 满级）。
-    """
-    goto_pos = _find_row_button(logger, hwnd, "经验", "前往", stop_check=stop_check)
-    if not goto_pos:
-        return False
-    _pyautogui_click_guarded(goto_pos[0], goto_pos[1])
-    logger.info(f"[白荆回廊·日常] 点击记忆烙痕任务「前往」@ {goto_pos}")
-    # 等落地页：烙痕列表页（顶部工具栏）或直接就是详情页
-    _wait_page_markers(logger, hwnd, MEMORY_LIST_MARKERS, timeout=8.0, stop_check=stop_check)
-    time.sleep(1.5)
-    # 2) 逐张卡尝试强化（2026-11-08 用户口径）：整十级烙痕弹突破窗——能突破就
-    #    确认后继续强化，不能就取消换下一张；全部候选试完仍没强化成才判失败。
-    on_detail = _on_memory_detail_page(logger, hwnd)
-    if on_detail:
-        logger.info("[白荆回廊·日常] 落地即烙痕详情页，直接强化")
-    last_fail = ""
-    for attempt, (card_fx, card_fy) in enumerate(MEMORY_LIST_CLICK_CANDIDATES):
-        if _stopped(stop_check):
-            return False
-        if not on_detail:
-            hwnd = _ensure_window(logger, hwnd)
-            if not hwnd:
-                return False
-            region = _window_region(hwnd)
-            if not region:
-                return False
-            cx = int(region[0] + card_fx * region[2])
-            cy = int(region[1] + card_fy * region[3])
-            _pyautogui_click_guarded(cx, cy)
-            logger.info(
-                f"[白荆回廊·日常] 尝试点击烙痕卡片 #{attempt + 1} @ ({cx},{cy}) "
-                f"[{card_fx:.2f},{card_fy:.2f}]"
-            )
-            time.sleep(2.0)
-            if not _on_memory_detail_page(logger, hwnd):
-                last_fail = f"点卡片 #{attempt + 1} 未进入烙痕详情页"
-                logger.warning(f"[白荆回廊·日常] {last_fail}")
-                continue
-            on_detail = True
-        # 3) 点「强化烙痕」开弹窗（模板 + OCR 兜底）
-        btn = _find_memory_enhance_button(logger, hwnd)
-        if not btn:
-            last_fail = "详情页未找到「强化烙痕」按钮"
-            logger.warning(f"[白荆回廊·日常] {last_fail}（换下一张）")
-            if not _back_to_memory_list(logger, hwnd):
-                last_fail = "换卡失败：详情页返回后未回到列表页（防同卡循环，终止）"
-                _record_step_failure(logger, hwnd, "记忆烙痕强化", last_fail)
-                _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-                return False
-            on_detail = False
-            continue
-        _pyautogui_click_guarded(btn[0], btn[1])
-        logger.info(f"[白荆回廊·日常] 点击「强化烙痕」@ {btn}")
-        if not _wait_page_markers(logger, hwnd, MEMORY_DIALOG_MARKERS, timeout=6.0, stop_check=stop_check):
-            last_fail = "强化弹窗未打开"
-            logger.warning(f"[白荆回廊·日常] {last_fail}（换下一张）")
-            on_detail = _back_to_memory_list(logger, hwnd)
-            continue
-        # 4) 突破拦截：整十级烙痕弹「等级提升」突破确认而非强化窗（#221 实锤）
-        if _is_breakthrough_dialog(logger, hwnd):
-            can_break = _pixel_is_blue(logger, hwnd, *MEMORY_BREAKTHROUGH_CONFIRM_SAMPLE)
-            logger.info(f"[白荆回廊·日常] 检测到突破弹窗（确认按钮可点={can_break}）")
-            if can_break:
-                confirm = _ocr_best_match(logger, ("确认",), hwnd, min_conf=0.5)
-                confirm_pos = confirm["center"] if confirm else _ratio_point(
-                    logger, hwnd, MEMORY_BREAKTHROUGH_CONFIRM
-                )
-                if not confirm_pos:
-                    last_fail = "突破弹窗未找到「确认」按钮"
-                    logger.warning(f"[白荆回廊·日常] {last_fail}（换下一张）")
-                    _click_ratio(logger, hwnd, MEMORY_BREAKTHROUGH_CANCEL, "突破弹窗取消")
-                    time.sleep(1.5)
-                    on_detail = _back_to_memory_list(logger, hwnd)
-                    continue
-                _pyautogui_click_guarded(*confirm_pos)
-                logger.info(f"[白荆回廊·日常] 突破确认 @ {confirm_pos}")
-                # 突破可能有「点击屏幕继续」过场；等突破弹窗特征消失再回详情页
-                if _wait_page_markers(logger, hwnd, ("点击屏幕继续",), timeout=6.0, stop_check=stop_check):
-                    hit = _ocr_best_match(logger, ("点击屏幕继续",), hwnd, min_conf=0.5)
-                    if hit:
-                        _pyautogui_click_guarded(*hit["center"])
-                        logger.info(f"[白荆回廊·日常] 突破过场点击屏幕继续 @ {hit['center']}")
-                    else:
-                        _click_ratio(logger, hwnd, (0.5, 0.5), "突破过场点屏幕中心")
-                    time.sleep(1.0)
-                # 不能用 MEMORY_DIALOG_MARKERS 判"弹窗已关"——详情页的「特质提升」
-                # 会被误判成弹窗还在；只认突破专属标记是否消失。
-                deadline = time.time() + 10.0
-                while time.time() < deadline and _is_breakthrough_dialog(logger, hwnd):
-                    time.sleep(0.5)
-                if _is_breakthrough_dialog(logger, hwnd):
-                    last_fail = "突破确认后弹窗未关闭"
-                    _record_step_failure(logger, hwnd, "记忆烙痕强化", last_fail)
-                    _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-                    return False
-                # 突破后回详情页：重新点「强化烙痕」做本次经验提升
-                btn2 = _find_memory_enhance_button(logger, hwnd)
-                if not btn2:
-                    last_fail = "突破后未找到「强化烙痕」按钮"
-                    logger.warning(f"[白荆回廊·日常] {last_fail}（换下一张）")
-                    if not _back_to_memory_list(logger, hwnd):
-                        last_fail = "换卡失败：详情页返回后未回到列表页（防同卡循环，终止）"
-                        _record_step_failure(logger, hwnd, "记忆烙痕强化", last_fail)
-                        _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-                        return False
-                    on_detail = False
-                    continue
-                _pyautogui_click_guarded(btn2[0], btn2[1])
-                logger.info(f"[白荆回廊·日常] 突破后点击「强化烙痕」@ {btn2}")
-                if not _wait_page_markers(logger, hwnd, MEMORY_DIALOG_MARKERS, timeout=6.0, stop_check=stop_check):
-                    last_fail = "突破后强化弹窗未打开"
-                    logger.warning(f"[白荆回廊·日常] {last_fail}（换下一张）")
-                    if not _back_to_memory_list(logger, hwnd):
-                        last_fail = "换卡失败：详情页返回后未回到列表页（防同卡循环，终止）"
-                        _record_step_failure(logger, hwnd, "记忆烙痕强化", last_fail)
-                        _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-                        return False
-                    on_detail = False
-                    continue
-            else:
-                # 材料不够不能突破（确认按钮置灰/取色读不出）：取消换一张。
-                # 误判方向安全：把能突破误判成不能，换一张卡照样完成任务；
-                # 反过来在置灰按钮上白点会把流程卡死。
-                cancel = _ocr_best_match(logger, ("取消",), hwnd, min_conf=0.5)
-                cancel_pos = cancel["center"] if cancel else _ratio_point(
-                    logger, hwnd, MEMORY_BREAKTHROUGH_CANCEL
-                )
-                if cancel_pos:
-                    _pyautogui_click_guarded(*cancel_pos)
-                    logger.info(f"[白荆回廊·日常] 突破弹窗取消 @ {cancel_pos}（换下一张烙痕）")
-                    time.sleep(1.5)
-                else:
-                    last_fail = "突破弹窗未找到「取消」按钮"
-                    logger.warning(f"[白荆回廊·日常] {last_fail}")
-                    _click_ratio(logger, hwnd, MEMORY_BREAKTHROUGH_CANCEL, "突破弹窗取消（比例兜底）")
-                if not _back_to_memory_list(logger, hwnd):
-                    last_fail = "换卡失败：详情页返回后未回到列表页（防同卡循环，终止）"
-                    _record_step_failure(logger, hwnd, "记忆烙痕强化", last_fail)
-                    _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-                    return False
-                on_detail = False
-                continue
-        # 5) 正常强化：先确认停在「等级提升」页签 → 重置 → +1 → 确认
-        #    2026-11-11 10:15 实锤（#271）：弹窗默认停在「特质提升」页，那一页
-        #    只有「特质变动/消耗材料/当前选择」，没有「指定等级/重置/+」，
-        #    直接按重置偏移找「+」必然报「未找到 + 按钮」。
-        if not _ensure_memory_level_tab(logger, hwnd, stop_check=stop_check):
-            last_fail = "强化弹窗未切到「等级提升」页签（找不到 指定等级/重置/最大）"
-            logger.warning(f"[白荆回廊·日常] {last_fail}")
-            _record_step_failure(logger, hwnd, "记忆烙痕强化", last_fail)
-            _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-            return False
-        reset = _ocr_best_match(
-            logger, ("重置",), hwnd, frac_region=MEMORY_RESET_REGION, min_conf=0.45
-        )
-        reset_anchor = None
-        if reset:
-            reset_anchor = (int(reset["center"][0]), int(reset["center"][1]))
-            _pyautogui_click_guarded(*reset["center"])
-            logger.info(f"[白荆回廊·日常] 点击「重置」@ {reset['center']}")
-            time.sleep(0.8)
-            # 2026-10-30 10:25 实测：点重置后强化弹窗消失（OCR 区域 34→30，
-            # 随后露出烙痕详情）。弹窗不在时绝不能按偏移盲点 +，否则点到详情页。
-            if not _wait_page_markers(
-                logger, hwnd, MEMORY_DIALOG_MARKERS, timeout=2.0, stop_check=stop_check
-            ):
-                logger.warning("[白荆回廊·日常] 重置后强化弹窗消失，停止（不盲点 +）")
-                _record_step_failure(
-                    logger, hwnd, "记忆烙痕强化", "重置后强化弹窗消失（重置=%s）" % (reset_anchor,)
-                )
-                _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-                return False
-        plus_pos = _find_plus_button(logger, hwnd, anchor=reset_anchor)
-        if not plus_pos:
-            logger.warning("[白荆回廊·日常] 未找到「+」按钮")
-            _record_step_failure(logger, hwnd, "记忆烙痕强化", "未找到「+」按钮（重置=%s）" % (reset_anchor,))
-            _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-            return False
-        _pyautogui_click_guarded(plus_pos[0], plus_pos[1])
-        logger.info(f"[白荆回廊·日常] 点击「+」@ {plus_pos}")
-        time.sleep(0.8)
-        confirm = _ocr_best_match(logger, ("确认",), hwnd, min_conf=0.55)
-        if not confirm:
-            logger.warning("[白荆回廊·日常] 未找到「确认」按钮")
-            _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-            return False
-        _pyautogui_click_guarded(*confirm["center"])
-        logger.info(f"[白荆回廊·日常] 点击「确认」@ {confirm['center']}")
-        # 6) 等级提升动画 → 点击屏幕继续
-        if _wait_page_markers(logger, hwnd, ("点击屏幕继续",), timeout=8.0, stop_check=stop_check):
-            hit = _ocr_best_match(logger, ("点击屏幕继续",), hwnd, min_conf=0.5)
-            if hit:
-                _pyautogui_click_guarded(*hit["center"])
-                logger.info(f"[白荆回廊·日常] 点击屏幕继续 @ {hit['center']}")
-            else:
-                region = _window_region(hwnd)
-                if region:
-                    cx, cy = region[0] + region[2] // 2, region[1] + region[3] // 2
-                    _pyautogui_click_guarded(cx, cy)
-                    logger.info(f"[白荆回廊·日常] 动画点击屏幕中心 @ ({cx},{cy})")
-            time.sleep(1.5)
-        else:
-            logger.warning("[白荆回廊·日常] 未检测到等级提升动画（可能已达上限或确认未生效）")
-        # 7) 返回日常任务面板
-        return _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-    # 全部候选卡都没强化成（含逐张突破取消）：落证据交人工
-    _record_step_failure(logger, hwnd, "记忆烙痕强化", last_fail or "全部候选卡未完成强化")
-    _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-    return False
-
-
-def _click_ratio(logger: logging.Logger, hwnd, ratio: Tuple[float, float], label: str = ""):
-    """按窗口相对比例点击。"""
-    region = _window_region(hwnd)
-    if not region:
-        return None
-    cx = int(region[0] + ratio[0] * region[2])
-    cy = int(region[1] + ratio[1] * region[3])
-    _pyautogui_click_guarded(cx, cy)
-    logger.info(f"[白荆回廊·日常] 点击{label or '位置'} @ ({cx},{cy}) [{ratio[0]:.2f},{ratio[1]:.2f}]")
-    return (cx, cy)
-
-
-def _invite_hit_usable(hit: Optional[Dict]) -> bool:
-    """角色详情页的「邀请」候选是否像按钮。
-
-    2026-11-04：说明文字「每名同调者一天仅能邀请一次，重复邀请请使用通用邀请函」
-    含「邀请」且置信度 0.92，被当成按钮点了一次。按钮名是短词，正文一律排除。
-    """
-    if not hit:
-        return False
-    text = "".join(str(hit.get("text") or "").split())
-    if not text or len(text) > TEA_INVITE_MAX_CHARS:
-        return False
-    return not any(marker in text for marker in TEA_INVITE_EXCLUDE_TEXTS)
-
-
-def _nudge_into_tea_scene(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """点完角色卡后补一脚：先快检茶憩场景，没进就找「邀请/喝茶」类推进按钮。
-
-    2026-11-03 实锤：11:34:24 点了首个角色卡，之后 23 秒画面稳定在 20 个文字
-    区域（不是茶憩场景），接着老逻辑点底部对话框 (0.50,0.92) 把页面退回了休息室。
-
-    2026-11-04 实锤：这页的说明文字「每名同调者一天仅能邀请一次，重复邀请请
-    使用通用邀请函」含「邀请」，旧逻辑把正文当按钮点，页面原地不动。现在只认
-    短按钮名并排除这些说明文字。
-
-    2026-11-07 13:20 当帧再修正：点角色卡后页面根本不跳页——当帧就是角色选择页
-    本身（首位角色卡已打勾），真正的前进按钮是右下「喝茶」圆钮。它是竖排艺术字，
-    当帧 OCR 15 个文字区域里完全没有它，OCR 候选基本命不中；所以在确认仍停留
-    角色选择页（TEA_SELECT_MARKERS 在场）时按 TEA_SELECT_DRINK_RATIO 兜底点
-    一下，与休息室「午后茶憩」入口的 OCR 优先/比例兜底同模式。快检不过就什么都不
-    点交给调用方按失败处理，避免在未知页面盲点把页面退掉。
-
-    返回是否已确认进入场景或已点了推进入口（邀请按钮 / 选择页「喝茶」）。
-    """
-    # 点角色卡可能直接把镜头切进「关注特写」（2026-10-26 12:50 同款），先退掉再找入口
-    _exit_focus_if_present(logger, hwnd, stop_check=stop_check)
-    if _wait_page_markers(logger, hwnd, TEA_SCENE_MARKERS, timeout=8.0, stop_check=stop_check):
-        return True
-    if _stopped(stop_check):
-        return False
-    hit = _ocr_best_match(
-        logger,
-        TEA_INVITE_TEXTS,
-        hwnd,
-        min_conf=0.55,
-        exclude=TEA_INVITE_EXCLUDE_TEXTS,
-    )
-    if hit and not _invite_hit_usable(hit):
-        logger.warning(
-            f"[白荆回廊·日常] 拒绝把说明文字当邀请按钮: {hit.get('text')!r} @ {hit.get('center')}"
-        )
-        hit = None
-    if hit:
-        _pyautogui_click_guarded(*hit["center"])
-        logger.info(f"[白荆回廊·日常] 角色详情页点击 {hit['text']!r} @ {hit['center']}")
-        time.sleep(1.5)
-        return True
-    if _wait_page_markers(
-        logger, hwnd, TEA_SELECT_MARKERS, timeout=2.0, stop_check=stop_check
-    ):
-        # 仍停在角色选择页：点卡只是打勾选中，差的是右下「喝茶」确认（13:20 实锤）
-        _click_ratio(logger, hwnd, TEA_SELECT_DRINK_RATIO, "角色选择页右下「喝茶」")
-        time.sleep(1.5)
-        return True
-    logger.warning(
-        "[白荆回廊·日常] 点角色卡后未见茶憩场景，也没找到「邀请/开始茶憩/喝茶」类按钮"
-    )
-    return False
-
-
-def _exit_focus_if_present(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """链路撞见「关注特写」就点右上「退出关注」关掉（2026-11-07 用户指路）。
-
-    茶憩处理器自己的等待/推进循环不查场景登记表；11-06 09:15 实锤：链路停在
-    特写镜头里干等茶憩纪念函直到失败——特写帧上「退出关注」(0.80) 明晃晃挂着
-    没人点。判定口径与登记表「关注特写」规则完全一致（FOCUS_MODE_REGION 限定
-    右上角，防止把别处的同名词当特写）。
-    """
-    hit = _pick_result(
-        logger, hwnd, _scene_results(logger, hwnd),
-        FOCUS_MODE_MARKERS, frac_region=FOCUS_MODE_REGION, min_conf=0.55,
-    )
-    if not hit:
-        return False
-    _pyautogui_click_guarded(*hit["center"])
-    logger.info(f"[白荆回廊·日常] 点「退出关注」退出特写 @ {hit['center']}")
-    time.sleep(1.5)
-    return True
-
-
-def _retry_tea_entry_after_focus(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """退出关注特写后按休息室路径重找一次茶憩入口（退出特写只会回到休息室全景）。
-
-    2026-11-06 09:15 链路实锤：休息室 →「午后茶憩」→ 角色卡之后画面进了特写，
-    场景等待/两杯喝茶全部空转。只退特写不重找入口的话，后面照样等不到场景。
-    """
-    entry_hit = _ocr_best_match(logger, ("午后茶憩",), hwnd, min_conf=0.55)
-    if entry_hit:
-        _pyautogui_click_guarded(*entry_hit["center"])
-        logger.info(f"[白荆回廊·日常] 点击休息室「午后茶憩」文字 @ {entry_hit['center']}")
-    else:
-        _click_ratio(logger, hwnd, REST_ROOM_TEA_ENTRY, "休息室「午后茶憩」立牌卡")
-    time.sleep(2.0)
-    if _wait_page_markers(
-        logger, hwnd, TEA_SELECT_MARKERS, timeout=TEA_SELECT_TIMEOUT_SEC, stop_check=stop_check
-    ):
-        _click_ratio(logger, hwnd, TEA_FIRST_CHARACTER, "首个角色卡")
-        if _nudge_into_tea_scene(logger, hwnd, stop_check=stop_check):
-            return True
-    # 点「午后茶憩」后可能直接进场景（无角色选择页）
-    return _wait_page_markers(
-        logger, hwnd, TEA_SCENE_MARKERS, timeout=TEA_SCENE_TIMEOUT_SEC, stop_check=stop_check
-    )
-
-
-def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """午后茶憩任务：前往→确定→任选角色→喝茶→再来一杯→摘要→返回→确定→主界面。
-
-    2026-10-18 用户截图实测流程：点任务行「前往」后弹「是否前往茶憩?」确认框，
-    确定后进入角色选择页（今日可邀份额），点任意角色进入茶憩场景；场景内喝茶，
-    等待一段时间后再来一杯；茶憩结束出摘要，随意点击关闭；回到休息室后点左上
-    「返回」，在「将离开休息室」确认框点「确认」，回到主界面。
-    喝茶/再来一杯是场景内动态出现的交互（截图未捕捉到按钮形态），用 OCR 轮询
-    文字点击；若轮询不到只记录警告，不盲点 3D 场景。
-    """
-    # 点角色卡后的补脚结果：True=已进场景/已点邀请，False=两样都没有，None=没走角色卡分支
-    nudge_ok = None
-    # 1) 任务行内「前往」（任务名含「午后茶」，OCR 常把"歇"认成"憩"，取稳定前缀）
-    goto_pos = _find_row_button(logger, hwnd, "午后茶", "前往", stop_check=stop_check)
-    if not goto_pos:
-        return False
-    _pyautogui_click_guarded(goto_pos[0], goto_pos[1])
-    logger.info(f"[白荆回廊·日常] 点击午后茶憩任务「前往」@ {goto_pos}")
-    # 2) 「是否前往茶憩?」→ 确定
-    if _wait_page_markers(logger, hwnd, TEA_CONFIRM_MARKERS, timeout=6.0, stop_check=stop_check):
-        _click_ratio(logger, hwnd, TEA_CONFIRM_OK, "「确定」（前往茶憩）")
-        time.sleep(1.5)
-    else:
-        logger.warning("[白荆回廊·日常] 未见「是否前往茶憩」确认框（可能已直接进入）")
-    # 3) 角色选择页 → 点首个角色
-    # 加载可能很慢（2026-10-20 实测加载条 47%→99% 超过 20s），等待期间不要
-    # 调 _return_to_task_panel，否则会把“还在加载”当成“没进去”并点返回取消。
-    logger.info(
-        f"[白荆回廊·日常] 等待茶憩角色选择页（最长 {TEA_SELECT_TIMEOUT_SEC:.0f}s，含游戏加载）"
-    )
-    role_page = _wait_page_markers(
-        logger, hwnd, TEA_SELECT_MARKERS, timeout=TEA_SELECT_TIMEOUT_SEC, stop_check=stop_check
-    )
-    if role_page:
-        _click_ratio(logger, hwnd, TEA_FIRST_CHARACTER, "首个角色卡")
-        nudge_ok = _nudge_into_tea_scene(logger, hwnd, stop_check=stop_check)
-    elif _in_rest_room(logger, hwnd):
-        # 2026-10-25 19:50 实锤：点「确定」后有时直接进休息室 3D 场景。
-        # 2026-10-26 12:50 进一步实锤：休息室里要点右下「午后茶憩」立牌卡；
-        # 旧实现点左下第一个角色头像，进入的是「关注」特写镜头，茶憩场景永远等不到。
-        logger.info("[白荆回廊·日常] 检测到休息室，点击右下「午后茶憩」入口")
-        # OCR 优先点卡片上的「午后茶憩」文字：10-29 20:04 固定比例点击后没进茶憩，
-        # 房间布局随角色/镜头变化时比例会偏；识别不到文字再退回固定比例。
-        entry_hit = _ocr_best_match(logger, ("午后茶憩",), hwnd, min_conf=0.55)
-        if entry_hit:
-            _pyautogui_click_guarded(*entry_hit["center"])
-            logger.info(f"[白荆回廊·日常] 点击休息室「午后茶憩」文字 @ {entry_hit['center']}")
-        else:
-            _click_ratio(logger, hwnd, REST_ROOM_TEA_ENTRY, "休息室「午后茶憩」立牌卡")
-        time.sleep(2.0)
-        role_page = _wait_page_markers(
-            logger, hwnd, TEA_SELECT_MARKERS, timeout=TEA_SELECT_TIMEOUT_SEC, stop_check=stop_check
-        )
-        if role_page:
-            _click_ratio(logger, hwnd, TEA_FIRST_CHARACTER, "首个角色卡")
-            nudge_ok = _nudge_into_tea_scene(logger, hwnd, stop_check=stop_check)
-        else:
-            logger.warning("[白荆回廊·日常] 休息室点「午后茶憩」后未见角色选择页（可能直接进场景）")
-    else:
-        logger.warning(
-            f"[白荆回廊·日常] {TEA_SELECT_TIMEOUT_SEC:.0f}s 内未进入角色选择页/休息室"
-        )
-        # 失败时落截图 + 当帧 OCR 文字，下次从 flow_failures 直接看真实页面。
-        _record_step_failure(
-            logger, hwnd, "午后茶憩",
-            f"{TEA_SELECT_TIMEOUT_SEC:.0f}s 内未进入角色选择页/休息室",
-        )
-        _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-        return False
-    # 4) 茶憩场景 → 喝茶循环
-    if nudge_ok is False:
-        # 点了角色卡，但既没进场景、也没找到「邀请」入口、也没能在选择页点「喝茶」：
-        # 页面停在登记表之外的地方。2026-11-03 实锤——这时按老逻辑点底部
-        # (0.50,0.92) 会把页面退回休息室，然后两轮「喝茶」轮询全空。这里再给 10s
-        # 兜底，还进不去就落证据收工。
-        # 2026-11-07：特写在场时等不到场景，先退特写并按休息室路径重找一次入口
-        # （2026-11-06 09:15 实锤：特写帧右上「退出关注」(0.80) 没人点，链路干等
-        # 到失败——用户指路「点那个 X 就关掉了」）。
-        if not _wait_page_markers(
-            logger, hwnd, TEA_SCENE_MARKERS, timeout=10.0, stop_check=stop_check
-        ):
-            if not (
-                _exit_focus_if_present(logger, hwnd, stop_check=stop_check)
-                and _retry_tea_entry_after_focus(logger, hwnd, stop_check=stop_check)
-            ):
-                logger.warning("[白荆回廊·日常] 角色卡点击后仍未进入茶憩场景，跳过盲点推进")
-                _record_step_failure(
-                    logger, hwnd, "午后茶憩",
-                    "点角色卡后停在未知页，未找到「邀请/开始茶憩/喝茶」推进入口",
-                )
-                _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-                return False
-    scene_seen = _wait_page_markers(
-        logger, hwnd, TEA_SCENE_MARKERS, timeout=TEA_SCENE_TIMEOUT_SEC, stop_check=stop_check
-    )
-    if not scene_seen and _exit_focus_if_present(logger, hwnd, stop_check=stop_check):
-        # 场景等待期间画面在「关注特写」里（11-06 09:15 同款）：退掉特写回休息室
-        # 全景后，重走一遍「午后茶憩 → 角色卡」入口，进不去按原口径失败
-        scene_seen = _retry_tea_entry_after_focus(logger, hwnd, stop_check=stop_check)
-    if not scene_seen:
-        logger.warning("[白荆回廊·日常] 未检测到茶憩场景（茶憩纪念函）")
-    topic_clicked = False
-    for rnd in range(1, TEA_DRINK_ROUNDS + 1):
-        if _stopped(stop_check):
-            return False
-        hwnd = _ensure_window(logger, hwnd)
-        if not hwnd:
-            return False
-        # 4a) 话题菜单兜底：出现则点第一个话题（每次茶憩仅能选一项，只点一次）
-        if not topic_clicked and _ocr_best_match(logger, TEA_TOPIC_MARKERS, hwnd, min_conf=0.6):
-            _click_ratio(logger, hwnd, TEA_FIRST_TOPIC, "第一个话题")
-            topic_clicked = True
-            time.sleep(1.0)
-        # 4b) 推进对话（点对话框区域），同时轮询喝茶按钮
-        drink_hit = None
-        deadline = time.time() + TEA_DRINK_POLL_SEC
-        while time.time() < deadline:
-            if _stopped(stop_check):
-                return False
-            hwnd = _ensure_window(logger, hwnd)
-            if not hwnd:
-                return False
-            drink_hit = _ocr_best_match(logger, TEA_DRINK_TEXTS, hwnd, min_conf=0.55)
-            if drink_hit:
-                break
-            # 摘要已出现 → 不用再喝
-            if _ocr_best_match(logger, TEA_SUMMARY_MARKERS, hwnd, min_conf=0.55):
-                break
-            if _exit_focus_if_present(logger, hwnd, stop_check=stop_check):
-                continue    # 特写镜头里不盲点对话框（点了只会乱聚焦/进出特写）
-            # 盲点推进只允许发生在茶憩场景里（2026-11-07 根因收口）：
-            # 场景没确认就只轮询不点——11-03 实锤盲点把角色详情页点回休息室，
-            # 11-06 实锤之后 100 秒在错误页面每 2.5s 盲点一次，12 次失败 10 次
-            # 死在休息室、2 次点中场景里的角色/家具停在「关注特写」
-            in_scene = scene_seen or bool(
-                _ocr_best_match(logger, TEA_SCENE_MARKERS, hwnd, min_conf=0.55)
-            )
-            if not in_scene:
-                time.sleep(2.5)
-                continue
-            _click_ratio(logger, hwnd, TEA_DIALOGUE_CLICK, "对话框（推进对话）")
-            time.sleep(2.5)
-        if drink_hit:
-            _pyautogui_click_guarded(*drink_hit["center"])
-            logger.info(f"[白荆回廊·日常] 第 {rnd} 杯：点击 {drink_hit['text']!r} @ {drink_hit['center']}")
-            time.sleep(2.0)
-        else:
-            logger.warning(f"[白荆回廊·日常] 第 {rnd} 杯：未轮询到喝茶按钮（可能按钮形态与文字不符）")
-        # 4c) 每杯之间等待一段时间（用户：等待一段时间后再来一杯）
-        if rnd < TEA_DRINK_ROUNDS:
-            time.sleep(TEA_DRINK_WAIT_SEC)
-    # 5) 等茶憩结束摘要 → 随意点击关闭
-    summary_seen = _wait_page_markers(
-        logger, hwnd, TEA_SUMMARY_MARKERS, timeout=45.0, stop_check=stop_check
-    )
-    if not summary_seen:
-        # 未自动结束则尝试点「结束茶憩」
-        end_hit = _ocr_best_match(logger, ("结束茶憩",), hwnd, min_conf=0.55)
-        if end_hit:
-            _pyautogui_click_guarded(*end_hit["center"])
-            logger.info(f"[白荆回廊·日常] 点击「结束茶憩」@ {end_hit['center']}")
-            if _wait_page_markers(
-                logger, hwnd, TEA_SUMMARY_MARKERS, timeout=15.0, stop_check=stop_check
-            ):
-                summary_seen = True
-    if _ocr_best_match(logger, TEA_SUMMARY_MARKERS, hwnd, min_conf=0.55):
-        summary_seen = True
-        _click_ratio(logger, hwnd, TEA_SUMMARY_CLICK, "摘要区域（点击退出）")
-        time.sleep(2.0)
-    # 6) 回休息室 → 返回 → 确认 → 主界面
-    # 2026-10-25 假成功修复：返回任务面板成功 ≠ 茶憩完成。19:06 那轮「确认」后
-    # 既没见过场景也没见过摘要，仅因 _return_to_task_panel 成功就被上层记成功，
-    # 而游戏内实际仍是 0/1。这里必须用场景/摘要作为证据，失败就返回 False；
-    # 上层也不再乐观写 done，最终以任务列表重扫为准。
-    has_evidence = scene_seen or summary_seen
-    if not has_evidence:
-        logger.warning("[白荆回廊·日常] 茶憩未出现场景/结束摘要，任务状态未确认")
-        _record_step_failure(
-            logger, hwnd, "午后茶憩",
-            "未检测到茶憩场景/结束摘要，任务状态未确认",
-        )
-    returned = _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-    return bool(returned and has_evidence)
-
-
-def _claim_leaf_vein_rewards(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """叶脉联结页领取：点左侧 tab → 任务总览 → 全部领取 → 关奖励弹窗。
-
-    2026-10-18 用户截图实测：日常 tab 处理完毕后，任务面板左侧还有「叶脉联结」
-    tab（本日/本周/本期任务，如「日常任务累计活跃度达到100」也有奖励），
-    底栏有「任务总览」和「全部领取」。按用户流程：切到叶脉联结 → 任务总览 →
-    全部领取。奖励与日常 tab 不互通，漏领会丢每日联结经验。
-    """
-    if _stopped(stop_check):
-        return False
-    hwnd = _ensure_window(logger, hwnd)
-    if not hwnd:
-        return False
-    # 0) 自愈入口（2026-10-25 实锤）：此前默认 process_task_list 结束时面板还开着，
-    #    但领取循环/重扫的任何闪失都可能把面板关掉——叶脉在错误界面上找 tab 永远
-    #    找不到，比例兜底一点反而回主界面，联结奖励直接漏领。先确认面板在屏
-    #    （在屏是零成本快检，不在屏则从主界面重开）。
-    if not _ensure_task_list_open(logger, hwnd, stop_check=stop_check):
-        logger.warning("[白荆回廊·日常] 叶脉联结前无法确认任务面板在屏，跳过联结领取")
-        return False
-    # 1) 点左侧「叶脉联结」tab（限定 tab 列，排除底部 VEINOS 图标）
-    tab = _ocr_best_match(
-        logger, LEAF_TAB_TEXTS, hwnd, frac_region=LEAF_TAB_REGION, min_conf=0.45
-    )
-    entered = False
-    if tab:
-        _pyautogui_click_guarded(*tab["center"])
-        logger.info(f"[白荆回廊·日常] 点击「叶脉联结」tab @ {tab['center']}")
-        entered = _wait_page_markers(
-            logger, hwnd, LEAF_PAGE_MARKERS, timeout=8.0, stop_check=stop_check
-        )
-    else:
-        logger.warning("[白荆回廊·日常] OCR 未找到「叶脉联结」tab，尝试比例兜底")
-    # 2) OCR 未命中或点击未生效 → 按实测 tab 位置比例兜底
-    if not entered:
-        _click_ratio(logger, hwnd, LEAF_TAB_FALLBACK, "「叶脉联结」tab（比例兜底）")
-        entered = _wait_page_markers(
-            logger, hwnd, LEAF_PAGE_MARKERS, timeout=8.0, stop_check=stop_check
-        )
-    if not entered:
-        logger.warning("[白荆回廊·日常] 未进入叶脉联结页，跳过联结领取")
-        return False
-    time.sleep(1.0)
-    # 3) 任务总览（OCR 优先，比例兜底）
-    hit = _ocr_best_match(logger, ("任务总览",), hwnd, min_conf=0.55)
-    if hit:
-        _pyautogui_click_guarded(*hit["center"])
-        logger.info(f"[白荆回廊·日常] 点击「任务总览」@ {hit['center']}")
-    else:
-        _click_ratio(logger, hwnd, LEAF_OVERVIEW_BTN, "「任务总览」（比例兜底）")
-    time.sleep(1.5)
-    # 4) 全部领取（OCR 优先，比例兜底）
-    hit = _ocr_best_match(logger, ("全部领取",), hwnd, min_conf=0.55)
-    if hit:
-        _pyautogui_click_guarded(*hit["center"])
-        logger.info(f"[白荆回廊·日常] 点击「全部领取」@ {hit['center']}")
-    else:
-        _click_ratio(logger, hwnd, LEAF_CLAIM_ALL_BTN, "「全部领取」（比例兜底）")
-    time.sleep(2.0)
-    # 5) 领取后可能出奖励弹窗，关掉（最多两轮）
-    for _ in range(2):
-        if _stopped(stop_check):
-            break
-        if not _dismiss_overlay(logger, hwnd):
-            break
-        time.sleep(0.8)
-    logger.info("[白荆回廊·日常] 叶脉联结领取步骤完成")
-    return True
 
 
 def _open_retail_shop(logger: logging.Logger, hwnd, stop_check=None) -> bool:
@@ -2968,6 +207,8 @@ def _open_retail_shop(logger: logging.Logger, hwnd, stop_check=None) -> bool:
     else:
         _click_ratio(logger, hwnd, SHOP_ENTRY_FALLBACK, "「有猫零售」（比例兜底）")
     return _wait_page_markers(logger, hwnd, SHOP_PAGE_MARKERS, timeout=8.0, stop_check=stop_check)
+
+
 
 
 def _select_featured_gift_tab(logger: logging.Logger, hwnd, stop_check=None) -> bool:
@@ -2997,6 +238,8 @@ def _select_featured_gift_tab(logger: logging.Logger, hwnd, stop_check=None) -> 
     return True
 
 
+
+
 def _buy_in_dialog(logger: logging.Logger, hwnd, stop_check=None) -> bool:
     """购买确认弹窗点「购买」（OCR 优先，比例兜底）。"""
     hit = _ocr_best_match(
@@ -3008,6 +251,8 @@ def _buy_in_dialog(logger: logging.Logger, hwnd, stop_check=None) -> bool:
     else:
         _click_ratio(logger, hwnd, SHOP_BUY_FALLBACK, "「购买」（比例兜底）")
     return True
+
+
 
 
 def _wait_purchase_settled(logger: logging.Logger, hwnd, timeout: float = 12.0, stop_check=None) -> str:
@@ -3041,6 +286,8 @@ def _wait_purchase_settled(logger: logging.Logger, hwnd, timeout: float = 12.0, 
     return "unknown"
 
 
+
+
 def _leave_retail_shop(logger: logging.Logger, hwnd, stop_check=None) -> bool:
     """零售页返回主界面（左上「返回」→ ESC），返回是否已回主界面。"""
     for attempt in range(1, MAX_CLOSE_ATTEMPTS + 1):
@@ -3068,6 +315,8 @@ def _leave_retail_shop(logger: logging.Logger, hwnd, stop_check=None) -> bool:
     if not ok:
         logger.warning("[白荆回廊·日常] 多次尝试后仍未从零售页回到主界面")
     return ok
+
+
 
 
 def buy_daily_free_gift_pack(logger: logging.Logger, hwnd, stop_check=None) -> Dict:
@@ -3178,1413 +427,6 @@ def buy_daily_free_gift_pack(logger: logging.Logger, hwnd, stop_check=None) -> D
     return result
 
 
-def _enter_club_page(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """主界面左上第 4 个图标进俱乐部；中途弹「新物品已存入仓库」点空白继续。"""
-    if _stopped(stop_check):
-        return False
-    hwnd = _ensure_window(logger, hwnd)
-    if not hwnd:
-        return False
-    _focus_game_window(logger, hwnd)
-    _dismiss_overlay(logger, hwnd)
-    center = _template_center(logger, hwnd, CLUB_ENTRY_TEMPLATE, frac_region=CLUB_ENTRY_REGION, threshold=0.85)
-    if center:
-        _pyautogui_click_guarded(*center)
-        logger.info(f"[白荆回廊·俱乐部] 点击左上角俱乐部入口图标 @ {center}")
-    else:
-        _click_ratio(logger, hwnd, CLUB_ENTRY_FALLBACK, "「俱乐部」入口图标（比例兜底）")
-    time.sleep(2.0)
-    # 直接进页面就最好；没进去通常是弹了「新物品已存入S.E.E.D.仓库」这类提示
-    if _wait_page_markers(logger, hwnd, CLUB_PAGE_MARKERS, timeout=6.0, stop_check=stop_check):
-        logger.info("[白荆回廊·俱乐部] 已进入俱乐部页面")
-        return True
-    logger.info("[白荆回廊·俱乐部] 未见俱乐部页面特征，点击空白区域继续")
-    _dismiss_overlay(logger, hwnd)
-    _click_ratio(logger, hwnd, CLUB_BLANK_CLICK, "空白区域（继续进入）")
-    time.sleep(1.5)
-    if _wait_page_markers(logger, hwnd, CLUB_PAGE_MARKERS, timeout=8.0, stop_check=stop_check):
-        logger.info("[白荆回廊·俱乐部] 点击空白区域后已进入俱乐部页面")
-        return True
-    # 2026-10-22：两次都没进页面，重试一次入口点击（弹窗/加载挡掉首次点击时），
-    # 再次以页面特征文字确认——不凭"点了就算"
-    logger.info("[白荆回廊·俱乐部] 仍未进页面，重试点击俱乐部入口")
-    _dismiss_overlay(logger, hwnd)
-    center = _template_center(logger, hwnd, CLUB_ENTRY_TEMPLATE, frac_region=CLUB_ENTRY_REGION, threshold=0.85)
-    if center:
-        _pyautogui_click_guarded(center[0], center[1])
-        logger.info(f"[白荆回廊·俱乐部] 重试点击俱乐部入口图标 @ {center}")
-    else:
-        _click_ratio(logger, hwnd, CLUB_ENTRY_FALLBACK, "「俱乐部」入口图标（比例兜底）")
-    time.sleep(2.0)
-    if not _wait_page_markers(logger, hwnd, CLUB_PAGE_MARKERS, timeout=8.0, stop_check=stop_check):
-        logger.warning("[白荆回廊·俱乐部] 未进入俱乐部页面")
-        return False
-    logger.info("[白荆回廊·俱乐部] 重试后已进入俱乐部页面")
-    return True
-
-
-def _claim_club_daily_task(logger: logging.Logger, hwnd, stop_check=None) -> str:
-    """点「俱乐部每日任务」卡片领取，返回 purchased / already / no_claim / failed。
-
-    领完后卡片会变成「今日任务已完成」（实测 2026-10-18 截图），这是唯一的成功凭据：
-    页面顶栏那条「今日俱乐部奖励已领取」在进页面前就已存在，不能当领取结果。
-    """
-    if _ocr_best_match(logger, CLUB_DONE_TEXTS, hwnd, frac_region=CLUB_CARD_REGION, min_conf=0.55):
-        logger.info("[白荆回廊·俱乐部] 卡片已是「今日任务已完成」，无需重复领取")
-        return "already"
-    # 先点卡片标题；有些版本标题即领取热区
-    card = _ocr_best_match(
-        logger, CLUB_DAILY_TASK_TEXTS, hwnd, frac_region=CLUB_CARD_REGION, min_conf=0.55
-    )
-    if card:
-        _pyautogui_click_guarded(*card["center"])
-        logger.info(f"[白荆回廊·俱乐部] 点击「俱乐部每日任务」卡片 @ {card['center']}")
-    else:
-        _click_ratio(logger, hwnd, CLUB_CARD_FALLBACK, "「俱乐部每日任务」卡片（比例兜底）")
-    time.sleep(1.5)
-    # 领完后可能弹奖励提示，先清一次
-    _dismiss_overlay(logger, hwnd)
-    if _ocr_best_match(logger, CLUB_DONE_TEXTS, hwnd, frac_region=CLUB_CARD_REGION, min_conf=0.55):
-        logger.info("[白荆回廊·俱乐部] 卡片已变为「今日任务已完成」")
-        return "purchased"
-    # 若弹出独立「领取」按钮则点掉（卡片点击不一定直接领）
-    claim_clicked = False
-    claim = _ocr_best_match(logger, CLUB_CLAIM_TEXTS, hwnd, frac_region=CLUB_CARD_REGION, min_conf=0.6)
-    if claim:
-        claim_clicked = True
-        _pyautogui_click_guarded(*claim["center"])
-        logger.info(f"[白荆回廊·俱乐部] 点击「领取」@ {claim['center']}")
-        time.sleep(1.5)
-        _dismiss_overlay(logger, hwnd)
-        if _ocr_best_match(logger, CLUB_DONE_TEXTS, hwnd, frac_region=CLUB_CARD_REGION, min_conf=0.55):
-            logger.info("[白荆回廊·俱乐部] 点击「领取」后卡片显示「今日任务已完成」")
-            return "purchased"
-    # 兜底：点卡片中心（标题不是热区时）
-    _click_ratio(logger, hwnd, CLUB_CARD_FALLBACK, "卡片中心（领取热区兜底）")
-    time.sleep(1.5)
-    _dismiss_overlay(logger, hwnd)
-    if _ocr_best_match(logger, CLUB_DONE_TEXTS, hwnd, frac_region=CLUB_CARD_REGION, min_conf=0.55):
-        logger.info("[白荆回廊·俱乐部] 点击卡片中心后显示「今日任务已完成」")
-        return "purchased"
-    # 没有可点的「领取」按钮：卡片点击本身没生效更可能是“今日无奖励可领”
-    # （任务未完成或奖励已领），不要记成点击失败。只有确实点过「领取」仍未变化才算 failed。
-    return "failed" if claim_clicked else "no_claim"
-
-
-def _leave_club_page(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """俱乐部页返回主界面（左上「返回」→ ESC）。"""
-    for attempt in range(1, MAX_CLOSE_ATTEMPTS + 1):
-        if _stopped(stop_check):
-            return False
-        hwnd = _ensure_window(logger, hwnd)
-        if not hwnd:
-            return False
-        _dismiss_overlay(logger, hwnd)
-        ok, _ = detect_baijing_main_ui(logger, hwnd, budget_sec=2.0)
-        if ok:
-            logger.info("[白荆回廊·俱乐部] 已回到主界面")
-            return True
-        back = _ocr_best_match(logger, ("返回",), hwnd, frac_region=CLUB_BACK_REGION, min_conf=0.55)
-        if back:
-            _pyautogui_click_guarded(*back["center"])
-            logger.info(f"[白荆回廊·俱乐部] 点击「返回」@ {back['center']}")
-        else:
-            _focus_game_window(logger, hwnd)
-            pyautogui.press("escape")
-            logger.info(f"[白荆回廊·俱乐部] 按 ESC 返回主界面 (#{attempt}/{MAX_CLOSE_ATTEMPTS})")
-        time.sleep(1.5)
-    ok, _ = detect_baijing_main_ui(logger, hwnd, budget_sec=2.0)
-    if not ok:
-        logger.warning("[白荆回廊·俱乐部] 多次尝试后仍未回到主界面")
-    return ok
-
-
-def _echo_texts(items: List[Dict], min_conf: float = 0.5) -> List[str]:
-    """当帧 OCR 文本（置信度过滤）——回声猎区各判定共用。"""
-    return [
-        str(it.get("text") or "")
-        for it in (items or [])
-        if float(it.get("confidence") or 0) >= min_conf
-    ]
-
-
-def _echo_map_confirmed(items: List[Dict]) -> bool:
-    """猎区地图 = 标题「回声猎区」+ ≥1 地图独有词（双证据，页面判定铁律）。
-
-    俱乐部页入口卡片也有「回声猎区」四个字，单标题必误判；独有词取节点标签/
-    重置倒计时/左下奖励入口（2026-11-13 用户地图页截图实测）。
-    """
-    texts = _echo_texts(items)
-    if not any(m in t for t in texts for m in ECHO_MAP_TITLE):
-        return False
-    return any(m in t for t in texts for m in ECHO_MAP_BODY)
-
-
-def _echo_reset_expiry(items: List[Dict]) -> str:
-    """从「重置时间剩余N天」算已清标记过期日（ISO 日期）；读不到按保守值。
-
-    读不到宁可短给（3 天后标记作废重打一遍）也不长给——标记错最多浪费一场，
-    漏打是丢奖励。
-    """
-    for text in _echo_texts(items):
-        m = ECHO_RESET_RE.search(text)
-        if m:
-            days = int(m.group(1))
-            return time.strftime("%Y-%m-%d", time.localtime(time.time() + days * 86400))
-    return time.strftime(
-        "%Y-%m-%d", time.localtime(time.time() + ECHO_RESET_FALLBACK_DAYS * 86400)
-    )
-
-
-def _echo_load_marks(logger: logging.Logger) -> Dict:
-    """读「已清节点」标记（workflow.db meta，JSON）；损坏/过期一律按无标记。
-
-    标记只是跳过优化，不是真值闸：每次开打前还有详情面板「开始收录」在场与否
-    这道实测判断（2026-11-13 口径）。用户手动打的节点标记不知道，最多重打一场。
-    """
-    try:
-        from ..storage.workflow_db import WorkflowDB
-
-        raw = WorkflowDB(str(WORKFLOW_DB_PATH)).get_task_meta(ECHO_META_KEY)
-        marks = json.loads(raw) if raw else {}
-        cleared = marks.get("cleared")
-        period_end = str(marks.get("period_end") or "")
-        if not isinstance(cleared, list) or not period_end:
-            return {}
-        if period_end < time.strftime("%Y-%m-%d"):  # 活动期已过 → 标记作废
-            return {}
-        return {"period_end": period_end, "cleared": [str(c) for c in cleared]}
-    except Exception as exc:  # noqa: BLE001 - 标记读不到不影响作战，只当无标记
-        logger.debug(f"[白荆回廊·俱乐部] 回声猎区已清标记读取失败（按无标记）: {exc}")
-        return {}
-
-
-def _echo_save_marks(logger: logging.Logger, period_end: str, cleared: List[str]) -> None:
-    """写「已清节点」标记；失败只告警——下次最多重打已清节点，无害。"""
-    try:
-        from ..storage.workflow_db import WorkflowDB
-
-        WorkflowDB(str(WORKFLOW_DB_PATH)).set_task_meta(
-            ECHO_META_KEY,
-            json.dumps(
-                {"period_end": period_end, "cleared": sorted(set(cleared))},
-                ensure_ascii=False,
-            ),
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(f"[白荆回廊·俱乐部] 回声猎区已清标记写入失败: {exc}")
-
-
-def _echo_node_labels(hwnd, items: List[Dict]) -> List[Dict]:
-    """当前帧地图区内的节点标签（含「纯净回声」），按 x 从左到右排序。
-
-    右界 0.66 避开详情面板（面板标题也叫「纯净回声·X」，不避开会混进节点序）；
-    窗口取不到（失效/测试桩）时退化为只按文本匹配不过滤区域。
-    """
-    region = _abs_region(hwnd, ECHO_NODE_REGION)
-    out: List[Dict] = []
-    for it in items or []:
-        text = str(it.get("text") or "")
-        if float(it.get("confidence") or 0) < 0.5 or ECHO_NODE_LABEL not in text:
-            continue
-        if region:
-            ax, ay, aw, ah = region
-            cx, cy = it.get("center") or (0, 0)
-            if not (ax <= cx <= ax + aw and ay <= cy <= ay + ah):
-                continue
-        out.append(it)
-    out.sort(key=lambda it: (it.get("center") or (0, 0))[0])
-    return out
-
-
-def _echo_letter_of(text: str) -> Optional[str]:
-    """从「纯净回声·A」式文本提节点字母；认不出返回 None。
-
-    分隔符放行 ≤2 个非字母数字字符（·/./-），且字母后不能再跟字母——防 OCR
-    把两个标签并成一条时取错字母。
-    """
-    m = re.search(r"纯净回声[^\dA-Za-z]{0,2}([A-Ea-e])(?![A-Za-z])", text)
-    return m.group(1).upper() if m else None
-
-
-def _echo_pick_label(labels: List[Dict], letter: str) -> Optional[Dict]:
-    """定位目标节点标签：OCR 文本里的字母优先，x 序兜底（仅当 5 个标签全在）。
-
-    x 序兜底的依据：11-13 两张实机截图里 A~E 标签 x 严格递增；地图平移不影响
-    相对顺序。凑不齐 5 个且字母认不出时宁可不点（交证据），绝不猜。
-    """
-    for it in labels:
-        if _echo_letter_of(str(it.get("text") or "")) == letter:
-            return it
-    if len(labels) == len(ECHO_NODE_LETTERS):
-        return labels[ECHO_NODE_LETTERS.index(letter)]
-    return None
-
-
-def _echo_wait_map(
-    logger: logging.Logger, hwnd, stop_check, timeout: float = ECHO_WAIT_MAP
-) -> Tuple[bool, List[Dict], str]:
-    """轮询等猎区地图双证据确认；返回 (ok, 确认帧 items, 重置过期日)。"""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if _stopped(stop_check):
-            return False, [], ""
-        items = _scene_results(logger, hwnd)
-        if _echo_map_confirmed(items):
-            return True, items, _echo_reset_expiry(items)
-        time.sleep(1.0)
-    return False, [], ""
-
-
-def _echo_panel_claim(
-    logger: logging.Logger, hwnd, stop_check, timeout: float = ECHO_WAIT_PANEL
-) -> Optional[Dict]:
-    """点节点标签后等详情面板「开始收录」；没有 = 锁定/不可打（顺序链终止）。
-
-    锁定节点在地图上照样有标签（11-13 截图 B~E 带锁），点开没有「开始收录」
-    才是不可打的实锤，所以这道闸不能省。
-    """
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if _stopped(stop_check):
-            return None
-        hit = _ocr_best_match(
-            logger, ECHO_CLAIM_TEXTS, hwnd,
-            frac_region=ECHO_CLAIM_REGION, min_conf=0.55,
-        )
-        if hit:
-            return hit
-        time.sleep(1.0)
-    return None
-
-
-def _echo_result_frame(items: List[Dict]) -> bool:
-    """回声猎区胜利结算页（2026-11-14 实机）：「任务完成」+「关卡目标」双词同帧。
-
-    文案与拟合回归的「作战完成/达成波次」完全不同——fitting 的 result 分类
-    不认这页，首次实机打完 A 后分类恒 unknown，收敛循环干等 480s 报败。
-    """
-    texts = [_normalize_text(str(it.get("text") or "")) for it in items or []]
-    return (
-        any("任务完成" in t for t in texts if t)
-        and any("关卡目标" in t for t in texts if t)
-    )
-
-
-def _echo_defeat_frame(items: List[Dict]) -> bool:
-    """回声猎区战败页（2026-11-14 实机）：「任务失败」与「推荐」双词同帧。
-
-    战斗目标横幅也含「任务失败」字样，单词命中是误报陷阱（会话两次实锤：
-    误点把开场过场点没了、假回图还假写已清标记）；真战败页独有「推荐您：
-    提升刻印/培养同调者」卡片，必须与「推荐」同帧才算战败。
-    """
-    texts = [_normalize_text(str(it.get("text") or "")) for it in items or []]
-    return (
-        any("任务失败" in t for t in texts if t)
-        and any("推荐" in t for t in texts if t)
-    )
-
-
-def _echo_wait_battle_settled(
-    logger: logging.Logger, hwnd, stop_check, deadline: float
-) -> Tuple[bool, str, List[Dict]]:
-    """战斗开始后自适应等收敛：结算/战败/奖励/浮层逐个点掉，回猎区地图算完成。
-
-    2026-11-14 实机收口（A~D + boss 全打过），战后落点全套实锤：
-    - 胜利结算页「任务完成/关卡目标」→ 点空白推进（`_echo_result_frame`）；
-    - 战败页「任务失败+推荐您」不自动消失（实机挂 8 分钟）→ 点空白推进，
-      点完回图但节点没打下来——返回 map_defeated 让调用方不写已清标记；
-    - 战斗目标横幅含「任务失败」，单词误报会把开场过场点没，战败判定必须
-      与「推荐」同帧（`_echo_defeat_frame`）；
-    - 奖励页点「点击屏幕继续」、物品浮层按 ESC、地图双证据先到先收（原口径）。
-    全程心跳日志，超时交调用方落证据。
-    """
-    from .baijing_fitting import (  # 延迟导入：fitting 懒引用本模块，防环
-        _dismiss_item_popup,
-        _page_now,
-        P_RESULT_CONTINUE,
-        P_REWARD_CONTINUE,
-    )
-
-    last_heartbeat = 0.0
-    last_page, last_items = "unknown", []
-    defeated = False  # 本场点过战败页 → 回图也不算收录（防假清标记）
-    while time.time() < deadline:
-        if _stopped(stop_check):
-            return False, "用户停止", last_items
-        page, items = _page_now(logger, hwnd)
-        last_page, last_items = page, items
-        if _echo_map_confirmed(items):
-            return True, ("map_defeated" if defeated else "map"), items
-        if _echo_result_frame(items):
-            _click_ratio(logger, hwnd, P_RESULT_CONTINUE, "回声猎区结算页点空白")
-            time.sleep(2.0)
-            continue
-        if _echo_defeat_frame(items):
-            # 点位取屏幕中心，避开左侧「前往提升刻印/培养同调者」按钮（点了
-            # 会跳养成页）；战败流程：点空白 → 回猎区地图（节点未清）。
-            _click_ratio(logger, hwnd, P_RESULT_CONTINUE, "回声猎区战败页点空白")
-            defeated = True
-            time.sleep(2.5)
-            continue
-        if page == "result":
-            _click_ratio(logger, hwnd, P_RESULT_CONTINUE, "回声猎区结算页点空白")
-            time.sleep(2.0)
-            continue
-        if page == "reward":
-            _click_ratio(logger, hwnd, P_REWARD_CONTINUE, "回声猎区奖励页继续")
-            time.sleep(2.0)
-            continue
-        if page == "item_popup":
-            _dismiss_item_popup(logger, hwnd)
-            continue
-        cont = next(
-            (it for it in items or [] if "点击屏幕继续" in str(it.get("text") or "")),
-            None,
-        )
-        if cont and page == "unknown":
-            _pyautogui_click_guarded(*cont["center"])
-            logger.info("[白荆回廊·俱乐部] 回声猎区：点「点击屏幕继续」推进过场")
-            time.sleep(1.5)
-            continue
-        now = time.time()
-        if now - last_heartbeat >= ECHO_HEARTBEAT_SEC:
-            texts = _echo_texts(items)
-            extra = next((t for t in texts if "波次" in t or "%" in t), "")
-            logger.info(f"[白荆回廊·俱乐部] 回声猎区战斗挂机中… 页面={page} {extra}")
-            last_heartbeat = now
-        time.sleep(1.0)
-    return False, f"战斗未收敛（{last_page}）", last_items
-
-
-def _echo_boss_panel_confirmed(items: List[Dict]) -> bool:
-    """boss 面板 = 标题「不协和音」+ ≥1 面板独有词（双证据，铁律禁单标题）。
-
-    地图 boss 标签与面板标题同名；地图上点 boss 标题只展开「已收录」条（无
-    面板独有词，不会误判）；战后总结页（出战队伍/重新降噪）无 boss 标题，
-    同样不匹配——总结页要用「返回」退回面板。
-    """
-    texts = _echo_texts(items)
-    if not any(ECHO_BOSS_TITLE in t for t in texts):
-        return False
-    return any(m in t for t in texts for m in ECHO_BOSS_PANEL_MARKS)
-
-
-def _echo_read_top_score(items: List[Dict]) -> Optional[int]:
-    """读 boss 面板「本期最高分贝」数值；读不到返回 None（调用方按开打处理）。
-
-    实测 label 与数字常被 OCR 拆成两条（label (1559,580) / 数字 (1561,618)，
-    同列 dy≈38）：先试 label 自带数字，再找 label 正下方 20~90px 的纯数字条目。
-    """
-    for it in items or []:
-        text = str(it.get("text") or "")
-        if "本期最高分贝" not in text:
-            continue
-        m = re.search(r"本期最高分贝\D*(\d+)", text)
-        if m:
-            return int(m.group(1))
-        tx, ty = it.get("center") or (0, 0)
-        for it2 in items or []:
-            t2 = _normalize_text(str(it2.get("text") or ""))
-            if not t2.isdigit():
-                continue
-            cx, cy = it2.get("center") or (0, 0)
-            if abs(cx - tx) <= 80 and 20 <= cy - ty <= 90:
-                return int(t2)
-        return None
-    return None
-
-
-def _echo_boss_open_panel(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """从猎区地图打开 boss 面板：点 OCR 标签 → 面板双证据；未开再点图标兜底。
-
-    11-14 实测：点标题只展开「已收录」条，完整面板要点 boss 图标——顺序固定
-    「标题 → 图标」，图标比例只在标题点完仍无面板时才用。
-    """
-    hit = _ocr_best_match(logger, (ECHO_BOSS_TITLE,), hwnd, min_conf=0.55)
-    if not hit:
-        logger.warning("[白荆回廊·俱乐部] 回声猎区 boss：地图未定位「不协和音」标签")
-        return False
-    _pyautogui_click_guarded(*hit["center"])
-    logger.info(f"[白荆回廊·俱乐部] 回声猎区 boss：点击 boss 标签 @ {hit['center']}")
-    time.sleep(2.0)
-    if _echo_boss_panel_confirmed(_scene_results(logger, hwnd)):
-        return True
-    _click_ratio(logger, hwnd, ECHO_BOSS_ICON_FALLBACK, "回声猎区 boss 图标")
-    time.sleep(2.0)
-    return _echo_boss_panel_confirmed(_scene_results(logger, hwnd))
-
-
-def _echo_boss_wait_settled(
-    logger: logging.Logger, hwnd, stop_check, deadline: float
-) -> Tuple[bool, str, List[Dict]]:
-    """boss 计分战收敛：作战完成点空白 → 总结页点「返回」→ 回 boss 面板算完成。
-
-    boss 战后落点（11-14 实机）：「作战完成/有效分贝/总分贝」计分结算页（无
-    「达成波次」，fitting result 分类不认）点空白 → 总结页「出战队伍/本轮分贝/
-    重新降噪」（无 boss 标题，面板判定不认，必须单独分支）点左上「返回」→
-    boss 面板。地图先到先收；战败页/奖励页/物品浮层按节点同款防御性覆盖
-    （计分战理论不败，实测未覆盖败态）。返回 (ok, "boss_panel"|"map", items)。
-    """
-    from .baijing_fitting import (  # 延迟导入：fitting 懒引用本模块，防环
-        _dismiss_item_popup,
-        _page_now,
-        P_RESULT_CONTINUE,
-        P_REWARD_CONTINUE,
-    )
-
-    last_heartbeat = 0.0
-    last_page, last_items = "unknown", []
-    while time.time() < deadline:
-        if _stopped(stop_check):
-            return False, "用户停止", last_items
-        page, items = _page_now(logger, hwnd)
-        last_page, last_items = page, items
-        texts = [_normalize_text(str(it.get("text") or "")) for it in items or []]
-        if _echo_map_confirmed(items):
-            return True, "map", items
-        if _echo_boss_panel_confirmed(items):
-            return True, "boss_panel", items
-        if _echo_result_frame(items) or _echo_defeat_frame(items) or any(
-            "作战完成" in t for t in texts if t
-        ):
-            _click_ratio(logger, hwnd, P_RESULT_CONTINUE, "回声猎区 boss 结算页点空白")
-            time.sleep(2.0)
-            continue
-        if any("出战队伍" in t for t in texts if t):
-            _click_ratio(logger, hwnd, ECHO_BOSS_BACK_FALLBACK, "回声猎区 boss 总结页点返回")
-            time.sleep(2.0)
-            continue
-        if page == "reward":
-            _click_ratio(logger, hwnd, P_REWARD_CONTINUE, "回声猎区 boss 奖励页继续")
-            time.sleep(2.0)
-            continue
-        if page == "item_popup":
-            _dismiss_item_popup(logger, hwnd)
-            continue
-        cont = next(
-            (it for it in items or [] if "点击屏幕继续" in str(it.get("text") or "")),
-            None,
-        )
-        if cont:
-            _pyautogui_click_guarded(*cont["center"])
-            time.sleep(1.5)
-            continue
-        now = time.time()
-        if now - last_heartbeat >= ECHO_HEARTBEAT_SEC:
-            logger.info(f"[白荆回廊·俱乐部] 回声猎区 boss 挂机中… 页面={page}")
-            last_heartbeat = now
-        time.sleep(1.0)
-    return False, f"boss 战未收敛（{last_page}）", last_items
-
-
-def _echo_boss_fight(logger: logging.Logger, hwnd, stop_check=None) -> Tuple[str, str]:
-    """中央 boss 计分战：地图 → boss 面板 → 战斗闸门 → 开始降噪 → 收敛。
-
-    战斗闸门（计分战无重复收益，别天天白打）：面板出现「重新降噪/快速降噪」
-    （本期已打过）或「本期最高分贝」≥ 顶档 9000 → 跳过战斗只领奖励；重置期
-    后分数归零闸门自动重开。编队页可能为空 → 「编队成员数量不足，是否自动
-    编队？」弹窗点「确认」（OCR 精确匹配 + 比例兜底）后重等编队页。
-    返回 (status, detail)，status ∈ fought / skipped / failed。
-    """
-    from .baijing_fitting import (  # 延迟导入：fitting 懒引用本模块，防环
-        _click,
-        _page_now,
-        _wait_deploy_settled,
-        _wait_page,
-        BATTLE_START_MAX_ATTEMPTS,
-        BATTLE_VERIFY_DELAY_SEC,
-        P_BATTLE_START,
-        P_TEAM_START,
-        WAIT_DEPLOY,
-        WAIT_TEAM,
-    )
-
-    ok, _items, _expiry = _echo_wait_map(logger, hwnd, stop_check)
-    if not ok:
-        return "failed", "boss：进页后未见猎区地图"
-    if not _echo_boss_open_panel(logger, hwnd, stop_check):
-        _record_step_failure(
-            logger, hwnd, "俱乐部回声猎区:boss面板", "点标题/图标都未开出 boss 面板")
-        return "failed", "boss：面板未打开"
-    items = _scene_results(logger, hwnd)
-    texts = [_normalize_text(str(it.get("text") or "")) for it in items]
-    if any(m in t for t in texts for m in ECHO_BOSS_FIGHT_DONE_MARKS):
-        logger.info("[白荆回廊·俱乐部] 回声猎区 boss：本期已打过（重新降噪/快速降噪在场）")
-        return "skipped", "boss：本期已打过，只领奖励"
-    top = _echo_read_top_score(items)
-    if top is not None and top >= ECHO_BOSS_SCORE_TOP_TIER:
-        logger.info(
-            f"[白荆回廊·俱乐部] 回声猎区 boss：本期最高分贝 {top} 已达顶档，跳过战斗")
-        return "skipped", f"boss：本期最高分贝 {top} 已达顶档，只领奖励"
-    fight = _ocr_best_match(
-        logger, ECHO_BOSS_FIGHT_TEXTS, hwnd,
-        frac_region=(0.55, 0.80, 1.0, 1.0), min_conf=0.55,
-    )
-    if fight:
-        _pyautogui_click_guarded(*fight["center"])
-    else:
-        _click_ratio(logger, hwnd, ECHO_BOSS_FIGHT_FALLBACK, "回声猎区 boss 开始降噪(比例兜底)")
-    logger.info("[白荆回廊·俱乐部] 回声猎区 boss：已点「开始降噪」，等编队页")
-    time.sleep(2.0)
-    ok, page, _items = _wait_page(logger, hwnd, "team", WAIT_TEAM, stop_check)
-    if not ok:
-        # boss 编队页常为空：压着「编队成员数量不足」弹窗时点「确认」自动编队
-        items = _scene_results(logger, hwnd)
-        texts = [_normalize_text(str(it.get("text") or "")) for it in items]
-        if not any(ECHO_AUTOFORM_TEXTS[0] in t for t in texts if t):
-            return "failed", f"boss：编队页未就绪（{page}）"
-        confirm = _pick_result(
-            logger, hwnd, items, ("确认",),
-            frac_region=(0.45, 0.55, 0.90, 0.80), min_conf=0.6, exact_only=True,
-        )
-        if confirm:
-            _pyautogui_click_guarded(*confirm["center"])
-        else:
-            _click_ratio(
-                logger, hwnd, ECHO_AUTOFORM_CONFIRM_FALLBACK, "回声猎区 boss 自动编队确认")
-        logger.info("[白荆回廊·俱乐部] 回声猎区 boss：编队成员不足，已确认自动编队")
-        time.sleep(2.5)
-        ok, page, _items = _wait_page(logger, hwnd, "team", WAIT_TEAM, stop_check)
-        if not ok:
-            return "failed", f"boss：自动编队后编队页仍未就绪（{page}）"
-    if not _click(logger, hwnd, P_TEAM_START, "作战开始"):
-        return "failed", "boss：「作战开始」点击失败"
-    deadline = time.time() + max(WAIT_DEPLOY, 10.0)
-    entered, page = False, "unknown"
-    while time.time() < deadline:
-        if _stopped(stop_check):
-            return "failed", "boss：用户停止"
-        page, _items = _page_now(logger, hwnd)
-        if page in ("deploy", "battle"):
-            entered = True
-            break
-        time.sleep(1.0)
-    if not entered:
-        return "failed", f"boss：作战开始后未进布阵/战斗（{page}）"
-    if page == "deploy":
-        # 布阵稳定等待 + 「开始战斗」补点，与节点链同款（#283：点完当帧离开
-        # 布阵页即算开打，战斗过程本身不检测）
-        if not _wait_deploy_settled(logger, hwnd, stop_check):
-            return "failed", "boss：用户停止"
-        ok_started, last_page = False, "deploy"
-        for attempt in range(1, BATTLE_START_MAX_ATTEMPTS + 1):
-            if _stopped(stop_check):
-                return "failed", "boss：用户停止"
-            if not _click(logger, hwnd, P_BATTLE_START, "开始战斗"):
-                return "failed", "boss：「开始战斗」点击失败"
-            time.sleep(BATTLE_VERIFY_DELAY_SEC)
-            last_page, _items = _page_now(logger, hwnd)
-            if last_page in ("battle", "result") or last_page not in ("team", "deploy"):
-                ok_started = True
-                break
-        if not ok_started:
-            return "failed", f"boss：布阵页未离开（{last_page}）"
-    ok, reason, _items = _echo_boss_wait_settled(
-        logger, hwnd, stop_check, time.time() + ECHO_BOSS_SETTLE_TIMEOUT
-    )
-    if not ok:
-        _record_step_failure(logger, hwnd, "俱乐部回声猎区:boss战斗", reason)
-        return "failed", f"boss：{reason}"
-    logger.info(f"[白荆回廊·俱乐部] 回声猎区 boss：计分战完成（{reason}）")
-    return "fought", "boss：计分战完成"
-
-
-def _echo_boss_claim_ladder(logger: logging.Logger, hwnd, stop_check=None) -> Tuple[int, str]:
-    """领 boss 面板左侧「个人声量奖励」阶梯：OCR 档位金额 → 点右侧奖励图标。
-
-    金额→图标实测偏移 (+118,+20)（「7000」(145,477) → 图标 (263,497)）；金额列
-    限 x<0.20 避开右侧分贝/排名数值。OCR 认不出档位（布局改版）→ 固定比例
-    兜底逐档点。已领档图标置灰，点击为无操作（幂等）。点击间隙处理「点击
-    屏幕继续/新物品已存入」弹窗。返回 (点击档位数, detail)。
-    """
-    from .baijing_fitting import P_RESULT_CONTINUE  # 延迟导入，防环
-
-    items = _scene_results(logger, hwnd)
-    if not _echo_boss_panel_confirmed(items):
-        return 0, "阶梯领取：不在 boss 面板"
-    region = _abs_region(hwnd, ECHO_BOSS_LADDER_REGION)
-    targets: List[Tuple[int, int]] = []
-    for it in items or []:
-        t = _normalize_text(str(it.get("text") or ""))
-        if t not in ECHO_BOSS_LADDER_TIERS:
-            continue
-        cx, cy = it.get("center") or (0, 0)
-        if region:
-            ax, ay, aw, ah = region
-            if not (ax <= cx <= ax + aw and ay <= cy <= ay + ah):
-                continue
-        targets.append((int(cx), int(cy)))
-    targets.sort(key=lambda p: p[1])
-    clicked = 0
-    if targets:
-        for tx, ty in targets:
-            if _stopped(stop_check):
-                break
-            _pyautogui_click_guarded(
-                tx + ECHO_BOSS_LADDER_CLICK_OFFSET[0], ty + ECHO_BOSS_LADDER_CLICK_OFFSET[1])
-            clicked += 1
-            logger.info(f"[白荆回廊·俱乐部] 回声猎区 boss：点击声量阶梯档位 @ ({tx},{ty})")
-            time.sleep(1.5)
-            for _ in range(3):  # 奖励弹窗收尾（新物品已存入 + 点击屏幕继续）
-                items = _scene_results(logger, hwnd)
-                cont = next(
-                    (it for it in items
-                     if "点击屏幕继续" in str(it.get("text") or "")), None)
-                if cont:
-                    _pyautogui_click_guarded(*cont["center"])
-                    time.sleep(1.2)
-                    continue
-                texts = [_normalize_text(str(it.get("text") or "")) for it in items]
-                if any("新物品已存入" in t for t in texts if t):
-                    _click_ratio(logger, hwnd, P_RESULT_CONTINUE, "奖励浮层点空白")
-                    time.sleep(1.2)
-                    continue
-                break
-    else:
-        logger.warning("[白荆回廊·俱乐部] 回声猎区 boss：阶梯金额未 OCR 命中，比例兜底逐档点")
-        for fy in ECHO_BOSS_LADDER_FALLBACK:
-            if _stopped(stop_check):
-                break
-            _click_ratio(logger, hwnd, fy, "回声猎区 boss 声量阶梯(比例兜底)")
-            clicked += 1
-            time.sleep(1.5)
-    return clicked, f"声量阶梯点击 {clicked} 档"
-
-
-def _echo_map_rewards_claim(logger: logging.Logger, hwnd, stop_check=None) -> Tuple[bool, str]:
-    """领地图左下「猎区累计分贝奖励」：入口 OCR 定位 → 一键领取 → 关 X 回地图。
-
-    入口禁比例盲点（活动改版入口可能消失）；奖励页双证据 = 标题「猎区累计
-    分贝奖励」+「一键领取」（地图本体也有同名入口字样，单标题必误判）；
-    「一键领取」幂等（已领齐时无操作）。返回 (是否完成, detail)。
-    """
-    hit = _ocr_best_match(logger, ECHO_MAP_REWARD_ENTRY, hwnd, min_conf=0.55)
-    if not hit:
-        return False, "地图未找到「猎区累计分贝奖励」入口（可能已改版）"
-    _pyautogui_click_guarded(*hit["center"])
-    logger.info(f"[白荆回廊·俱乐部] 回声猎区：点击分贝奖励入口 @ {hit['center']}")
-    time.sleep(2.0)
-    items = _scene_results(logger, hwnd)
-    texts = [_normalize_text(str(it.get("text") or "")) for it in items]
-    if not (
-        any("猎区累计分贝奖励" in t for t in texts if t)
-        and any("一键领取" in t for t in texts if t)
-    ):
-        _record_step_failure(
-            logger, hwnd, "俱乐部回声猎区:分贝奖励页", "点入口后未见奖励页（标题+一键领取双证据不满足）")
-        return False, "分贝奖励页未确认，不盲点"
-    claim = _ocr_best_match(
-        logger, ECHO_MAP_REWARD_CLAIM_ALL, hwnd,
-        frac_region=(0.5, 0.75, 1.0, 1.0), min_conf=0.55,
-    )
-    if claim:
-        _pyautogui_click_guarded(*claim["center"])
-    else:
-        _click_ratio(logger, hwnd, ECHO_MAP_REWARD_CLAIM_ALL_FALLBACK, "猎区分贝奖励一键领取(比例兜底)")
-    logger.info("[白荆回廊·俱乐部] 回声猎区：已点「一键领取」")
-    time.sleep(2.0)
-    for _ in range(3):  # 领取弹窗收尾
-        items = _scene_results(logger, hwnd)
-        cont = next(
-            (it for it in items if "点击屏幕继续" in str(it.get("text") or "")), None)
-        if not cont:
-            break
-        _pyautogui_click_guarded(*cont["center"])
-        time.sleep(1.2)
-    _click_ratio(logger, hwnd, ECHO_MAP_REWARD_CLOSE_FALLBACK, "猎区分贝奖励页关闭")
-    time.sleep(1.5)
-    ok, _items, _exp = _echo_wait_map(logger, hwnd, stop_check, timeout=10.0)
-    if not ok:
-        return False, "关闭奖励页后未回猎区地图"
-    return True, "猎区累计分贝奖励已一键领取"
-
-
-def _echo_boss_and_map_rewards(logger: logging.Logger, hwnd, stop_check=None) -> Dict:
-    """boss 计分战（闸门跳过）→ 个人声量阶梯领取 → 地图左下分贝奖励。
-
-    节点链之后执行（用户口径：abcde → boss → boss 页左侧奖励 → 左下角奖励）。
-    boss/领奖失败不连坐节点链结果，分支层挂 result["boss"] 单独呈现；闸门
-    决定打不打（本期分数达标/已打过 → 只领奖励），重置期后自动重开战斗。
-    """
-    out: Dict = {"status": "skipped", "detail": "", "fought": False, "claims": ""}
-    if _stopped(stop_check):
-        out["detail"] = "用户停止"
-        return out
-    parts: List[str] = []
-    fight_status, fight_detail = _echo_boss_fight(logger, hwnd, stop_check)
-    out["fought"] = fight_status == "fought"
-    parts.append(fight_detail)
-    if fight_status == "failed":
-        out["status"] = "failed"
-        # 失败恢复：尝试一次「返回」回地图（boss 面板/总结页的退出路径），
-        # 让后面的地图奖励领取还有机会执行
-        if not _echo_map_confirmed(_scene_results(logger, hwnd)):
-            _click_ratio(logger, hwnd, ECHO_BOSS_BACK_FALLBACK, "boss 失败后尝试返回")
-            time.sleep(2.0)
-    # 阶梯领取：须在 boss 面板；不在（如战斗直接回图）则重开一次面板
-    claimed, claim_detail = _echo_boss_claim_ladder(logger, hwnd, stop_check)
-    if claimed == 0 and "不在 boss 面板" in claim_detail and fight_status != "failed":
-        if _echo_boss_open_panel(logger, hwnd, stop_check):
-            claimed, claim_detail = _echo_boss_claim_ladder(logger, hwnd, stop_check)
-    parts.append(claim_detail)
-    out["claims"] = claim_detail
-    # 回地图领左下「猎区累计分贝奖励」
-    map_ok = False
-    if not _echo_map_confirmed(_scene_results(logger, hwnd)):
-        _click_ratio(logger, hwnd, ECHO_BOSS_BACK_FALLBACK, "boss 面板返回猎区地图")
-        time.sleep(2.0)
-    if _echo_map_confirmed(_scene_results(logger, hwnd)):
-        map_ok, map_detail = _echo_map_rewards_claim(logger, hwnd, stop_check)
-        parts.append(map_detail)
-    else:
-        parts.append("未能回到猎区地图，跳过左下奖励领取")
-    if fight_status != "failed" and not map_ok:
-        out["status"] = "failed"
-    if out["status"] != "failed":
-        out["status"] = "success" if (out["fought"] or claimed or map_ok) else "skipped"
-    out["detail"] = "；".join(p for p in parts if p)
-    return out
-
-
-def _echo_zone_fight_node(
-    logger: logging.Logger, hwnd, letter: str, claim_xy, stop_check=None
-) -> Tuple[bool, str]:
-    """从点「开始收录」起打完一个节点：编队页 → 开战 → 挂机 → 回猎区地图。
-
-    编队段复用拟合回归（用户 2026-11-13 拍板「编队选择页面可以复用拟合回归」）：
-    同款编队页判定、「作战开始」、布阵稳定等待+补点。回声猎区可能没有布阵页
-    （未实机探明），所以「作战开始」后同时等 deploy/battle 谁先出现。
-    返回 (是否完成, 失败原因)。
-    """
-    from .baijing_fitting import (
-        _click,
-        _page_now,
-        _wait_deploy_settled,
-        _wait_page,
-        BATTLE_START_MAX_ATTEMPTS,
-        BATTLE_VERIFY_DELAY_SEC,
-        P_BATTLE_START,
-        P_TEAM_START,
-        WAIT_DEPLOY,
-        WAIT_TEAM,
-    )
-
-    _pyautogui_click_guarded(*claim_xy)
-    logger.info(f"[白荆回廊·俱乐部] 回声猎区节点 {letter}：已点「开始收录」，等编队页")
-    ok, page, _items = _wait_page(logger, hwnd, "team", WAIT_TEAM, stop_check)
-    if not ok:
-        return False, f"节点 {letter} 未进入编队页（{page}）"
-    if not _click(logger, hwnd, P_TEAM_START, "作战开始"):
-        return False, f"节点 {letter} 「作战开始」点击失败"
-    deadline = time.time() + max(WAIT_DEPLOY, 10.0)
-    page = "unknown"
-    entered = False
-    while time.time() < deadline:
-        if _stopped(stop_check):
-            return False, "用户停止"
-        page, _items = _page_now(logger, hwnd)
-        if page in ("deploy", "battle"):
-            entered = True
-            break
-        time.sleep(1.0)
-    if not entered:
-        return False, f"节点 {letter} 点「作战开始」后未进布阵/战斗（{page}）"
-    if page == "deploy":
-        # 回声猎区战斗页对 OCR 是盲页（2026-11-13 #283 取证帧只有
-        # 「01/02/uid/关卡号」4 个文本，拟合的「当前波次/战术终端」特征全无），
-        # 「开始战斗」点完不能靠页面分类判进战斗——改判「布阵页已离开」：
-        # 当帧不再是 team/deploy 即算开打（战斗自动挂机，收敛交给
-        # _echo_wait_battle_settled 等回地图）。稳定等待沿用拟合的
-        # _wait_deploy_settled（11-09 布阵按钮未稳点击被吞的教训）。
-        if not _wait_deploy_settled(logger, hwnd, stop_check):
-            return False, "用户停止"
-        ok_started = False
-        last_page = "deploy"
-        for attempt in range(1, BATTLE_START_MAX_ATTEMPTS + 1):
-            if _stopped(stop_check):
-                return False, "用户停止"
-            if not _click(logger, hwnd, P_BATTLE_START, "开始战斗"):
-                return False, f"节点 {letter} 「开始战斗」点击失败"
-            time.sleep(BATTLE_VERIFY_DELAY_SEC)
-            last_page, _items = _page_now(logger, hwnd)
-            if last_page in ("battle", "result") or last_page not in ("team", "deploy"):
-                ok_started = True
-                logger.info(
-                    f"[白荆回廊·俱乐部] 回声猎区节点 {letter}：开始战斗第 {attempt} 次"
-                    f"点击后布阵页已离开（页面={last_page}），按已进战斗处理"
-                )
-                break
-            logger.warning(
-                f"[白荆回廊·俱乐部] 回声猎区节点 {letter}：开始战斗第 "
-                f"{attempt}/{BATTLE_START_MAX_ATTEMPTS} 次点击后仍停在「{last_page}」"
-                f"{'，准备补点' if attempt < BATTLE_START_MAX_ATTEMPTS else ''}"
-            )
-        if not ok_started:
-            return False, (
-                f"节点 {letter} 布阵页未离开（{last_page}，"
-                f"开始战斗已点 {BATTLE_START_MAX_ATTEMPTS} 次）"
-            )
-    ok, reason, _items = _echo_wait_battle_settled(
-        logger, hwnd, stop_check, time.time() + ECHO_BATTLE_TIMEOUT
-    )
-    if not ok:
-        return False, f"节点 {letter} {reason}"
-    if reason == "map_defeated":
-        # 战败回图（11-14 实机：失败页点空白 → 回猎区地图，节点未清）：绝不写
-        # 已清标记——写了下次自动化直接跳过=永久漏奖励；顺序链在战败节点止步，
-        # 报败交人工调整编队/刻印（E 节点实锤：编队缺【轻卫/铁御】时只部署
-        # 1 人，战斗内 toast 提示出战后备同调者，几十秒即败）。
-        logger.warning(f"[白荆回廊·俱乐部] 回声猎区节点 {letter} 战败，未收录")
-        return False, f"节点 {letter} 战败（任务失败），未收录——需调整编队/刻印后重试"
-    logger.info(f"[白荆回廊·俱乐部] 回声猎区节点 {letter} 战斗完成，已回猎区地图")
-    return True, ""
-
-
-def _echo_zone_run_content(logger: logging.Logger, hwnd, stop_check=None) -> Dict:
-    """回声猎区内容主体：确认地图 → 已清标记跳过 → A→E 逐节点打 → 回地图。
-
-    顺序链口径（用户 2026-11-13「先打abcde按顺序打」）：节点解锁是链式的
-    （11-13 截图：A 可打、B~E 带锁），某节点点开面板没有「开始收录」= 锁定/
-    不可打，后面节点必然也没解锁，整链到此为止——这是正常收尾不是失败。
-    每打完一个节点把字母写进已清标记（过期日取地图「重置时间剩余N天」）。
-    中央 boss「不协和音·鱼叉将军」用户没让打，本轮不动。
-
-    返回 {"status": success/skipped/failed, "detail", "fought", "skipped"}。
-    """
-    out: Dict = {"status": "failed", "detail": "", "fought": [], "skipped": []}
-    ok, items, expiry = _echo_wait_map(logger, hwnd, stop_check)
-    if not ok:
-        out["detail"] = "进页后未见猎区地图（标题+独有词双证据不满足）"
-        _record_step_failure(logger, hwnd, "俱乐部回声猎区:地图确认", out["detail"])
-        return out
-    marks = _echo_load_marks(logger)
-    cleared = list(marks.get("cleared") or [])
-    out["skipped"] = [c for c in ECHO_NODE_LETTERS if c in cleared]
-    if out["skipped"]:
-        logger.info(
-            f"[白荆回廊·俱乐部] 回声猎区：已清标记跳过 {out['skipped']}"
-            f"（period_end={marks.get('period_end')}）"
-        )
-    fought: List[str] = []
-    chain_end = ""       # 非失败的顺序链终止原因
-    failed = False
-    for letter in ECHO_NODE_LETTERS:
-        if _stopped(stop_check):
-            chain_end = "用户停止"
-            break
-        if letter in cleared:
-            continue
-        items = _scene_results(logger, hwnd)
-        if not _echo_map_confirmed(items):
-            # 上一场打完可能停在过渡页/结算收尾，宽限一次重识别
-            time.sleep(2.0)
-            items = _scene_results(logger, hwnd)
-            if not _echo_map_confirmed(items):
-                failed = True
-                out["detail"] = f"打节点 {letter} 前未回到猎区地图，节点链中止"
-                _record_step_failure(
-                    logger, hwnd, f"俱乐部回声猎区:节点{letter}前地图确认", out["detail"]
-                )
-                break
-        labels = _echo_node_labels(hwnd, items)
-        label = _echo_pick_label(labels, letter)
-        if label is None:
-            failed = True
-            out["detail"] = f"节点 {letter} 标签未定位（地图布局可能变化，需补证据）"
-            _record_step_failure(
-                logger, hwnd, f"俱乐部回声猎区:节点{letter}定位", out["detail"]
-            )
-            break
-        _pyautogui_click_guarded(*label["center"])
-        logger.info(f"[白荆回廊·俱乐部] 回声猎区：点击节点 {letter} 标签 @ {label['center']}")
-        claim = _echo_panel_claim(logger, hwnd, stop_check)
-        if claim is None:
-            chain_end = f"节点 {letter} 无「开始收录」（锁定或不可打），顺序链到此为止"
-            logger.info(f"[白荆回廊·俱乐部] 回声猎区：{chain_end}")
-            break
-        ok, reason = _echo_zone_fight_node(
-            logger, hwnd, letter, claim["center"], stop_check=stop_check
-        )
-        if not ok:
-            failed = True
-            out["detail"] = reason
-            _record_step_failure(
-                logger, hwnd, f"俱乐部回声猎区:节点{letter}战斗", reason
-            )
-            break
-        fought.append(letter)
-        cleared = sorted(set(cleared) | {letter})
-        _echo_save_marks(logger, expiry, cleared)
-    out["fought"] = fought
-    if failed:
-        out["status"] = "failed"          # detail 已在 break 处写好失败原因
-    elif chain_end:
-        out["status"] = "success" if fought else "skipped"
-        out["detail"] = chain_end
-    elif fought:
-        out["status"] = "success"
-        out["detail"] = f"节点链走完：本场打 {fought}，标记跳过 {out['skipped']}"
-    else:
-        out["status"] = "skipped"
-        out["detail"] = "无可打节点（全部已清或未解锁）"
-    return out
-
-
-def _run_club_activity_echo_zone(logger: logging.Logger, hwnd, stop_check=None) -> Dict:
-    """俱乐部活动「回声猎区」分支（2026-11-11 入口，2026-11-13 内容落地）。
-
-    在俱乐部页上检测右侧「俱乐部活动」卡片的「回声猎区」标题：命中 → 点击进
-    猎区地图 → 按 A→E 顺序清节点（`_echo_zone_run_content`，编队链路复用拟合
-    回归）→ 中央 boss 计分战 + 个人声量阶梯 + 地图左下分贝奖励
-    （`_echo_boss_and_map_rewards`，2026-11-14 固化，用户口径 abcde → boss →
-    boss 页左侧奖励 → 左下角奖励）→ 退出回主界面；未命中（活动结束/换期）→
-    不点击直接跳过。节点链结果挂 result["echo"]、boss/领奖挂 result["boss"]，
-    失败不连坐每日任务主状态（10-22 起口径）。
-    """
-    result: Dict = {
-        "status": "skipped", "detail": "", "entered": False,
-        "returned_main": None, "echo": None, "boss": None,
-    }
-    if _stopped(stop_check):
-        result["detail"] = "用户停止"
-        return result
-    hit = _ocr_best_match(
-        logger, CLUB_ACTIVITY_ECHO_TEXTS, hwnd,
-        frac_region=CLUB_ACTIVITY_DETECT_REGION, min_conf=0.55,
-    )
-    if not hit:
-        result["detail"] = "俱乐部活动未见「回声猎区」入口（活动未开或已结束）"
-        logger.info(f"[白荆回廊·俱乐部] {result['detail']}")
-        return result
-    _pyautogui_click_guarded(*hit["center"])
-    logger.info(f"[白荆回廊·俱乐部] 点击「回声猎区」活动入口 @ {hit['center']}")
-    result["entered"] = True
-    time.sleep(2.5)  # 俱乐部页 → 猎区地图过场（地图确认有自己的轮询等待）
-    _capture_daily_list_snapshot(logger, hwnd, prefix=CLUB_ACTIVITY_SNAPSHOT_PREFIX)
-    content = _echo_zone_run_content(logger, hwnd, stop_check=stop_check)
-    result["echo"] = content
-    result["status"] = content["status"]
-    result["detail"] = f"回声猎区：{content['detail']}"
-    if content["status"] == "failed":
-        result["detail"] += "（分支失败不影响每日任务主状态）"
-        logger.warning(f"[白荆回廊·俱乐部] {result['detail']}")
-    else:
-        logger.info(f"[白荆回廊·俱乐部] {result['detail']}")
-    # boss + 奖励领取：闸门内只领奖励（本期分数达标/已打过），重置期自动重开
-    # 战斗；失败只追加 detail 不改节点链状态（不连坐口径）。
-    boss = _echo_boss_and_map_rewards(logger, hwnd, stop_check=stop_check)
-    result["boss"] = boss
-    result["detail"] += f"；boss：{boss['status']}（{boss['detail']}）"
-    if boss["status"] == "failed":
-        logger.warning(f"[白荆回廊·俱乐部] 回声猎区 boss：{boss['detail']}（不影响节点链结果）")
-    if content["status"] == "failed":
-        result["detail"] += "（分支失败不影响每日任务主状态）"
-        logger.warning(f"[白荆回廊·俱乐部] {result['detail']}")
-    else:
-        logger.info(f"[白荆回廊·俱乐部] {result['detail']}")
-    # 退出：猎区地图与俱乐部页共用左上「返回」，_leave_club_page 页无关
-    # （主界面检测 + 返回/ESC 循环），可直接复用；失败时后续步骤各自
-    # _ensure_main_ui 自保兜底（10-22 起的口径）。
-    back_ok = _leave_club_page(logger, hwnd, stop_check=stop_check)
-    result["returned_main"] = back_ok
-    if not back_ok:
-        result["status"] = "failed"
-        result["detail"] = "回声猎区分支结束但未能退回主界面（需人工恢复）"
-        logger.warning(f"[白荆回廊·俱乐部] {result['detail']}")
-    return result
-
-
-def claim_club_daily_reward(logger: logging.Logger, hwnd, stop_check=None) -> Dict:
-    """领俱乐部每日任务奖励（每日刷新，2026-10-18 用户截图实测）。
-
-    返回 {"status", "detail"}：status = success / already / failed / skipped。
-    """
-    result = {"status": "skipped", "detail": ""}
-    if _stopped(stop_check):
-        result["detail"] = "用户停止"
-        return result
-    hwnd = _ensure_window(logger, hwnd)
-    if not hwnd:
-        result.update(status="failed", detail="未找到游戏窗口")
-        return result
-    # 2026-10-22 修复：同零售礼包，自己确保回到主界面，不再被 back_ok 连坐跳过
-    if not _ensure_main_ui(logger, hwnd, stop_check=stop_check):
-        result.update(status="skipped", detail="多次尝试仍未回到主界面，跳过俱乐部")
-        logger.info(f"[白荆回廊·俱乐部] {result['detail']}")
-        return result
-    if not _enter_club_page(logger, hwnd, stop_check=stop_check):
-        result.update(status="failed", detail="未进入俱乐部页面")
-        _leave_club_page(logger, hwnd, stop_check=stop_check)
-        return result
-    _capture_daily_list_snapshot(logger, hwnd, prefix=CLUB_SNAPSHOT_PREFIX)
-    state = _claim_club_daily_task(logger, hwnd, stop_check=stop_check)
-    if state == "purchased":
-        result.update(status="success", detail="已领取俱乐部每日任务奖励")
-    elif state == "already":
-        result.update(status="already", detail="俱乐部每日任务今日已完成")
-    elif state == "no_claim":
-        result.update(
-            status="skipped",
-            detail="卡片无「领取」/「今日任务已完成」，今日可能无奖励可领（任务未完成或已领取）",
-        )
-    else:
-        result.update(status="failed", detail="点击「领取」后卡片未变为「今日任务已完成」")
-    # 俱乐部活动分支（回声猎区，2026-11-11）：仍在俱乐部页时顺手检测活动入口。
-    # 只挂 result["activity"]，不改动每日任务主状态——活动分支失败不连坐领奖。
-    if not _stopped(stop_check):
-        result["activity"] = _run_club_activity_echo_zone(logger, hwnd, stop_check=stop_check)
-    back_ok = _leave_club_page(logger, hwnd, stop_check=stop_check)
-    result["returned_main"] = back_ok
-    logger.info(f"[白荆回廊·俱乐部] 结果 {result['status']}：{result['detail']}，回主界面={back_ok}")
-    return result
-
-
-def _click_quick_battle_entry(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """关卡页点「快速战斗」：优先点 OCR 命中的按钮文字，找不到才退回固定比例。
-
-    2026-11-03 实锤（定向物资保障）：固定比例 (0.784,0.893) 点下去弹的是
-    「进入关卡/行动力」确认框，不是快速战斗设置窗 —— 同一天另外三个关卡用同一
-    比例都正常，说明各关卡页布局不一致，比例会压到邻居按钮上。OCR 既然认得出
-    「快速战斗」文字，就直接点它的 center（注意只会命中关卡页上的那个按钮，
-    设置弹窗此时还没出现）。
-    返回 True 表示按 OCR 坐标点的，False 表示走了比例兜底。
-    """
-    if _stopped(stop_check):
-        return False
-    hit = _ocr_best_match(
-        logger,
-        IMAGING_QUICK_BATTLE_TEXTS,
-        hwnd,
-        frac_region=IMAGING_QUICK_BATTLE_REGION,
-        min_conf=0.55,
-    )
-    if hit:
-        _pyautogui_click_guarded(*hit["center"])
-        logger.info(f"[白荆回廊·日常] 点击关卡页「快速战斗」[ocr] @ {hit['center']}")
-        return True
-    _click_ratio(logger, hwnd, IMAGING_QUICK_BATTLE_BTN, "「快速战斗」（关卡页，比例兜底）")
-    return False
-
-
-def _handle_stage_battle_task(
-    logger: logging.Logger,
-    hwnd,
-    row_keyword: str,
-    task_label: str,
-    battle_count: int = 1,
-    stop_check=None,
-) -> bool:
-    """关卡战斗类任务通用流程：前往 → 关卡页快速战斗 → 弹窗再点快速战斗 → 结算随意点 → ESC 返回。
-
-    2026-10-18 用户截图实测（显影行动）：点任务行「前往」进入关卡选择页，
-    点右下「快速战斗」弹出「快速战斗设置」窗（指定次数默认 1），再点窗内蓝色
-    「快速战斗」开始战斗；出任务完成结算页后随意点击关闭，然后 ESC 逐层返回。
-    用户确认自由贸易/定向物资保障/光刻协议操作与此相同，故按行关键词参数化复用。
-    用户叮嘱：任务完成后若不知道页面到哪了，就 ESC 返回（_return_to_task_panel
-    的 ESC 兜底即为此设计）。
-    """
-    # 1) 任务行内「前往」（找不到会自动滚回顶部再逐屏下滚重试）
-    goto_pos = _find_row_button(logger, hwnd, row_keyword, "前往", stop_check=stop_check)
-    if not goto_pos:
-        return False
-    _pyautogui_click_guarded(goto_pos[0], goto_pos[1])
-    logger.info(f"[白荆回廊·日常] 点击{task_label}任务「前往」@ {goto_pos}")
-    # 2) 等关卡选择页
-    if not _wait_page_markers(logger, hwnd, IMAGING_STAGE_MARKERS, timeout=10.0, stop_check=stop_check):
-        logger.warning(f"[白荆回廊·日常] 未进入{task_label}关卡页")
-        return _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-    time.sleep(1.0)
-    # 3) 第一次点「快速战斗」→ 设置弹窗（OCR 定位优先，比例兜底）
-    _click_quick_battle_entry(logger, hwnd, stop_check=stop_check)
-    # 4) 等弹窗 → 第二次点「快速战斗」确认（精确匹配优先，不会误点弹窗标题）
-    dialog_seen = _wait_page_markers(
-        logger, hwnd, IMAGING_DIALOG_MARKERS, timeout=6.0, stop_check=stop_check
-    )
-    if not dialog_seen:
-        # 2026-11-03 实锤（物资保障）：点「快速战斗」后没弹设置窗，弹的是带
-        # 「确认使用」的行动力/体力补充确认框（用户判断：体力不足时游戏自动
-        # 推荐限时行动力药，限时的可以直接用）。旧逻辑在这里按比例盲点
-        # (0.617,0.799)，再把当前页当结算页点掉 → 这一场根本没开打，
-        # 连带「定向物资保障」0/1（-5）和「完成5次战斗」停在 4/5（-20）。
-        # 新逻辑：先确认使用补充道具，再重新等设置窗；仍然等不到就回任务面板，
-        # 按失败取证（flow_failures + OCR 标注图）留档，绝不盲点、也不谎报完成。
-        if _confirm_action_power_use(logger, hwnd, stop_check=stop_check):
-            dialog_seen = _wait_page_markers(
-                logger, hwnd, IMAGING_DIALOG_MARKERS, timeout=5.0, stop_check=stop_check
-            )
-            if not dialog_seen:
-                # 补完行动力一般退回关卡页，需要再点一次「快速战斗」
-                _click_quick_battle_entry(logger, hwnd, stop_check=stop_check)
-                dialog_seen = _wait_page_markers(
-                    logger, hwnd, IMAGING_DIALOG_MARKERS, timeout=6.0, stop_check=stop_check
-                )
-        if not dialog_seen:
-            logger.warning(
-                "[白荆回廊·日常] 仍未出现快速战斗设置窗，不再盲点，回任务面板复核"
-            )
-            # 走统一失败取证：截图 + 当帧 OCR 文字写进 flow_failures，
-            # 截图会附一份 OCR 标注版（框 + 文字 + 置信度），供事后定位。
-            _record_step_failure(
-                logger, hwnd, f"{task_label}·快速战斗",
-                "未见「快速战斗设置」弹窗（已尝试确认使用行动力/道具），未开打，回任务面板复核",
-            )
-            _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-            # 关键：没有开打的证据就不能报成功，否则上层会写「任务已完成」，
-            # 任务行仍停在 0/1，下一轮又被漏掉（今天物资保障就是这样丢的 5 分）。
-            return False
-    _capture_stage_battle_dialog(logger, hwnd)
-    if battle_count > 1:
-        # 「指定次数」默认 1，点右侧 + 递增；每轮最多 5 次，最多点 4 下
-        for _ in range(min(int(battle_count) - 1, 4)):
-            _click_ratio(logger, hwnd, IMAGING_DIALOG_PLUS_BTN, "指定次数 +1")
-            time.sleep(0.35)
-        confirmed = _ocr_best_match(
-            logger,
-            (str(int(battle_count)),),
-            hwnd,
-            frac_region=IMAGING_DIALOG_COUNT_REGION,
-            min_conf=0.5,
-        )
-        if confirmed:
-            logger.info(f"[白荆回廊·日常] 指定次数已设置为 {int(battle_count)}")
-        else:
-            logger.warning(
-                f"[白荆回廊·日常] 未确认到指定次数={int(battle_count)}，按当前设置继续"
-            )
-    hit = _ocr_best_match(logger, ("快速战斗",), hwnd, min_conf=0.6)
-    if hit:
-        _pyautogui_click_guarded(*hit["center"])
-        logger.info(f"[白荆回廊·日常] 点击弹窗内「快速战斗」确认 @ {hit['center']}")
-    else:
-        _click_ratio(logger, hwnd, IMAGING_DIALOG_OK_BTN, "「快速战斗」确认（弹窗，比例兜底）")
-    # 5) 等战斗结算页 → 随意点击（战斗播放 + 结算加载预留时间）
-    time.sleep(6.0)
-    if _wait_page_markers(logger, hwnd, IMAGING_SETTLEMENT_MARKERS, timeout=15.0, stop_check=stop_check):
-        logger.info("[白荆回廊·日常] 检测到战斗结算页")
-    else:
-        logger.info("[白荆回廊·日常] 未匹配到结算页特征文字，按用户流程仍随意点击关闭")
-    _click_ratio(logger, hwnd, IMAGING_ANYWHERE_CLICK, "结算页任意位置（随意点击）")
-    time.sleep(2.0)
-    # 6) ESC 逐层返回任务面板
-    return _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-
-
-def _enter_friend_page_from_main(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """主界面左上角好友图标 → 好友页（图标无文字，按实测比例点击）。"""
-    _click_ratio(logger, hwnd, FRIEND_ENTRY_FALLBACK, "好友入口图标（左上第 2 个功能图标）")
-    time.sleep(2.0)
-    if _wait_page_markers(logger, hwnd, FRIEND_PAGE_MARKERS, timeout=6.0, stop_check=stop_check):
-        return True
-    _dismiss_overlay(logger, hwnd)
-    _click_ratio(logger, hwnd, CLUB_BLANK_CLICK, "好友入口弹窗空白继续")
-    time.sleep(1.5)
-    return _wait_page_markers(logger, hwnd, FRIEND_PAGE_MARKERS, timeout=6.0, stop_check=stop_check)
-
-
-def _handle_friend_gift_popup(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """关闭「一键领取/赠送」后的弹窗；返回是否看到成功弹窗（无失败字样）。"""
-    popup_seen = False
-    failed = False
-    for _ in range(3):
-        if _stopped(stop_check):
-            break
-        hwnd = _ensure_window(logger, hwnd)
-        if not hwnd:
-            break
-        # 只在弹窗区域找失败提示，避免好友签名里的“失败/不足”误伤
-        try:
-            results = ocr_window_content(logger, hwnd=hwnd)
-            region = _abs_region(hwnd, FRIEND_POPUP_TEXT_REGION)
-            if region:
-                ax0, ay0, aw, ah = region
-                results = [
-                    r for r in results
-                    if r.get("center")
-                    and ax0 <= r["center"][0] <= ax0 + aw
-                    and ay0 <= r["center"][1] <= ay0 + ah
-                ]
-            joined = "".join(_normalize_text(str(r.get("text") or "")) for r in results)
-            if any(_normalize_text(k) in joined for k in FRIEND_POPUP_FAILURE_TEXTS):
-                failed = True
-                logger.warning("[白荆回廊·日常] 好友赠礼弹窗出现失败提示，赠送可能未成功")
-        except Exception as exc:
-            logger.debug("[白荆回廊·日常] 好友赠礼弹窗识别失败: %s", exc)
-        if _dismiss_overlay(logger, hwnd):
-            popup_seen = True
-            time.sleep(0.8)
-            continue
-        hit = _ocr_best_match(
-            logger, FRIEND_POPUP_TEXTS, hwnd,
-            frac_region=FRIEND_POPUP_REGION, min_conf=0.55,
-        )
-        if hit:
-            popup_seen = True
-            _pyautogui_click_guarded(*hit["center"])
-            logger.info(f"[白荆回廊·日常] 好友赠礼弹窗点击 {hit['text']!r} @ {hit['center']}")
-            time.sleep(1.0)
-            continue
-        if _ocr_best_match(logger, FRIEND_PAGE_MARKERS, hwnd, min_conf=0.55):
-            break
-        # 识别不到弹窗按钮，按 ESC 收尾（会顺带退出好友页）
-        _focus_game_window(logger, hwnd)
-        pyautogui.press("escape")
-        popup_seen = True
-        logger.info("[白荆回廊·日常] 好友赠礼弹窗按 ESC 关闭")
-        time.sleep(1.0)
-    return popup_seen and not failed
-
-
-def _do_friend_medal_on_page(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """在好友页点「一键领取/赠送」→ 处理弹窗 → 回日常任务面板。"""
-    btn = _ocr_best_match(logger, FRIEND_GIFT_TEXTS, hwnd, min_conf=0.55)
-    if not btn:
-        logger.warning("[白荆回廊·日常] 好友界面未找到「一键领取/赠送」")
-        _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-        return False
-    _pyautogui_click_guarded(*btn["center"])
-    logger.info(f"[白荆回廊·日常] 点击「一键领取/赠送」@ {btn['center']}")
-    time.sleep(2.0)
-    gift_ok = _handle_friend_gift_popup(logger, hwnd, stop_check=stop_check)
-    if not gift_ok:
-        logger.warning("[白荆回廊·日常] 未确认到好友赠礼成功弹窗（任务状态以重扫为准）")
-    return _return_to_task_panel(logger, hwnd, stop_check=stop_check) and gift_ok
-
-
-def _handle_friend_medal_task(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """友情勋章任务：任务行「前往」优先，失败再从主界面左上角好友入口进入。"""
-    goto_pos = _find_row_button(logger, hwnd, "友情勋章", "前往", stop_check=stop_check)
-    if goto_pos:
-        _pyautogui_click_guarded(goto_pos[0], goto_pos[1])
-        logger.info(f"[白荆回廊·日常] 点击友情勋章任务「前往」@ {goto_pos}")
-        if _wait_page_markers(
-            logger, hwnd, FRIEND_PAGE_MARKERS, timeout=8.0, stop_check=stop_check
-        ):
-            return _do_friend_medal_on_page(logger, hwnd, stop_check=stop_check)
-        logger.warning(
-            "[白荆回廊·日常] 友情勋章「前往」未进入好友界面，改用主界面左上角好友入口"
-        )
-        _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-    # 主界面入口：先关任务列表 → 点左上角好友图标 → 完成后 _return_to_task_panel 重开列表
-    if not close_task_list(logger, hwnd, stop_check=stop_check):
-        logger.warning("[白荆回廊·日常] 无法关闭任务列表进入主界面，友情勋章跳过")
-        return False
-    if not _enter_friend_page_from_main(logger, hwnd, stop_check=stop_check):
-        logger.warning("[白荆回廊·日常] 未进入好友界面")
-        _return_to_task_panel(logger, hwnd, stop_check=stop_check)
-        return False
-    return _do_friend_medal_on_page(logger, hwnd, stop_check=stop_check)
-
-
-def open_daily_task_list(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """从主界面点击「任务」并确认日常任务列表打开（含切到日常页）。"""
-    for attempt in range(1, MAX_OPEN_ATTEMPTS + 1):
-        if _stopped(stop_check):
-            return False
-        hwnd = _ensure_window(logger, hwnd)
-        if not hwnd:
-            logger.error("[白荆回廊·日常] 游戏窗口丢失，无法打开任务列表")
-            return False
-        _focus_game_window(logger, hwnd)
-        found = _find_task_button(logger, hwnd, stop_check)
-        if not found:
-            logger.warning(f"[白荆回廊·日常] 第 {attempt}/{MAX_OPEN_ATTEMPTS} 次：未找到「任务」按钮")
-            time.sleep(1.5)
-            continue
-        (x, y), method = found
-        _pyautogui_click_guarded(x, y)
-        logger.info(f"[白荆回廊·日常] 已点击「任务」按钮 [{method}] @ ({x},{y})")
-        if _wait_task_list(logger, hwnd, timeout=8.0, stop_check=stop_check):
-            # 面板可能停在其它 tab，确保切到「日常」
-            if _ensure_daily_tab(logger, hwnd, stop_check=stop_check):
-                _capture_daily_list_snapshot(logger, hwnd)
-                return True
-            logger.warning("[白荆回廊·日常] 任务面板已打开但未能切到日常页")
-            return False
-        logger.warning(
-            f"[白荆回廊·日常] 第 {attempt}/{MAX_OPEN_ATTEMPTS} 次点击后未确认任务列表打开，重试"
-        )
-        time.sleep(1.5)
-    return False
-
-
-def _claim_rewards_midway(logger: logging.Logger, hwnd, stop_check=None) -> int:
-    """中途领取：点固定底栏的「一键领取」并处理领取后的奖励弹窗。
-
-    用户 2026-10-18 建议：每个「前往」类任务完成后顺手领一次，避免已完成奖励
-    堆积把后面的任务行挤到可视区外。底栏「一键领取」是固定件（任何滚动位置都
-    可见），所以中途领取不需要滚动页面；弹窗用模板关 + 屏幕中心随意点双保险
-    （无弹窗时中心点落在任务行文字上，无副作用）。
-    返回点击次数（0=当前无可领）。
-    """
-    if _stopped(stop_check):
-        return 0
-    hwnd = _ensure_window(logger, hwnd)
-    if not hwnd:
-        return 0
-    hit = _ocr_best_match(logger, CLAIM_ALL_TEXTS, hwnd, min_conf=0.6)
-    if not hit:
-        return 0
-    _pyautogui_click_guarded(*hit["center"])
-    logger.info(f"[白荆回廊·日常] 中途「一键领取」@ {hit['center']}")
-    time.sleep(1.5)
-    # 奖励弹窗处理：先试模板（点击屏幕继续/关闭），再屏幕中心随意点
-    _dismiss_overlay(logger, hwnd)
-    time.sleep(0.5)
-    region = _window_region(hwnd)
-    if region:
-        cx, cy = region[0] + region[2] // 2, region[1] + region[3] // 2
-        _pyautogui_click_guarded(cx, cy)
-        logger.info(f"[白荆回廊·日常] 领取后屏幕中心随意点（关可能存在的奖励弹窗）@ ({cx},{cy})")
-        time.sleep(0.8)
-    return 1
-
-
-def _dismiss_overlay(logger: logging.Logger, hwnd) -> bool:
-    """关闭可能遮挡任务列表的弹窗（「点击屏幕继续」/「关闭」模板）。
-
-    「关闭」模板有一个致命撞车（2026-10-25 实锤）：任务列表面板/俱乐部页/
-    零售页这些**宿主面板自己的 X** 也在窗口右上角（(1847,159)@1919x1079，
-    conf 0.968 稳定命中），纹样与弹窗 X 同款。没有弹窗时 dismiss 一样会命中
-    它、一点就把宿主面板整个关掉——领取循环因此每轮"误关面板→重开"空转
-    （12 轮烧完），重扫前奏也因此在"列表已确认在屏"的 1 秒后把面板点没了，
-    末轮重扫 6 屏 0 行。弹窗的 X 都在弹窗框内（窗口中央区），永远不会跑到
-    窗口极右上角，所以这里把右上角宿主关闭区排除掉，命中即跳过不点。
-    """
-    for name, tpl in (
-        ("点击屏幕继续", str(TEMPLATES_DIR / "白荆回廊-点击屏幕继续.png")),
-        ("关闭", str(TEMPLATES_DIR / "白荆回廊-关闭.png")),
-    ):
-        center = _template_center(logger, hwnd, tpl, threshold=0.85)
-        if center:
-            if name == "关闭" and _in_host_panel_close_zone(hwnd, center):
-                logger.info(
-                    f"[白荆回廊·日常] 「关闭」命中宿主面板右上角 X @ {center}，跳过"
-                    f"（那是列表面板自己的关闭钮，点了会把面板关掉）"
-                )
-                continue
-            _pyautogui_click_guarded(center[0], center[1])
-            logger.info(f"[白荆回廊·日常] 关闭遮挡弹窗（{name}）@ {center}")
-            time.sleep(0.8)
-            return True
-    return False
-
-
-def _in_host_panel_close_zone(hwnd, center) -> bool:
-    """命中点是否落在宿主面板自己的右上角关闭区（窗口相对 fx≥0.88, fy≤0.25）。
-
-    标定：(1847,159)@1919x1079 → fx=0.962/fy=0.147。中央弹窗的 X 最右也就到
-    fx≈0.81（1200px 宽弹窗贴右边），与 0.88 之间留了安全带；俱乐部入口图标
-    (351,51) fx=0.18 不受影响。
-    """
-    region = _window_region(hwnd)
-    if not region:
-        return False
-    left, top, width, height = region
-    cx, cy = center[0], center[1]
-    fx = (cx - left) / width if width else 0.0
-    fy = (cy - top) / height if height else 0.0
-    return fx >= 0.88 and fy <= 0.25
 
 
 def process_task_list(
@@ -4818,85 +660,6 @@ def process_task_list(
     return summary
 
 
-def _ensure_main_ui(
-    logger: logging.Logger,
-    hwnd,
-    stop_check=None,
-    attempts: Optional[int] = None,
-) -> bool:
-    """确认/恢复到主界面（文件头规划的步骤 1，2026-10-22 补实现）。
-
-    循环：检测主界面 → 不在则先 _dismiss_overlay 消遮挡（「点击屏幕继续」类，
-    否则关闭按钮被盖住点不到）→ 点「关闭」（OCR 优先 + 模板兜底）→ ESC → 再检测。
-    成功即 True；attempts 轮（默认 MAX_CLOSE_ATTEMPTS）后仍不在返回 False。
-
-    OCR「关闭」必须排除引导气泡「点击按钮或空白区域关闭」——2026-10-21 实锤：
-    该气泡 conf 0.89 截胡真关闭按钮，点它无效，白烧 3 轮 attempt 后
-    close_task_list 判失败，连带俱乐部/零售免费礼包被整体跳过。
-    """
-    max_attempts = attempts if attempts is not None else MAX_CLOSE_ATTEMPTS
-    for attempt in range(1, max_attempts + 1):
-        if _stopped(stop_check):
-            return False
-        hwnd = _ensure_window(logger, hwnd)
-        if not hwnd:
-            return False
-        ok, _ = detect_baijing_main_ui(logger, hwnd, budget_sec=2.0)
-        if ok:
-            logger.info("[白荆回廊·日常] 已回到主界面")
-            return True
-        # 场景登记表：ESC 无效的界面（休息室/关注特写）必须走各自的退出流程
-        state, acted = recover_scene(logger, hwnd, stop_check=stop_check, context="恢复主界面")
-        if state == "main":
-            logger.info("[白荆回廊·日常] 已回到主界面")
-            return True
-        if acted:
-            continue
-        _dismiss_overlay(logger, hwnd)
-        # 关闭按钮（OCR 带引导文字黑名单 → 模板兜底）
-        hit = _ocr_best_match(
-            logger, ("关闭",), hwnd, min_conf=0.6, exclude=("点击按钮", "空白区域")
-        )
-        if hit:
-            _pyautogui_click_guarded(*hit["center"])
-            logger.info(f"[白荆回廊·日常] 点击「关闭」@ {hit['center']}")
-            time.sleep(1.2)
-            continue
-        center = _template_center(logger, hwnd, str(TEMPLATES_DIR / "白荆回廊-关闭.png"), threshold=0.85)
-        if center:
-            _pyautogui_click_guarded(center[0], center[1])
-            logger.info(f"[白荆回廊·日常] 点击「关闭」按钮 @ {center}")
-            time.sleep(1.2)
-            continue
-        # ESC 收尾
-        _focus_game_window(logger, hwnd)
-        pyautogui.press("escape")
-        logger.info(f"[白荆回廊·日常] 按 ESC 关闭当前界面 (#{attempt}/{max_attempts})")
-        time.sleep(1.5)
-    ok, _ = detect_baijing_main_ui(logger, hwnd, budget_sec=2.0)
-    if ok:
-        logger.info("[白荆回廊·日常] 已回到主界面")
-    else:
-        logger.warning("[白荆回廊·日常] 多次尝试后仍未确认回到主界面")
-    return ok
-
-
-def close_task_list(logger: logging.Logger, hwnd, stop_check=None) -> bool:
-    """关闭任务列表并确认回到主界面。
-
-    先走 _ensure_main_ui（检测→关闭→ESC）；3 轮没回主界面的中间态，
-    2026-10-22 起再试一次「重开任务列表 → 关闭」——列表面板有可靠的关闭
-    按钮模板，重开刷新状态比继续盲按 ESC 更有效（10-21 实锤 ESC/点关闭
-    对中间态无效，close 判失败连带跳过俱乐部/礼包）。
-    """
-    if _ensure_main_ui(logger, hwnd, stop_check=stop_check):
-        return True
-    if _stopped(stop_check):
-        return False
-    logger.info("[白荆回廊·日常] 直接关闭失败，尝试重开任务列表再关闭")
-    if open_daily_task_list(logger, hwnd, stop_check=stop_check):
-        return _ensure_main_ui(logger, hwnd, stop_check=stop_check, attempts=2)
-    return False
 
 
 def run_baijing_daily_vision_flow(
@@ -5071,3 +834,277 @@ def run_baijing_daily_vision_flow(
         f"回主界面={back_ok}"
     )
     return True
+
+
+
+
+# ══ 对外符号面 facade（过渡性） ══
+# 2026-11-14 拆分：符号已迁往各专模块；这里全量 re-export 保持
+# baijing_daily.X 引用面不变（shop/cat_exchange/多数测试套件零改动）。
+# 注意：mock 必须打在符号归属模块上，patch baijing_daily 不再生效。
+
+from .baijing_common import (  # noqa: F401
+    DAILY_LIST_SNAPSHOT_MAX_WIDTH as DAILY_LIST_SNAPSHOT_MAX_WIDTH,
+    DAILY_LIST_SNAPSHOT_QUALITY as DAILY_LIST_SNAPSHOT_QUALITY,
+    MAX_OPEN_ATTEMPTS as MAX_OPEN_ATTEMPTS,
+    SCROLL_CURSOR_DWELL as SCROLL_CURSOR_DWELL,
+    SCROLL_NOTCH_PAUSE as SCROLL_NOTCH_PAUSE,
+    SCROLL_POST_DELAY as SCROLL_POST_DELAY,
+    WHEEL_NOTCH as WHEEL_NOTCH,
+    _baijing_task_status_today as _baijing_task_status_today,
+    _cursor_pos as _cursor_pos,
+    _in_host_panel_close_zone as _in_host_panel_close_zone,
+    _pixel_is_blue as _pixel_is_blue,
+    _ratio_point as _ratio_point,
+    _row_region_signature as _row_region_signature,
+    _scroll_list_at as _scroll_list_at,
+    _scroll_list_with_verify as _scroll_list_with_verify,
+    _set_cursor_pos as _set_cursor_pos,
+    _wheel_post as _wheel_post,
+    _wheel_real as _wheel_real,
+    _window_valid as _window_valid,
+)
+
+from .baijing_scene import (  # noqa: F401
+    CAT_RETAIL_MARKERS as CAT_RETAIL_MARKERS,
+    EVENT_ANNOUNCE_BLANK as EVENT_ANNOUNCE_BLANK,
+    EVENT_ANNOUNCE_MARKERS as EVENT_ANNOUNCE_MARKERS,
+    EVENT_DIALOG_CLAIM_MARKERS as EVENT_DIALOG_CLAIM_MARKERS,
+    EVENT_DIALOG_CLOSE as EVENT_DIALOG_CLOSE,
+    EVENT_DIALOG_MARKERS as EVENT_DIALOG_MARKERS,
+    FOCUS_MODE_MARKERS as FOCUS_MODE_MARKERS,
+    FOCUS_MODE_REGION as FOCUS_MODE_REGION,
+    FRIEND_SCENE_MARKERS as FRIEND_SCENE_MARKERS,
+    LEVEL_UP_MARKERS as LEVEL_UP_MARKERS,
+    LOADING_SCREEN_MARKERS as LOADING_SCREEN_MARKERS,
+    LOADING_WAIT_TIMEOUT_SEC as LOADING_WAIT_TIMEOUT_SEC,
+    MEMORY_DETAIL_MARKERS as MEMORY_DETAIL_MARKERS,
+    MEMORY_LIST_MARKERS as MEMORY_LIST_MARKERS,
+    REST_ROOM_BACK as REST_ROOM_BACK,
+    REST_ROOM_BACK_REGION as REST_ROOM_BACK_REGION,
+    REST_ROOM_LEAVE_CONFIRM as REST_ROOM_LEAVE_CONFIRM,
+    REST_ROOM_MARKERS as REST_ROOM_MARKERS,
+    SCENE_OCR_MIN_CONF as SCENE_OCR_MIN_CONF,
+    SCENE_RECOVERY_ROUNDS as SCENE_RECOVERY_ROUNDS,
+    SCENE_RULES as SCENE_RULES,
+    SCENE_UNKNOWN_ROUNDS as SCENE_UNKNOWN_ROUNDS,
+    TEA_ROOM_REGISTRY_MARKERS as TEA_ROOM_REGISTRY_MARKERS,
+    TEA_SUMMARY_MARKERS as TEA_SUMMARY_MARKERS,
+    _SCENE_LOGGED as _SCENE_LOGGED,
+    _SCENE_LOG_INTERVAL_SEC as _SCENE_LOG_INTERVAL_SEC,
+    _exit_via_top_left_back as _exit_via_top_left_back,
+    _friend_page_hit as _friend_page_hit,
+    _in_rest_room as _in_rest_room,
+    _loading_screen_hit as _loading_screen_hit,
+    _match_scene_rule as _match_scene_rule,
+    _on_memory_detail_page as _on_memory_detail_page,
+    _record_unknown_scene as _record_unknown_scene,
+    _scene_exit_cat_retail as _scene_exit_cat_retail,
+    _scene_exit_event_announce as _scene_exit_event_announce,
+    _scene_exit_event_dialog as _scene_exit_event_dialog,
+    _scene_exit_focus as _scene_exit_focus,
+    _scene_exit_friend as _scene_exit_friend,
+    _scene_exit_level_up as _scene_exit_level_up,
+    _scene_exit_loading as _scene_exit_loading,
+    _scene_exit_memory_detail as _scene_exit_memory_detail,
+    _scene_exit_memory_list as _scene_exit_memory_list,
+    _scene_exit_overlay as _scene_exit_overlay,
+    _scene_exit_rest_room as _scene_exit_rest_room,
+    _scene_exit_tea_room as _scene_exit_tea_room,
+    _scene_exit_tea_summary as _scene_exit_tea_summary,
+    _scene_failure_detail as _scene_failure_detail,
+    recover_scene as recover_scene,
+)
+
+from .baijing_tasklist import (  # noqa: F401
+    ACTIVITY_NUMBER_ATTEMPTS as ACTIVITY_NUMBER_ATTEMPTS,
+    ACTIVITY_NUMBER_INTERVAL as ACTIVITY_NUMBER_INTERVAL,
+    ACTIVITY_NUMBER_MAX as ACTIVITY_NUMBER_MAX,
+    ACTIVITY_NUMBER_REGION as ACTIVITY_NUMBER_REGION,
+    ACTIVITY_PANEL_MARKERS as ACTIVITY_PANEL_MARKERS,
+    CLAIM_ALL_TEXTS as CLAIM_ALL_TEXTS,
+    CLAIM_EXCLUDE as CLAIM_EXCLUDE,
+    CLAIM_TEXTS as CLAIM_TEXTS,
+    DAILY_ACTIVITY_BY_KEY as DAILY_ACTIVITY_BY_KEY,
+    DAILY_ACTIVITY_TOTAL as DAILY_ACTIVITY_TOTAL,
+    DAILY_TASK_CATALOG as DAILY_TASK_CATALOG,
+    GOTO_TEXTS as GOTO_TEXTS,
+    TAB_COLUMN_REGION as TAB_COLUMN_REGION,
+    TASK_BUTTON_REGION as TASK_BUTTON_REGION,
+    TASK_BUTTON_TEMPLATE as TASK_BUTTON_TEMPLATE,
+    TASK_LIST_CORE_MARKERS as TASK_LIST_CORE_MARKERS,
+    TASK_LIST_MARKERS as TASK_LIST_MARKERS,
+    TASK_ROW_REGION as TASK_ROW_REGION,
+    TASK_SCROLL_MAX as TASK_SCROLL_MAX,
+    TASK_SCROLL_STEPS as TASK_SCROLL_STEPS,
+    TASK_TEXT_EXCLUDE as TASK_TEXT_EXCLUDE,
+    TEMPLATE_MATCH_THRESHOLD as TEMPLATE_MATCH_THRESHOLD,
+    TEMPLATE_REFERENCE_WIDTH as TEMPLATE_REFERENCE_WIDTH,
+    _ensure_daily_tab as _ensure_daily_tab,
+    _find_row_button as _find_row_button,
+    _find_row_button_once as _find_row_button_once,
+    _find_task_button as _find_task_button,
+    _match_rows_to_catalog as _match_rows_to_catalog,
+    _parse_task_rows as _parse_task_rows,
+    _wait_task_list as _wait_task_list,
+)
+
+from .baijing_task_handlers import (  # noqa: F401
+    FRIEND_ENTRY_FALLBACK as FRIEND_ENTRY_FALLBACK,
+    FRIEND_GIFT_TEXTS as FRIEND_GIFT_TEXTS,
+    FRIEND_PAGE_MARKERS as FRIEND_PAGE_MARKERS,
+    FRIEND_POPUP_FAILURE_TEXTS as FRIEND_POPUP_FAILURE_TEXTS,
+    FRIEND_POPUP_REGION as FRIEND_POPUP_REGION,
+    FRIEND_POPUP_TEXTS as FRIEND_POPUP_TEXTS,
+    FRIEND_POPUP_TEXT_REGION as FRIEND_POPUP_TEXT_REGION,
+    IMAGING_ANYWHERE_CLICK as IMAGING_ANYWHERE_CLICK,
+    IMAGING_DIALOG_COUNT_REGION as IMAGING_DIALOG_COUNT_REGION,
+    IMAGING_DIALOG_MARKERS as IMAGING_DIALOG_MARKERS,
+    IMAGING_DIALOG_OK_BTN as IMAGING_DIALOG_OK_BTN,
+    IMAGING_DIALOG_PLUS_BTN as IMAGING_DIALOG_PLUS_BTN,
+    IMAGING_QUICK_BATTLE_BTN as IMAGING_QUICK_BATTLE_BTN,
+    IMAGING_QUICK_BATTLE_REGION as IMAGING_QUICK_BATTLE_REGION,
+    IMAGING_QUICK_BATTLE_TEXTS as IMAGING_QUICK_BATTLE_TEXTS,
+    IMAGING_SETTLEMENT_MARKERS as IMAGING_SETTLEMENT_MARKERS,
+    IMAGING_STAGE_MARKERS as IMAGING_STAGE_MARKERS,
+    LAB_DIALOG_HINT as LAB_DIALOG_HINT,
+    LAB_DIALOG_MARKERS as LAB_DIALOG_MARKERS,
+    LEAF_CLAIM_ALL_BTN as LEAF_CLAIM_ALL_BTN,
+    LEAF_OVERVIEW_BTN as LEAF_OVERVIEW_BTN,
+    LEAF_PAGE_MARKERS as LEAF_PAGE_MARKERS,
+    LEAF_TAB_FALLBACK as LEAF_TAB_FALLBACK,
+    LEAF_TAB_REGION as LEAF_TAB_REGION,
+    LEAF_TAB_TEXTS as LEAF_TAB_TEXTS,
+    MEMORY_BREAKTHROUGH_CANCEL as MEMORY_BREAKTHROUGH_CANCEL,
+    MEMORY_BREAKTHROUGH_CONFIRM as MEMORY_BREAKTHROUGH_CONFIRM,
+    MEMORY_BREAKTHROUGH_CONFIRM_SAMPLE as MEMORY_BREAKTHROUGH_CONFIRM_SAMPLE,
+    MEMORY_BREAKTHROUGH_MARKERS as MEMORY_BREAKTHROUGH_MARKERS,
+    MEMORY_DIALOG_MARKERS as MEMORY_DIALOG_MARKERS,
+    MEMORY_ENHANCE_BTN_REGION as MEMORY_ENHANCE_BTN_REGION,
+    MEMORY_ENHANCE_BUTTON_TPL as MEMORY_ENHANCE_BUTTON_TPL,
+    MEMORY_ENHANCE_TEXTS as MEMORY_ENHANCE_TEXTS,
+    MEMORY_LEVEL_TAB_FALLBACK as MEMORY_LEVEL_TAB_FALLBACK,
+    MEMORY_LEVEL_TAB_MARKERS as MEMORY_LEVEL_TAB_MARKERS,
+    MEMORY_LEVEL_TAB_REGION as MEMORY_LEVEL_TAB_REGION,
+    MEMORY_LEVEL_TAB_TEXT as MEMORY_LEVEL_TAB_TEXT,
+    MEMORY_LIST_CLICK_CANDIDATES as MEMORY_LIST_CLICK_CANDIDATES,
+    MEMORY_RESET_REGION as MEMORY_RESET_REGION,
+    PLUS_BUTTON_DX_RATIO as PLUS_BUTTON_DX_RATIO,
+    REST_ROOM_TEA_ENTRY as REST_ROOM_TEA_ENTRY,
+    STAGE_BATTLE_TASKS as STAGE_BATTLE_TASKS,
+    TEA_CONFIRM_MARKERS as TEA_CONFIRM_MARKERS,
+    TEA_CONFIRM_OK as TEA_CONFIRM_OK,
+    TEA_DIALOGUE_CLICK as TEA_DIALOGUE_CLICK,
+    TEA_DRINK_POLL_SEC as TEA_DRINK_POLL_SEC,
+    TEA_DRINK_ROUNDS as TEA_DRINK_ROUNDS,
+    TEA_DRINK_TEXTS as TEA_DRINK_TEXTS,
+    TEA_DRINK_WAIT_SEC as TEA_DRINK_WAIT_SEC,
+    TEA_FIRST_CHARACTER as TEA_FIRST_CHARACTER,
+    TEA_FIRST_TOPIC as TEA_FIRST_TOPIC,
+    TEA_INVITE_EXCLUDE_TEXTS as TEA_INVITE_EXCLUDE_TEXTS,
+    TEA_INVITE_MAX_CHARS as TEA_INVITE_MAX_CHARS,
+    TEA_INVITE_TEXTS as TEA_INVITE_TEXTS,
+    TEA_SCENE_MARKERS as TEA_SCENE_MARKERS,
+    TEA_SCENE_TIMEOUT_SEC as TEA_SCENE_TIMEOUT_SEC,
+    TEA_SELECT_DRINK_RATIO as TEA_SELECT_DRINK_RATIO,
+    TEA_SELECT_MARKERS as TEA_SELECT_MARKERS,
+    TEA_SELECT_TIMEOUT_SEC as TEA_SELECT_TIMEOUT_SEC,
+    TEA_SUMMARY_CLICK as TEA_SUMMARY_CLICK,
+    TEA_TOPIC_MARKERS as TEA_TOPIC_MARKERS,
+    _back_to_memory_list as _back_to_memory_list,
+    _capture_stage_battle_dialog as _capture_stage_battle_dialog,
+    _click_quick_battle_entry as _click_quick_battle_entry,
+    _close_lab_dialog as _close_lab_dialog,
+    _confirm_action_power_use as _confirm_action_power_use,
+    _do_friend_medal_on_page as _do_friend_medal_on_page,
+    _ensure_memory_level_tab as _ensure_memory_level_tab,
+    _enter_friend_page_from_main as _enter_friend_page_from_main,
+    _exit_focus_if_present as _exit_focus_if_present,
+    _find_memory_enhance_button as _find_memory_enhance_button,
+    _find_plus_button as _find_plus_button,
+    _handle_friend_gift_popup as _handle_friend_gift_popup,
+    _invite_hit_usable as _invite_hit_usable,
+    _is_breakthrough_dialog as _is_breakthrough_dialog,
+    _nudge_into_tea_scene as _nudge_into_tea_scene,
+    _retry_tea_entry_after_focus as _retry_tea_entry_after_focus,
+    _same_click_target as _same_click_target,
+)
+
+from .baijing_echo import (  # noqa: F401
+    CLUB_ACTIVITY_DETECT_REGION as CLUB_ACTIVITY_DETECT_REGION,
+    CLUB_ACTIVITY_ECHO_TEXTS as CLUB_ACTIVITY_ECHO_TEXTS,
+    CLUB_ACTIVITY_SNAPSHOT_PREFIX as CLUB_ACTIVITY_SNAPSHOT_PREFIX,
+    CLUB_BACK_REGION as CLUB_BACK_REGION,
+    CLUB_BLANK_CLICK as CLUB_BLANK_CLICK,
+    CLUB_CARD_FALLBACK as CLUB_CARD_FALLBACK,
+    CLUB_CARD_REGION as CLUB_CARD_REGION,
+    CLUB_CLAIM_TEXTS as CLUB_CLAIM_TEXTS,
+    CLUB_DAILY_TASK_TEXTS as CLUB_DAILY_TASK_TEXTS,
+    CLUB_DONE_TEXTS as CLUB_DONE_TEXTS,
+    CLUB_ENTRY_FALLBACK as CLUB_ENTRY_FALLBACK,
+    CLUB_ENTRY_REGION as CLUB_ENTRY_REGION,
+    CLUB_ENTRY_TEMPLATE as CLUB_ENTRY_TEMPLATE,
+    CLUB_PAGE_MARKERS as CLUB_PAGE_MARKERS,
+    CLUB_SNAPSHOT_PREFIX as CLUB_SNAPSHOT_PREFIX,
+    ECHO_AUTOFORM_CONFIRM_FALLBACK as ECHO_AUTOFORM_CONFIRM_FALLBACK,
+    ECHO_AUTOFORM_TEXTS as ECHO_AUTOFORM_TEXTS,
+    ECHO_BATTLE_TIMEOUT as ECHO_BATTLE_TIMEOUT,
+    ECHO_BOSS_BACK_FALLBACK as ECHO_BOSS_BACK_FALLBACK,
+    ECHO_BOSS_FIGHT_DONE_MARKS as ECHO_BOSS_FIGHT_DONE_MARKS,
+    ECHO_BOSS_FIGHT_FALLBACK as ECHO_BOSS_FIGHT_FALLBACK,
+    ECHO_BOSS_FIGHT_TEXTS as ECHO_BOSS_FIGHT_TEXTS,
+    ECHO_BOSS_ICON_FALLBACK as ECHO_BOSS_ICON_FALLBACK,
+    ECHO_BOSS_LADDER_CLICK_OFFSET as ECHO_BOSS_LADDER_CLICK_OFFSET,
+    ECHO_BOSS_LADDER_FALLBACK as ECHO_BOSS_LADDER_FALLBACK,
+    ECHO_BOSS_LADDER_REGION as ECHO_BOSS_LADDER_REGION,
+    ECHO_BOSS_LADDER_TIERS as ECHO_BOSS_LADDER_TIERS,
+    ECHO_BOSS_PANEL_MARKS as ECHO_BOSS_PANEL_MARKS,
+    ECHO_BOSS_SCORE_TOP_TIER as ECHO_BOSS_SCORE_TOP_TIER,
+    ECHO_BOSS_SETTLE_TIMEOUT as ECHO_BOSS_SETTLE_TIMEOUT,
+    ECHO_BOSS_TITLE as ECHO_BOSS_TITLE,
+    ECHO_CLAIM_FALLBACK as ECHO_CLAIM_FALLBACK,
+    ECHO_CLAIM_REGION as ECHO_CLAIM_REGION,
+    ECHO_CLAIM_TEXTS as ECHO_CLAIM_TEXTS,
+    ECHO_HEARTBEAT_SEC as ECHO_HEARTBEAT_SEC,
+    ECHO_MAP_BODY as ECHO_MAP_BODY,
+    ECHO_MAP_REWARD_CLAIM_ALL as ECHO_MAP_REWARD_CLAIM_ALL,
+    ECHO_MAP_REWARD_CLAIM_ALL_FALLBACK as ECHO_MAP_REWARD_CLAIM_ALL_FALLBACK,
+    ECHO_MAP_REWARD_CLOSE_FALLBACK as ECHO_MAP_REWARD_CLOSE_FALLBACK,
+    ECHO_MAP_REWARD_ENTRY as ECHO_MAP_REWARD_ENTRY,
+    ECHO_MAP_TITLE as ECHO_MAP_TITLE,
+    ECHO_META_KEY as ECHO_META_KEY,
+    ECHO_NODE_LABEL as ECHO_NODE_LABEL,
+    ECHO_NODE_LETTERS as ECHO_NODE_LETTERS,
+    ECHO_NODE_REGION as ECHO_NODE_REGION,
+    ECHO_RESET_FALLBACK_DAYS as ECHO_RESET_FALLBACK_DAYS,
+    ECHO_RESET_RE as ECHO_RESET_RE,
+    ECHO_WAIT_MAP as ECHO_WAIT_MAP,
+    ECHO_WAIT_PANEL as ECHO_WAIT_PANEL,
+    _claim_club_daily_task as _claim_club_daily_task,
+    _echo_boss_and_map_rewards as _echo_boss_and_map_rewards,
+    _echo_boss_claim_ladder as _echo_boss_claim_ladder,
+    _echo_boss_fight as _echo_boss_fight,
+    _echo_boss_open_panel as _echo_boss_open_panel,
+    _echo_boss_panel_confirmed as _echo_boss_panel_confirmed,
+    _echo_boss_wait_settled as _echo_boss_wait_settled,
+    _echo_defeat_frame as _echo_defeat_frame,
+    _echo_letter_of as _echo_letter_of,
+    _echo_load_marks as _echo_load_marks,
+    _echo_map_confirmed as _echo_map_confirmed,
+    _echo_map_rewards_claim as _echo_map_rewards_claim,
+    _echo_node_labels as _echo_node_labels,
+    _echo_panel_claim as _echo_panel_claim,
+    _echo_pick_label as _echo_pick_label,
+    _echo_read_top_score as _echo_read_top_score,
+    _echo_reset_expiry as _echo_reset_expiry,
+    _echo_result_frame as _echo_result_frame,
+    _echo_save_marks as _echo_save_marks,
+    _echo_texts as _echo_texts,
+    _echo_wait_battle_settled as _echo_wait_battle_settled,
+    _echo_wait_map as _echo_wait_map,
+    _echo_zone_fight_node as _echo_zone_fight_node,
+    _echo_zone_run_content as _echo_zone_run_content,
+    _enter_club_page as _enter_club_page,
+    _leave_club_page as _leave_club_page,
+    _run_club_activity_echo_zone as _run_club_activity_echo_zone,
+)

@@ -467,6 +467,15 @@ This file mirrors important repository-level development notes inside the projec
   现在只由 `task_batch_runner._MONTHLY_FLOW_BY_APP` 在原神日常跑完后自动补跑。
 ### 白荆回廊日常流程改视觉版 (重要, 2026-10-18)
 
+- **模块布局（2026-11-14 拆分后）**：白荆族按域分 6 文件——基础设施
+  `baijing_common.py`（窗口/OCR/滚动/取证/遮挡关闭）、场景识别与恢复
+  `baijing_scene.py`（登记表 + recover_scene + _ensure_main_ui）、任务列表
+  `baijing_tasklist.py`（扫描/找行/领取/目录）、专项任务 `baijing_task_handlers.py`
+  （研发室/烙痕/茶憩/叶脉/阶段战斗/好友）、俱乐部+回声猎区 `baijing_echo.py`
+  （每日任务领取 + 节点链/boss/阶梯/分贝奖励）、主流程胶水 `baijing_daily.py`
+  （零售礼包 + process_task_list + run_baijing_daily_vision_flow，尾部有过渡性
+  re-export facade）。**mock 必须打在符号实际所属模块**，patch baijing_daily 对
+  已迁符号不生效。下文历史条目里出现的 `baijing_daily.py` 路径按此映射。
 - 日常从「固定坐标序列回放」（`assets/click_sequences/白荆回廊-日常.json`，100+ 步录于
   1.0.2.1082）重构为 `runtime/baijing_daily.py` 视觉版：主界面 → 点右侧「任务」按钮
   → 日常任务列表 → 一键/逐个「领取」→ 关闭列表回主界面。旧 JSON 保留作归档，

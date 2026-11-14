@@ -16,6 +16,8 @@ A~E 节点顺序解锁，点节点 → 详情面板「开始收录」→ 编队�
 [7] 内容：地图双证据不满足 → failed + 落取证，零节点点击；
 [8] 内容：已清标记跳过 A → 打 B → C 无「开始收录」（锁定）链止，标记保存 A+B；
 [9] 节点定位：OCR 字母优先 / x 序兜底（仅 5 标签全在）/ 凑不齐宁可不点；
+[9b] 节点标签区域过滤：右界含住 E 标签 x≈0.667（2026-11-14 事故回归）、
+     x>0.70 与面板标题位 y<0.35 出区；
 [10] 节点战斗：编队页（复用拟合）→ 作战开始 → 布阵页离开即算开打（战斗页
      OCR 盲，#283 实锤）→ 卡布阵页补点 3 次报败 / 编队页进不去报败 / 无布阵页
      battle 直进；
@@ -47,7 +49,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-import game_auto.runtime.baijing_daily as bd  # noqa: E402
+import game_auto.runtime.baijing_echo as bd  # noqa: E402
+import game_auto.runtime.baijing_common as bcommon  # noqa: E402
+import game_auto.runtime.baijing_scene as bscene  # noqa: E402
 import game_auto.runtime.baijing_fitting as bfit  # noqa: E402
 
 FAILURES = []
@@ -71,10 +75,12 @@ def test_constants():
     # 顶部避开「今日俱乐部奖励已领取」横幅（y≈0.215~0.245）
     check("区域顶部低于横幅带", y0 >= 0.25, y0)
     check("快照前缀", bd.CLUB_ACTIVITY_SNAPSHOT_PREFIX == "club_activity_echo")
-    # 11-13 内容常量：节点标签区右界必须避开详情面板（面板左缘 ≈0.68，面板
-    # 标题也叫「纯净回声·X」）；「开始收录」比例兜底必须落在自己的搜索区内。
+    # 11-14 口径：右界必须含住节点 E 标签中心 x≈0.667（旧 0.66 把 E 滤掉导致
+    # 「节点 E 标签未定位」），且避开右侧常驻会员排名面板（左缘 ≈0.78）；
+    # 点节点才开的详情面板（左缘 ≈0.68）标题靠 y≥0.35 + 字母优先/5 标签兜底兜住。
     nx0, ny0, nx1, ny1 = bd.ECHO_NODE_REGION
-    check("节点标签区右界避开详情面板", 0.62 <= nx1 <= 0.67, bd.ECHO_NODE_REGION)
+    check("节点标签区右界含住 E(0.667) 且避开常驻排名面板",
+          0.667 <= nx1 <= 0.75, bd.ECHO_NODE_REGION)
     check("节点标签区升序合法", nx0 < nx1 and ny0 < ny1, bd.ECHO_NODE_REGION)
     cx, cy = bd.ECHO_CLAIM_FALLBACK
     rx0, ry0, rx1, ry1 = bd.ECHO_CLAIM_REGION
@@ -313,6 +319,28 @@ def test_node_letter_and_fallback():
           bd._echo_pick_label(
               [{"text": "纯净回声·D", "confidence": 0.8, "center": (900, 700)}] + labels,
               "D")["center"] == (900, 700))
+
+
+def test_node_label_region_filter():
+    print("[9b] 节点标签区域过滤：E 标签(x≈0.667)必须进区（2026-11-14 事故回归）")
+    # 桩 _window_region → 1920x1080 虚拟窗口，_abs_region 换算
+    # ECHO_NODE_REGION=(0,0.35,0.70,0.95) → 绝对区 (0,378)-(1344,1026)。
+    with mock.patch.object(bcommon, "_window_region", return_value=(0, 0, 1920, 1080)):
+        items = [
+            {"text": "纯净回声·A", "confidence": 0.99, "center": (211, 668)},
+            # 2026-11-14 实拍：E 标签中心 (≈1280, 650)，旧右界 0.66 把它滤掉
+            {"text": "纯净回声·E", "confidence": 0.98, "center": (1281, 650)},
+            # 右界之外（x>0.70）：常驻会员排名面板方向的标签必须滤掉
+            {"text": "纯净回声·E", "confidence": 0.98, "center": (1400, 650)},
+            # 详情面板标题位（面板上部 y<0.35）：x 再靠内也必须被 y 界挡住
+            {"text": "纯净回声·D", "confidence": 1.00, "center": (1325, 300)},
+        ]
+        got = bd._echo_node_labels(1, items)
+    xs = [it["center"][0] for it in got]
+    check("E 标签中心 0.667 进区（本次修复的目标行为）", 1281 in xs, xs)
+    check("x>0.70 出区（不混常驻排名面板）", 1400 not in xs, xs)
+    check("面板标题位 y<0.35 出区", 1325 not in xs, xs)
+    check("按 x 从左到右排序", xs == sorted(xs), xs)
 
 
 def test_fight_node_team_chain():
@@ -791,6 +819,7 @@ def main():
     test_content_map_unconfirmed_fails()
     test_content_marks_skip_and_lock_chain_end()
     test_node_letter_and_fallback()
+    test_node_label_region_filter()
     test_fight_node_team_chain()
     test_battle_settle_adaptive()
     test_battle_settle_echo_result_and_defeat()

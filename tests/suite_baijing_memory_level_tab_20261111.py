@@ -25,7 +25,9 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 
 from PIL import Image  # noqa: E402
 
-from game_auto.runtime import baijing_daily as bd  # noqa: E402
+from game_auto.runtime import baijing_task_handlers as bd  # noqa: E402
+from game_auto.runtime import baijing_common as bcommon  # noqa: E402
+from game_auto.runtime import baijing_scene as bscene  # noqa: E402
 
 LOG = logging.getLogger("baijing_memory_tab_test")
 LOG.addHandler(logging.NullHandler())
@@ -102,6 +104,17 @@ def _harness(transitions, start="list"):
         mock.patch.object(bd, "_record_step_failure",
                           side_effect=lambda logger, hwnd, step, msg: failures.append((step, msg))),
         mock.patch.object(bd, "_return_to_task_panel", side_effect=lambda *a, **k: True),
+        # 2026-11-14 拆分：_click_ratio/_scene_results 等在 baijing_common 里
+        # 执行，同名桩必须补打到 common（见 breakthrough 套件同注）。
+        mock.patch.object(bcommon, "ocr_window_content",
+                          side_effect=lambda logger, hwnd, **k: list(STATE_ROWS[machine.state])),
+        mock.patch.object(bcommon, "grab_screen", side_effect=machine.grab),
+        mock.patch.object(bcommon, "_pyautogui_click_guarded", side_effect=machine.click),
+        mock.patch.object(bcommon, "_ensure_window", side_effect=lambda logger, hwnd: hwnd),
+        mock.patch.object(bcommon, "_window_region", side_effect=lambda hwnd: (0, 0, 1919, 1079)),
+        mock.patch.object(bcommon, "_template_center", side_effect=lambda *a, **k: None),
+        # scene 侧函数（_exit_via_top_left_back 等）在 scene 模块解析自己的导入绑定
+        mock.patch.object(bscene, "_pyautogui_click_guarded", side_effect=machine.click),
         mock.patch.object(bd.time, "sleep", lambda *_: None),
     ]
     for p in patches:
@@ -204,7 +217,7 @@ def test_static():
     check("取证帧页签坐标落在区域内",
           x0 <= tab_x <= x1 and y0 <= tab_y <= y1, (tab_x, tab_y))
     src = (Path(__file__).resolve().parent.parent
-           / "src/game_auto/runtime/baijing_daily.py").read_text(encoding="utf-8")
+           / "src/game_auto/runtime/baijing_task_handlers.py").read_text(encoding="utf-8")
     check("主流程已调用 helper", "_ensure_memory_level_tab(logger, hwnd" in src)
     check("helper 在重置之前",
           src.index("if not _ensure_memory_level_tab(logger, hwnd")

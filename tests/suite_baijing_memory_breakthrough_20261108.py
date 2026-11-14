@@ -26,7 +26,9 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 
 from PIL import Image  # noqa: E402
 
-from game_auto.runtime import baijing_daily as bd  # noqa: E402
+from game_auto.runtime import baijing_task_handlers as bd  # noqa: E402
+from game_auto.runtime import baijing_common as bcommon  # noqa: E402
+from game_auto.runtime import baijing_scene as bscene  # noqa: E402
 
 FAILURES = []
 
@@ -105,6 +107,18 @@ def _harness(transitions, start="list"):
         mock.patch.object(bd, "_record_step_failure",
                           side_effect=lambda logger, hwnd, step, msg: failures.append((step, msg))),
         mock.patch.object(bd, "_return_to_task_panel", side_effect=lambda *a, **k: True),
+        # 2026-11-14 拆分：_click_ratio/_scene_results/_pixel_is_blue 等在
+        # baijing_common 里执行，读的是 common 的模块全局——同名桩必须补打到
+        # common，否则 OCR/取色/点击桩都到不了。
+        mock.patch.object(bcommon, "ocr_window_content",
+                          side_effect=lambda logger, hwnd, **k: list(STATE_ROWS[machine.state])),
+        mock.patch.object(bcommon, "grab_screen", side_effect=machine.grab),
+        mock.patch.object(bcommon, "_pyautogui_click_guarded", side_effect=machine.click),
+        mock.patch.object(bcommon, "_ensure_window", side_effect=lambda logger, hwnd: hwnd),
+        mock.patch.object(bcommon, "_window_region", side_effect=lambda hwnd: (0, 0, 1919, 1079)),
+        mock.patch.object(bcommon, "_template_center", side_effect=lambda *a, **k: None),
+        # scene 侧函数（_exit_via_top_left_back 等）在 scene 模块解析自己的导入绑定
+        mock.patch.object(bscene, "_pyautogui_click_guarded", side_effect=machine.click),
         mock.patch.object(bd.time, "sleep", lambda *_: None),
     ]
     for p in patches:
@@ -205,7 +219,7 @@ def test_static_guards():
           all(0 < r[0] < 1 and 0 < r[1] < 1 for r in (
               bd.MEMORY_BREAKTHROUGH_CONFIRM, bd.MEMORY_BREAKTHROUGH_CONFIRM_SAMPLE,
               bd.MEMORY_BREAKTHROUGH_CANCEL)))
-    src = Path(__file__).resolve().parent.parent / "src" / "game_auto" / "runtime" / "baijing_daily.py"
+    src = Path(__file__).resolve().parent.parent / "src" / "game_auto" / "runtime" / "baijing_task_handlers.py"
     text = src.read_text(encoding="utf-8")
     check("取色判可点在实现中", "_pixel_is_blue" in text)
     check("换卡走返回列表", "_back_to_memory_list" in text)

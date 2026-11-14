@@ -180,8 +180,8 @@
 - **DB 侧**：`WorkflowDB.record_flow_failure / query_flow_failures / summarize_flow_failures /
   purge_old_flow_failures`。建表用 `CREATE TABLE IF NOT EXISTS`，老库首次打开自动迁移，无版本号。
 - **埋点（新增失败务必接）**：`foreground_flow_runner.run_flow` 步骤重试耗尽（模板/OCR 未匹配）、
-  `task_batch_runner._run_single_task` 状态为 failed、`baijing_daily._record_step_failure`
-  （白荆俱乐部每日任务 / 每日外勤赠礼失败）。
+  `task_batch_runner._run_single_task` 状态为 failed、`baijing_common._record_step_failure`
+  （白荆俱乐部每日任务 / 每日外勤赠礼失败；2026-11-14 拆分后归 common）。
 - **三条铁律**：
   1. **永不抛异常** —— 调用点都在失败分支里，诊断自己炸了必须被吞掉（连 logger 抛异常也不能
      把已写库的 id 吞掉）；

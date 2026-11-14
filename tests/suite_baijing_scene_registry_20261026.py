@@ -35,7 +35,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-import game_auto.runtime.baijing_daily as bd  # noqa: E402
+import game_auto.runtime.baijing_scene as bd  # noqa: E402
+import game_auto.runtime.baijing_common as bcommon  # noqa: E402
+import game_auto.runtime.baijing_tasklist as btasklist  # noqa: E402
+import game_auto.runtime.baijing_task_handlers as bhandlers  # noqa: E402
 
 LOG = logging.getLogger("scene-registry-test")
 FAILURES = []
@@ -242,34 +245,41 @@ class Screen:
         self.failures.append((step, detail))
 
     # ---- 安装 / 还原 ----
+    # 2026-11-14 拆分后符号分散在 scene/common/tasklist/handlers：同名桩必须
+    # 打到**所有拥有该符号的模块**（函数在自己的模块全局里解析名字，只 patch
+    # 主模块会漏掉 common 侧的 _window_region/ocr_window_content 等）。
+    _MODULES = (bd, bcommon, btasklist, bhandlers)
+
+    def _mset(self, name, value):
+        for m in self._MODULES:
+            if hasattr(m, name):
+                self._saved.setdefault((id(m), name), (m, name, getattr(m, name)))
+                setattr(m, name, value)
+
     def install(self, extra=None):
-        self._saved = {k: getattr(bd, k) for k in (
-            "ocr_window_content", "_pyautogui_click_guarded", "_click_ratio",
-            "pyautogui", "time", "_ensure_window", "_window_region",
-            "detect_baijing_main_ui", "_record_step_failure",
-        )}
+        self._saved = {}
 
         class FakePyAuto:
             @staticmethod
             def press(key):
                 self.press(key)
 
-        bd.ocr_window_content = self.ocr
-        bd._pyautogui_click_guarded = self.click
-        bd._click_ratio = self.click_ratio
-        bd._ensure_window = lambda logger, hwnd: hwnd
-        bd._window_region = lambda hwnd: WIN
-        bd.detect_baijing_main_ui = lambda logger, hwnd, budget_sec=2.0: (self.state == "main", "fake")
-        bd._record_step_failure = self.record_failure
-        bd.pyautogui = FakePyAuto()
-        bd.time = FakeTime()
+        self._mset("ocr_window_content", self.ocr)
+        self._mset("_pyautogui_click_guarded", self.click)
+        self._mset("_click_ratio", self.click_ratio)
+        self._mset("_ensure_window", lambda logger, hwnd: hwnd)
+        self._mset("_window_region", lambda hwnd: WIN)
+        self._mset("detect_baijing_main_ui",
+                   lambda logger, hwnd, budget_sec=2.0: (self.state == "main", "fake"))
+        self._mset("_record_step_failure", self.record_failure)
+        self._mset("pyautogui", FakePyAuto())
+        self._mset("time", FakeTime())
         for name, fn in (extra or {}).items():
-            self._saved.setdefault(name, getattr(bd, name))
-            setattr(bd, name, fn)
+            self._mset(name, fn)
 
     def restore(self):
-        for k, v in self._saved.items():
-            setattr(bd, k, v)
+        for m, name, orig in self._saved.values():
+            setattr(m, name, orig)
 
     def run(self, fn, *a, **k):
         self.install(k.pop("extra", None))
@@ -346,19 +356,21 @@ def test_new_scenes_20261027():
     # 2026-10-30 用户实拍弹窗定标 docs/refs/baijing_memory_enhance_20261030.png：
     # 「指定等级」行 [重置][Lv][+][最大]，重置 (1189,669)、+ 约 (1424,669)。
     # 有重置锚点时直接推算 +，不再依赖第二次 OCR。
-    orig_region, orig_ocr = bd._window_region, bd._ocr_best_match
-    bd._window_region = lambda hwnd: (0, 0, 1919, 1079)
+    orig_region, orig_ocr = bhandlers._window_region, bhandlers._ocr_best_match
+    bhandlers._window_region = lambda hwnd: (0, 0, 1919, 1079)
+    bcommon._window_region = bhandlers._window_region
     def _boom(*a, **k):
         raise AssertionError("有锚点时不应再 OCR")
-    bd._ocr_best_match = _boom
+    bhandlers._ocr_best_match = _boom
     try:
-        pos = bd._find_plus_button(LOG, 1, anchor=(1189, 669))
+        pos = bhandlers._find_plus_button(LOG, 1, anchor=(1189, 669))
     finally:
-        bd._window_region, bd._ocr_best_match = orig_region, orig_ocr
+        bhandlers._window_region, bhandlers._ocr_best_match = orig_region, orig_ocr
+        bcommon._window_region = orig_region
     check("重置锚点推算 + 按钮（截图定标）", pos == (1424, 669), pos)
     check("参考截图已入库", (PROJECT_ROOT / "docs" / "refs" / "baijing_memory_enhance_20261030.png").is_file())
-    check("重置 OCR 限定在指定等级行", bd.MEMORY_RESET_REGION == (0.55, 0.58, 0.68, 0.66))
-    src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "baijing_daily.py").read_text(encoding="utf-8")
+    check("重置 OCR 限定在指定等级行", bhandlers.MEMORY_RESET_REGION == (0.55, 0.58, 0.68, 0.66))
+    src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "baijing_task_handlers.py").read_text(encoding="utf-8")
     check("重置后弹窗消失时不盲点 +", "重置后强化弹窗消失，停止（不盲点 +）" in src)
 
     # 2026-10-30 10:25：烙痕列表页（记忆烙痕返回后卡住）
@@ -614,7 +626,7 @@ def test_call_sites():
     print("[9] 三个恢复入口在休息室残留时的行为")
     scr = Screen(state="lounge")
     ok = scr.run(
-        lambda: bd._return_to_task_panel(LOG, 1),
+        lambda: btasklist._return_to_task_panel(LOG, 1),
         extra={
             "_find_task_button": lambda logger, hwnd, stop_check=None: (TASK_BTN_XY, "ocr"),
             "_ensure_daily_tab": lambda logger, hwnd, stop_check=None: True,
@@ -642,7 +654,7 @@ def test_call_sites():
         return False        # 休息室里根本没有「任务」按钮
 
     ok = scr.run(
-        lambda: bd._ensure_task_list_open(LOG, 1),
+        lambda: btasklist._ensure_task_list_open(LOG, 1),
         extra={
             "_wait_task_list": lambda logger, hwnd, timeout=3.0, stop_check=None, snapshot=False: scr.state == "panel",
             "open_daily_task_list": fake_open,
@@ -659,12 +671,16 @@ def test_cleanup():
     for gone in ("_leave_rest_room", "_recover_scene_state", "_in_focus_mode", "_exit_focus_mode"):
         check(f"{gone} 已删除", not hasattr(bd, gone))
     check("休息室坐标来自截图",
-          0.82 <= bd.REST_ROOM_TEA_ENTRY[0] <= 0.95 and 0.76 <= bd.REST_ROOM_TEA_ENTRY[1] <= 0.90,
-          bd.REST_ROOM_TEA_ENTRY)
+          0.82 <= bhandlers.REST_ROOM_TEA_ENTRY[0] <= 0.95 and 0.76 <= bhandlers.REST_ROOM_TEA_ENTRY[1] <= 0.90,
+          bhandlers.REST_ROOM_TEA_ENTRY)
     check("茶憩流程仍用休息室判定", hasattr(bd, "_in_rest_room"))
-    src = Path("src/game_auto/runtime/baijing_daily.py").read_text(encoding="utf-8")
-    check("三个入口都调用 recover_scene", src.count("recover_scene(logger, hwnd") >= 3,
-          src.count("recover_scene(logger, hwnd"))
+    # 2026-11-14 拆分：三个恢复入口分属 scene（_ensure_main_ui）与 tasklist
+    # （_return_to_task_panel/_ensure_task_list_open），跨两个文件计数。
+    src_scene = Path("src/game_auto/runtime/baijing_scene.py").read_text(encoding="utf-8")
+    src_tasklist = Path("src/game_auto/runtime/baijing_tasklist.py").read_text(encoding="utf-8")
+    n_calls = (src_scene.count("recover_scene(logger, hwnd")
+               + src_tasklist.count("recover_scene(logger, hwnd"))
+    check("三个入口都调用 recover_scene", n_calls >= 3, n_calls)
 
 
 def main():

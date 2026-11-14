@@ -37,7 +37,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-import game_auto.runtime.baijing_daily as bd  # noqa: E402
+import game_auto.runtime.baijing_task_handlers as bd  # noqa: E402
+import game_auto.runtime.baijing_common as bcommon  # noqa: E402
+import game_auto.runtime.baijing_scene as bscene  # noqa: E402
+import game_auto.runtime.baijing_tasklist as btasklist  # noqa: E402
 
 LOG = logging.getLogger("tea-drink-test")
 LOG.addHandler(logging.NullHandler())
@@ -101,10 +104,25 @@ class TeaSelectEnv:
         bd._window_region = lambda hwnd: (0, 0, 1920, 1080)
         bd._scene_results = lambda logger, hwnd=None: []   # 无特写
         bd.time = FakeTime()
+        # 2026-11-14 拆分：同名桩镜像到符号实际所属模块（common/scene/tasklist）——
+        # 各模块函数在自己的模块全局里解析名字，只打 handlers 不生效。
+        for _k in ("_find_row_button", "_pyautogui_click_guarded", "_wait_page_markers",
+                   "_ocr_best_match", "_click_ratio", "_return_to_task_panel",
+                   "_record_step_failure", "_ensure_window", "_window_region",
+                   "_scene_results", "_stopped", "time"):
+            for _m in (bcommon, bscene, btasklist):
+                if hasattr(_m, _k):
+                    if (_m.__name__, _k) not in self._saved:
+                        self._saved[(_m.__name__, _k)] = (_m, getattr(_m, _k))
+                    setattr(_m, _k, getattr(bd, _k))
 
     def restore(self):
         for k, v in self._saved.items():
-            setattr(bd, k, v)
+            if isinstance(k, tuple):
+                _m, _orig = v
+                setattr(_m, k[1], _orig)
+            else:
+                setattr(bd, k, v)
 
     # ---- 数据缝 ----
     def _wait(self, logger, hwnd, markers, timeout=6.0, stop_check=None, **k):
@@ -211,7 +229,7 @@ def test_drink_text_passes_usable():
 
 def test_wiring():
     print("[6] 接线静态断言")
-    src = (PROJECT_ROOT / "src/game_auto/runtime/baijing_daily.py").read_text(encoding="utf-8")
+    src = (PROJECT_ROOT / "src/game_auto/runtime/baijing_task_handlers.py").read_text(encoding="utf-8")
     check("TEA_SELECT_DRINK_RATIO 已定义",
           "TEA_SELECT_DRINK_RATIO = (0.827, 0.800)" in src, None)
     check("nudge 里快检选择页后才点「喝茶」",

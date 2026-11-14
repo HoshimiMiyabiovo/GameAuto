@@ -36,10 +36,10 @@ REGISTRY = {
     ("nikki_calendar.py", "_is_resonance_page"): "两个共鸣页签标记",
     ("hsr_resin_craft.py", "_bag_visible"): "模板优先；OCR 只认左上角标题区（避开 ESC 菜单的背包按钮）",
     ("genshin_launcher.py", "_agreement_visible"): "协议专属长标题，或「同意」+「拒绝」双短按钮",
-    ("baijing_daily.py", "_on_memory_detail_page"): "强化烙痕模板优先；OCR 限定按钮区域",
+    ("baijing_scene.py", "_on_memory_detail_page"): "强化烙痕模板优先；OCR 限定按钮区域",
     ("qoder_claim.py", "_claim_button_visible"): "模板匹配（非 OCR 文本）",
     # 以下不是页面判定：登记是为了让「新增函数必须声明」的守卫能区分动作函数
-    ("baijing_daily.py", "_do_friend_medal_on_page"): "动作函数（非页面判定）",
+    ("baijing_task_handlers.py", "_do_friend_medal_on_page"): "动作函数（非页面判定）",
     ("qoder_claim.py", "_ensure_visible"): "动作函数（聚焦/置前，非页面判定）",
     ("hsr_resin_craft.py", "detail_visible"): "双证据：商品名 + 「获得途径/消耗品」",
     ("hsr_resin_craft.py", "synth_visible"): "合成页专属词「本月还可合成 / 所需材料」",

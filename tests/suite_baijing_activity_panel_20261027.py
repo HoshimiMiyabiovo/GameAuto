@@ -22,7 +22,44 @@ from unittest.mock import patch
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-import game_auto.runtime.baijing_daily as bd  # noqa: E402
+# 2026-11-14 拆分：baijing_daily 变 5 模块后，桩要打到符号实际所属模块。
+# bd 别名改为透传 facade：读属性按 daily→common→scene→tasklist→handlers 顺序
+# 找第一个持有者；赋值（打桩/还原）写到**所有**拥有该属性的模块。
+import game_auto.runtime.baijing_daily as _baijing_daily_mod  # noqa: E402
+import game_auto.runtime.baijing_common as bcommon  # noqa: E402
+import game_auto.runtime.baijing_scene as bscene  # noqa: E402
+import game_auto.runtime.baijing_tasklist as btasklist  # noqa: E402
+import game_auto.runtime.baijing_task_handlers as bhandlers  # noqa: E402
+
+
+class _BaijingFacade:
+    def __init__(self, modules):
+        object.__setattr__(self, "_modules", tuple(modules))
+
+    def __getattr__(self, name):
+        modules = object.__getattribute__(self, "_modules")
+        for m in modules:
+            if hasattr(m, name):
+                return getattr(m, name)
+        raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        modules = object.__getattribute__(self, "_modules")
+        hit = False
+        for m in modules:
+            if hasattr(m, name):
+                setattr(m, name, value)
+                hit = True
+        if not hit:
+            setattr(modules[0], name, value)
+
+    def __delattr__(self, name):
+        # mock.patch 退出时先 delattr 再 setattr 还原；透传 facade 的属性都在
+        # 底层模块上，这里 no-op 即可（随后的 setattr 会写回原值）。
+        pass
+
+
+bd = _BaijingFacade([_baijing_daily_mod, bcommon, bscene, btasklist, bhandlers])
 
 FAILURES = []
 LOG = logging.getLogger("baijing-activity-panel-test")
