@@ -23,6 +23,16 @@ A~E 节点顺序解锁，点节点 → 详情面板「开始收录」→ 编队�
 [12] 战后页面实机收口（2026-11-14）：胜利结算页「任务完成/关卡目标」点空白；
      战败页「任务失败+推荐」点空白且回图后报 map_defeated（不写已清标记）；
      战斗目标横幅含「任务失败」但无「推荐」绝不误点（误报陷阱实锤两次）。
+[13] boss 面板判定（标题+面板独有词双证据；地图「已收录」条/战后总结页不匹配）
+     + 「本期最高分贝」数值读取（label/数字拆条按同列取数）。
+[14] boss 战斗闸门与链路：重新降噪/快速降噪在场 → skipped；本期分数 ≥ 顶档
+     → skipped；正常链 = 点标题开面板 → 开始降噪 → 编队页（「编队成员数量
+     不足」弹窗点确认自动编队）→ 作战开始 → battle 直进 → 作战完成点空白 →
+     总结页点返回 → 回面板 = fought。
+[15] 声量阶梯领取：OCR 档位金额 → 点右侧图标（实测偏移 +118,+20）按 y 序逐档。
+[16] 地图左下「猎区累计分贝奖励」：入口 OCR 定位 → 奖励页双证据（标题+一键
+     领取，防地图同名入口字样误判）→ 一键领取 → 关 X → 回地图。
+[17] 接线：分支结果挂 result["boss"]；boss 失败只追加 detail 不改节点链状态。
 
 跑法：.venv\\Scripts\\python.exe -m pytest tests\\suite_baijing_club_activity_20261111.py -q
 （经 tests/test_suites.py 子进程跑）
@@ -496,6 +506,281 @@ def test_battle_settle_echo_result_and_defeat():
           ok is False and "战败" in reason and "未收录" in reason, (ok, reason))
 
 
+# ── 11-14 固化：中央 boss + 奖励领取 ──────────────────────────────
+
+
+def boss_strip_frame():
+    """地图点 boss 标题后的「已收录」条帧：有 boss 名无面板独有词 → 非面板。"""
+    return [
+        {"text": "不协和音·鱼叉将军", "confidence": 1.0, "center": (837, 543)},
+        {"text": "已收录：", "confidence": 1.0, "center": (687, 610)},
+        {"text": "纯净回声·A", "confidence": 1.0, "center": (225, 674)},
+    ]
+
+
+def boss_panel_frame():
+    """boss 面板帧（11-14 实机转录）：开始降噪 + 本期最高分贝 0 + 五档阶梯金额。"""
+    return [
+        {"text": "不协和音·鱼叉将军", "confidence": 1.0, "center": (754, 695)},
+        {"text": "开始降噪", "confidence": 1.0, "center": (1392, 946)},
+        {"text": "个人声量奖励", "confidence": 1.0, "center": (180, 240)},
+        {"text": "本期最高分贝", "confidence": 1.0, "center": (1559, 580)},
+        {"text": "0", "confidence": 1.0, "center": (1561, 618)},
+        {"text": "9000", "confidence": 1.0, "center": (145, 353)},
+        {"text": "7000", "confidence": 1.0, "center": (145, 477)},
+        {"text": "5000", "confidence": 1.0, "center": (145, 601)},
+        {"text": "3000", "confidence": 1.0, "center": (145, 724)},
+        {"text": "1000", "confidence": 1.0, "center": (145, 848)},
+    ]
+
+
+def boss_panel_done_frame():
+    """boss 面板战后帧：重新降噪/快速降噪在场 = 本期已打过。"""
+    return [
+        {"text": "不协和音·鱼叉将军", "confidence": 1.0, "center": (754, 695)},
+        {"text": "重新降噪", "confidence": 1.0, "center": (1728, 944)},
+        {"text": "快速降噪", "confidence": 1.0, "center": (1390, 945)},
+        {"text": "本期最高分贝", "confidence": 1.0, "center": (1559, 580)},
+        {"text": "19532", "confidence": 1.0, "center": (1561, 618)},
+    ]
+
+
+def boss_panel_scored_frame():
+    """boss 面板分数达标帧：无重新降噪（闸门走分数分支）。"""
+    return [
+        {"text": "不协和音·鱼叉将军", "confidence": 1.0, "center": (754, 695)},
+        {"text": "开始降噪", "confidence": 1.0, "center": (1392, 946)},
+        {"text": "本期最高分贝", "confidence": 1.0, "center": (1559, 580)},
+        {"text": "19532", "confidence": 1.0, "center": (1561, 618)},
+    ]
+
+
+def boss_dialog_frame():
+    """boss 编队页空编队弹窗：「编队成员数量不足，是否自动编队？」（11-14 实锤）。"""
+    return [
+        {"text": "自动编队确认", "confidence": 1.0, "center": (582, 311)},
+        {"text": "编队成员数量不足，是否自动编队？", "confidence": 1.0, "center": (951, 477)},
+        {"text": "取消", "confidence": 1.0, "center": (762, 683)},
+        {"text": "确认", "confidence": 1.0, "center": (1196, 683)},
+    ]
+
+
+def boss_result_frame():
+    """boss 计分结算页：作战完成/有效分贝/总分贝（无「达成波次」）。"""
+    return [
+        {"text": "作战完成", "confidence": 1.0, "center": (1450, 260)},
+        {"text": "有效分贝：", "confidence": 1.0, "center": (1250, 505)},
+        {"text": "19532", "confidence": 1.0, "center": (1650, 505)},
+        {"text": "总分贝", "confidence": 1.0, "center": (1440, 755)},
+    ]
+
+
+def boss_summary_frame():
+    """boss 战后总结页：出战队伍/本轮分贝/重新降噪——无 boss 标题，面板判定不认。"""
+    return [
+        {"text": "出战队伍", "confidence": 1.0, "center": (175, 224)},
+        {"text": "本轮分贝", "confidence": 1.0, "center": (1090, 845)},
+        {"text": "重新降噪", "confidence": 1.0, "center": (1440, 948)},
+        {"text": "19532", "confidence": 1.0, "center": (1000, 880)},
+    ]
+
+
+def map_reward_frame():
+    """地图左下「猎区累计分贝奖励」页帧：标题 + 档位 + 一键领取。"""
+    return [
+        {"text": "猎区累计分贝奖励", "confidence": 1.0, "center": (971, 213)},
+        {"text": "一级响度", "confidence": 1.0, "center": (439, 338)},
+        {"text": "领取》", "confidence": 1.0, "center": (1514, 340)},
+        {"text": "一键领取", "confidence": 1.0, "center": (1538, 877)},
+    ]
+
+
+def test_boss_panel_and_score():
+    print("[13] boss 面板判定 + 本期最高分贝读取")
+    check("地图「已收录」条不是面板（无面板独有词）",
+          bd._echo_boss_panel_confirmed(boss_strip_frame()) is False)
+    check("boss 面板双证据命中", bd._echo_boss_panel_confirmed(boss_panel_frame()) is True)
+    check("战后总结页不是面板（无 boss 标题）",
+          bd._echo_boss_panel_confirmed(boss_summary_frame()) is False)
+    check("分数读取：label/数字拆条按同列取数",
+          bd._echo_read_top_score(boss_panel_frame()) == 0,
+          bd._echo_read_top_score(boss_panel_frame()))
+    check("分数读取：战后帧 19532",
+          bd._echo_read_top_score(boss_panel_done_frame()) == 19532)
+    check("分数读取：无 label → None",
+          bd._echo_read_top_score(map_frame()) is None)
+
+
+def test_boss_fight_gate_and_chain():
+    print("[14] boss 战斗闸门与链路")
+    # 闸门 1：重新降噪/快速降噪在场 → skipped（本期已打过）
+    with mock.patch.object(bd, "_echo_wait_map",
+                           return_value=(True, map_frame(), "2026-12-01")), \
+         mock.patch.object(bd, "_ocr_best_match",
+                           return_value={"center": (837, 543), "text": "不协和音·鱼叉将军",
+                                         "confidence": 1.0}), \
+         mock.patch.object(bd, "_pyautogui_click_guarded", side_effect=lambda *a: None), \
+         mock.patch.object(bd, "_scene_results", return_value=boss_panel_done_frame()):
+        status, detail = bd._echo_boss_fight(logging_logger(), 1)
+    check("已打过 → skipped 只领奖励", status == "skipped" and "已打过" in detail, (status, detail))
+
+    # 闸门 2：本期最高分贝 ≥ 顶档 → skipped
+    with mock.patch.object(bd, "_echo_wait_map",
+                           return_value=(True, map_frame(), "2026-12-01")), \
+         mock.patch.object(bd, "_ocr_best_match",
+                           return_value={"center": (837, 543), "text": "不协和音·鱼叉将军",
+                                         "confidence": 1.0}), \
+         mock.patch.object(bd, "_pyautogui_click_guarded", side_effect=lambda *a: None), \
+         mock.patch.object(bd, "_scene_results", return_value=boss_panel_scored_frame()):
+        status, detail = bd._echo_boss_fight(logging_logger(), 1)
+    check("分数达标 → skipped", status == "skipped" and "顶档" in detail, (status, detail))
+
+    # 正常链：点标题开面板 → 开始降噪 → 编队页 → 作战开始 → battle 直进 →
+    # 收敛回面板 = fought（结算/总结页交互由 _echo_boss_wait_settled 的桩代表）
+    guarded, ratios, fitting_clicks = [], [], []
+    title_hit = {"center": (837, 543), "text": "不协和音·鱼叉将军", "confidence": 1.0}
+    fight_hit = {"center": (1392, 946), "text": "开始降噪", "confidence": 1.0}
+    with mock.patch.object(bd, "time", FakeTime()), \
+         mock.patch.object(bd, "_echo_wait_map",
+                           return_value=(True, map_frame(), "2026-12-01")), \
+         mock.patch.object(bd, "_ocr_best_match", side_effect=[title_hit, fight_hit]), \
+         mock.patch.object(bd, "_pyautogui_click_guarded",
+                           side_effect=lambda *a: guarded.append(a)), \
+         mock.patch.object(bd, "_click_ratio",
+                           side_effect=lambda lg, hw, ratio, label="":
+                               ratios.append(label) or True), \
+         mock.patch.object(bd, "_scene_results", return_value=boss_panel_frame()), \
+         mock.patch.object(bfit, "_wait_page", return_value=(True, "team", [])), \
+         mock.patch.object(bfit, "_click",
+                           side_effect=lambda lg, hw, p, label:
+                               fitting_clicks.append(label) or True), \
+         mock.patch.object(bfit, "_page_now", side_effect=[("battle", [])]), \
+         mock.patch.object(bd, "_echo_boss_wait_settled",
+                           side_effect=lambda lg, hw, sc, dl: (True, "boss_panel", [])):
+        status, detail = bd._echo_boss_fight(logging_logger(), 1)
+    check("正常链 fought", status == "fought", (status, detail))
+    check("先点 boss 标签再点开始降噪",
+          guarded == [(837, 543), (1392, 946)], guarded)
+    check("作战开始已点", "作战开始" in fitting_clicks, fitting_clicks)
+
+    # 空编队弹窗：等编队页失败 → 「编队成员数量不足」在场 → 点确认 → 重等成功
+    guarded2 = []
+    with mock.patch.object(bd, "time", FakeTime()), \
+         mock.patch.object(bd, "_echo_wait_map",
+                           return_value=(True, map_frame(), "2026-12-01")), \
+         mock.patch.object(bd, "_ocr_best_match", side_effect=[title_hit, fight_hit]), \
+         mock.patch.object(bd, "_pyautogui_click_guarded",
+                           side_effect=lambda *a: guarded2.append(a)), \
+         mock.patch.object(bd, "_scene_results",
+                           side_effect=[boss_panel_frame(), boss_panel_frame(),
+                                        boss_dialog_frame(), boss_dialog_frame()]), \
+         mock.patch.object(bfit, "_wait_page",
+                           side_effect=[(False, "unknown", []), (True, "team", [])]), \
+         mock.patch.object(bd, "_pick_result",
+                           return_value={"center": (1196, 683), "text": "确认",
+                                         "confidence": 0.9}), \
+         mock.patch.object(bfit, "_click",
+                           side_effect=lambda lg, hw, p, label: True), \
+         mock.patch.object(bfit, "_page_now", side_effect=[("battle", [])]), \
+         mock.patch.object(bd, "_echo_boss_wait_settled",
+                           side_effect=lambda lg, hw, sc, dl: (True, "boss_panel", [])):
+        status, detail = bd._echo_boss_fight(logging_logger(), 1)
+    check("空编队弹窗点确认后照常开打", status == "fought", (status, detail))
+    check("确认弹窗点击坐标 = OCR center", (1196, 683) in guarded2, guarded2)
+
+
+def test_boss_ladder_claim():
+    print("[15] 声量阶梯领取：金额 OCR → 图标偏移点击")
+    clicks = []
+    with mock.patch.object(bd, "time", FakeTime()), \
+         mock.patch.object(bd, "_scene_results", return_value=boss_panel_frame()), \
+         mock.patch.object(bd, "_pyautogui_click_guarded",
+                           side_effect=lambda *a: clicks.append(a)):
+        clicked, detail = bd._echo_boss_claim_ladder(logging_logger(), 1)
+    check("五档全部点击", clicked == 5, (clicked, detail))
+    check("点击坐标 = 金额位置 + 实测偏移 (+118,+20)，按 y 序",
+          clicks == [(263, 373), (263, 497), (263, 621), (263, 744), (263, 868)], clicks)
+
+
+def test_map_rewards_claim():
+    print("[16] 地图左下「猎区累计分贝奖励」：入口 → 一键领取 → 关 X")
+    guarded, ratios = [], []
+    with mock.patch.object(bd, "time", FakeTime()), \
+         mock.patch.object(bd, "_ocr_best_match", side_effect=[
+             {"center": (209, 1015), "text": "猎区累计分贝奖励", "confidence": 1.0},
+             {"center": (1538, 877), "text": "一键领取", "confidence": 1.0},
+         ]), \
+         mock.patch.object(bd, "_scene_results", return_value=map_reward_frame()), \
+         mock.patch.object(bd, "_pyautogui_click_guarded",
+                           side_effect=lambda *a: guarded.append(a)), \
+         mock.patch.object(bd, "_click_ratio",
+                           side_effect=lambda lg, hw, ratio, label="":
+                               ratios.append(label) or True), \
+         mock.patch.object(bd, "_echo_wait_map",
+                           return_value=(True, map_frame(), "2026-12-01")):
+        ok, detail = bd._echo_map_rewards_claim(logging_logger(), 1)
+    check("奖励页领取完成", ok is True, (ok, detail))
+    check("先点入口再点一键领取", guarded == [(209, 1015), (1538, 877)], guarded)
+    check("收尾关 X 走比例点击", ratios == ["猎区分贝奖励页关闭"], ratios)
+
+    # 奖励页双证据不满足（点入口后仍在地图）→ 不盲点一键领取
+    guarded2, ratios2 = [], []
+    with mock.patch.object(bd, "time", FakeTime()), \
+         mock.patch.object(bd, "_ocr_best_match",
+                           return_value={"center": (209, 1015), "text": "猎区累计分贝奖励",
+                                         "confidence": 1.0}), \
+         mock.patch.object(bd, "_scene_results", return_value=map_frame()), \
+         mock.patch.object(bd, "_pyautogui_click_guarded",
+                           side_effect=lambda *a: guarded2.append(a)), \
+         mock.patch.object(bd, "_click_ratio",
+                           side_effect=lambda lg, hw, ratio, label="":
+                               ratios2.append(label) or True), \
+         mock.patch.object(bd, "_record_step_failure",
+                           side_effect=lambda *a, **k: None):
+        ok, detail = bd._echo_map_rewards_claim(logging_logger(), 1)
+    check("奖励页未确认 → 不点一键领取不关页",
+          ok is False and guarded2 == [(209, 1015)] and ratios2 == [], (ok, guarded2, ratios2))
+
+
+def test_boss_wiring():
+    print("[17] 接线：分支挂 result['boss']；boss 失败不改节点链状态")
+    boss_stub = {"status": "success", "detail": "boss：计分战完成；声量阶梯点击 5 档",
+                 "fought": True, "claims": "声量阶梯点击 5 档"}
+    echo_stub = {"status": "success", "detail": "节点链走完：本场打 ['A']",
+                 "fought": ["A"], "skipped": []}
+    with mock.patch.object(bd, "_ocr_best_match",
+                           return_value={"center": (1572, 400), "text": "回声猎区",
+                                         "confidence": 0.9}), \
+         mock.patch.object(bd, "_pyautogui_click_guarded", side_effect=lambda *a: None), \
+         mock.patch.object(bd, "_capture_daily_list_snapshot", side_effect=lambda *a, **k: None), \
+         mock.patch.object(bd, "_echo_zone_run_content",
+                           side_effect=lambda *a, **k: dict(echo_stub)), \
+         mock.patch.object(bd, "_echo_boss_and_map_rewards",
+                           side_effect=lambda *a, **k: dict(boss_stub)), \
+         mock.patch.object(bd, "_leave_club_page", return_value=True), \
+         mock.patch.object(bd.time, "sleep", lambda *_: None):
+        r = bd._run_club_activity_echo_zone(logging_logger(), hwnd=1)
+    check("boss 结果挂 result['boss']", r.get("boss") == boss_stub, r.get("boss"))
+    check("节点链状态不受 boss 影响", r["status"] == "success", r)
+    check("detail 拼接 boss 摘要", "boss：success" in r["detail"], r["detail"])
+
+    boss_fail = {"status": "failed", "detail": "boss：面板未打开", "fought": False, "claims": ""}
+    with mock.patch.object(bd, "_ocr_best_match",
+                           return_value={"center": (1572, 400), "text": "回声猎区",
+                                         "confidence": 0.9}), \
+         mock.patch.object(bd, "_pyautogui_click_guarded", side_effect=lambda *a: None), \
+         mock.patch.object(bd, "_capture_daily_list_snapshot", side_effect=lambda *a, **k: None), \
+         mock.patch.object(bd, "_echo_zone_run_content",
+                           side_effect=lambda *a, **k: dict(echo_stub)), \
+         mock.patch.object(bd, "_echo_boss_and_map_rewards",
+                           side_effect=lambda *a, **k: dict(boss_fail)), \
+         mock.patch.object(bd, "_leave_club_page", return_value=True), \
+         mock.patch.object(bd.time, "sleep", lambda *_: None):
+        r = bd._run_club_activity_echo_zone(logging_logger(), hwnd=1)
+    check("boss 失败 → 节点链状态仍 success", r["status"] == "success", r)
+    check("detail 含 boss 失败原因", "boss：failed" in r["detail"], r["detail"])
+
+
 def main():
     test_constants()
     test_entry_miss_skips_without_click()
@@ -509,6 +794,11 @@ def main():
     test_fight_node_team_chain()
     test_battle_settle_adaptive()
     test_battle_settle_echo_result_and_defeat()
+    test_boss_panel_and_score()
+    test_boss_fight_gate_and_chain()
+    test_boss_ladder_claim()
+    test_map_rewards_claim()
+    test_boss_wiring()
     print("-" * 60)
     if FAILURES:
         print(f"FAILED {len(FAILURES)}: {FAILURES}")

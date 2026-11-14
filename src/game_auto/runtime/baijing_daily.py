@@ -480,6 +480,38 @@ ECHO_WAIT_PANEL = 6.0        # 点节点标签 → 详情面板出现（锁定�
 ECHO_HEARTBEAT_SEC = 20.0    # 战斗挂机心跳
 ECHO_BATTLE_TIMEOUT = 480.0  # 单节点战斗上限（拟合 25 波 420s，boss 级留余量）
 
+# ── 中央 boss「不协和音·鱼叉将军」+ 奖励领取（2026-11-14 提权会话实测） ──
+# boss 是计分战不是胜负战：按钮叫「开始降噪」非「开始收录」，产出「有效分贝/
+# 总分贝」计入个人声量；面板左侧「个人声量奖励」阶梯 1000~9000 按档领取。
+ECHO_BOSS_TITLE = "不协和音"          # boss 名：地图标签与面板标题同名（禁单标题判页）
+# boss 面板判定 = 标题 + ≥1 面板独有词。地图点 boss 标题只展开「已收录」条
+# （无面板独有词，不会误判成面板）；战后总结页无 boss 标题，同样不匹配。
+ECHO_BOSS_PANEL_MARKS = ("开始降噪", "重新降噪", "快速降噪", "本期最高分贝", "个人声量奖励")
+ECHO_BOSS_FIGHT_TEXTS = ("开始降噪",)
+ECHO_BOSS_FIGHT_DONE_MARKS = ("重新降噪", "快速降噪")  # 在场 = 本期已打过，跳过战斗
+ECHO_BOSS_SCORE_TOP_TIER = 9000       # 声量阶梯顶档；本期最高分贝达标 → 战斗无收益跳过
+# boss 图标比例（点标题只弹「已收录」条时点图标开面板；实测中心 (842,430)）
+ECHO_BOSS_ICON_FALLBACK = (0.439, 0.398)
+ECHO_BOSS_FIGHT_FALLBACK = (0.725, 0.876)   # 「开始降噪」按钮（实测 (1392,946)）
+ECHO_BOSS_BACK_FALLBACK = (0.101, 0.047)    # boss 面板/总结页左上「返回」（实测 (193,51)）
+# 声量阶梯金额列：纯数字 9000~1000 限 x<0.20（避开右侧本期/今日分贝与排名数值）
+ECHO_BOSS_LADDER_REGION = (0.0, 0.28, 0.20, 0.88)
+ECHO_BOSS_LADDER_TIERS = ("9000", "7000", "5000", "3000", "1000")
+# 金额 → 奖励图标点击偏移（实测「7000」(145,477) → 图标 (263,497)）
+ECHO_BOSS_LADDER_CLICK_OFFSET = (118, 20)
+# OCR 认不出档位时的固定比例兜底（面板布局稳定，无地图平移问题）
+ECHO_BOSS_LADDER_FALLBACK = ((0.137, 0.345), (0.137, 0.460), (0.136, 0.572),
+                             (0.139, 0.688), (0.138, 0.802))
+ECHO_BOSS_SETTLE_TIMEOUT = 720.0      # boss 计分战实测 ~4min（开场 CG ~90s），留足余量
+# 「编队成员数量不足，是否自动编队？」弹窗（boss 编队页常为空，11-14 实锤）
+ECHO_AUTOFORM_TEXTS = ("编队成员数量不足",)
+ECHO_AUTOFORM_CONFIRM_FALLBACK = (0.623, 0.632)   # 弹窗「确认」（实测 (1196,683)）
+# 地图左下「猎区累计分贝奖励」页：入口 OCR 定位（禁盲点），「一键领取」幂等
+ECHO_MAP_REWARD_ENTRY = ("猎区累计分贝奖励",)
+ECHO_MAP_REWARD_CLAIM_ALL = ("一键领取",)
+ECHO_MAP_REWARD_CLAIM_ALL_FALLBACK = (0.801, 0.812)   # 实测 (1538,877)
+ECHO_MAP_REWARD_CLOSE_FALLBACK = (0.832, 0.171)       # 奖励页右上 X（实测 (1597,185)）
+
 # ── 友情勋章（2026-10-20 用户实测截图） ──
 # 主界面左上角功能图标行：设置(0.052) / 邮件(0.095) / 好友(0.138) / 俱乐部(0.183)。
 # 好友图标无文字，按实测比例点击；好友页顶部右侧「一键领取/赠送」用 OCR 定位。
@@ -3525,6 +3557,396 @@ def _echo_wait_battle_settled(
     return False, f"战斗未收敛（{last_page}）", last_items
 
 
+def _echo_boss_panel_confirmed(items: List[Dict]) -> bool:
+    """boss 面板 = 标题「不协和音」+ ≥1 面板独有词（双证据，铁律禁单标题）。
+
+    地图 boss 标签与面板标题同名；地图上点 boss 标题只展开「已收录」条（无
+    面板独有词，不会误判）；战后总结页（出战队伍/重新降噪）无 boss 标题，
+    同样不匹配——总结页要用「返回」退回面板。
+    """
+    texts = _echo_texts(items)
+    if not any(ECHO_BOSS_TITLE in t for t in texts):
+        return False
+    return any(m in t for t in texts for m in ECHO_BOSS_PANEL_MARKS)
+
+
+def _echo_read_top_score(items: List[Dict]) -> Optional[int]:
+    """读 boss 面板「本期最高分贝」数值；读不到返回 None（调用方按开打处理）。
+
+    实测 label 与数字常被 OCR 拆成两条（label (1559,580) / 数字 (1561,618)，
+    同列 dy≈38）：先试 label 自带数字，再找 label 正下方 20~90px 的纯数字条目。
+    """
+    for it in items or []:
+        text = str(it.get("text") or "")
+        if "本期最高分贝" not in text:
+            continue
+        m = re.search(r"本期最高分贝\D*(\d+)", text)
+        if m:
+            return int(m.group(1))
+        tx, ty = it.get("center") or (0, 0)
+        for it2 in items or []:
+            t2 = _normalize_text(str(it2.get("text") or ""))
+            if not t2.isdigit():
+                continue
+            cx, cy = it2.get("center") or (0, 0)
+            if abs(cx - tx) <= 80 and 20 <= cy - ty <= 90:
+                return int(t2)
+        return None
+    return None
+
+
+def _echo_boss_open_panel(logger: logging.Logger, hwnd, stop_check=None) -> bool:
+    """从猎区地图打开 boss 面板：点 OCR 标签 → 面板双证据；未开再点图标兜底。
+
+    11-14 实测：点标题只展开「已收录」条，完整面板要点 boss 图标——顺序固定
+    「标题 → 图标」，图标比例只在标题点完仍无面板时才用。
+    """
+    hit = _ocr_best_match(logger, (ECHO_BOSS_TITLE,), hwnd, min_conf=0.55)
+    if not hit:
+        logger.warning("[白荆回廊·俱乐部] 回声猎区 boss：地图未定位「不协和音」标签")
+        return False
+    _pyautogui_click_guarded(*hit["center"])
+    logger.info(f"[白荆回廊·俱乐部] 回声猎区 boss：点击 boss 标签 @ {hit['center']}")
+    time.sleep(2.0)
+    if _echo_boss_panel_confirmed(_scene_results(logger, hwnd)):
+        return True
+    _click_ratio(logger, hwnd, ECHO_BOSS_ICON_FALLBACK, "回声猎区 boss 图标")
+    time.sleep(2.0)
+    return _echo_boss_panel_confirmed(_scene_results(logger, hwnd))
+
+
+def _echo_boss_wait_settled(
+    logger: logging.Logger, hwnd, stop_check, deadline: float
+) -> Tuple[bool, str, List[Dict]]:
+    """boss 计分战收敛：作战完成点空白 → 总结页点「返回」→ 回 boss 面板算完成。
+
+    boss 战后落点（11-14 实机）：「作战完成/有效分贝/总分贝」计分结算页（无
+    「达成波次」，fitting result 分类不认）点空白 → 总结页「出战队伍/本轮分贝/
+    重新降噪」（无 boss 标题，面板判定不认，必须单独分支）点左上「返回」→
+    boss 面板。地图先到先收；战败页/奖励页/物品浮层按节点同款防御性覆盖
+    （计分战理论不败，实测未覆盖败态）。返回 (ok, "boss_panel"|"map", items)。
+    """
+    from .baijing_fitting import (  # 延迟导入：fitting 懒引用本模块，防环
+        _dismiss_item_popup,
+        _page_now,
+        P_RESULT_CONTINUE,
+        P_REWARD_CONTINUE,
+    )
+
+    last_heartbeat = 0.0
+    last_page, last_items = "unknown", []
+    while time.time() < deadline:
+        if _stopped(stop_check):
+            return False, "用户停止", last_items
+        page, items = _page_now(logger, hwnd)
+        last_page, last_items = page, items
+        texts = [_normalize_text(str(it.get("text") or "")) for it in items or []]
+        if _echo_map_confirmed(items):
+            return True, "map", items
+        if _echo_boss_panel_confirmed(items):
+            return True, "boss_panel", items
+        if _echo_result_frame(items) or _echo_defeat_frame(items) or any(
+            "作战完成" in t for t in texts if t
+        ):
+            _click_ratio(logger, hwnd, P_RESULT_CONTINUE, "回声猎区 boss 结算页点空白")
+            time.sleep(2.0)
+            continue
+        if any("出战队伍" in t for t in texts if t):
+            _click_ratio(logger, hwnd, ECHO_BOSS_BACK_FALLBACK, "回声猎区 boss 总结页点返回")
+            time.sleep(2.0)
+            continue
+        if page == "reward":
+            _click_ratio(logger, hwnd, P_REWARD_CONTINUE, "回声猎区 boss 奖励页继续")
+            time.sleep(2.0)
+            continue
+        if page == "item_popup":
+            _dismiss_item_popup(logger, hwnd)
+            continue
+        cont = next(
+            (it for it in items or [] if "点击屏幕继续" in str(it.get("text") or "")),
+            None,
+        )
+        if cont:
+            _pyautogui_click_guarded(*cont["center"])
+            time.sleep(1.5)
+            continue
+        now = time.time()
+        if now - last_heartbeat >= ECHO_HEARTBEAT_SEC:
+            logger.info(f"[白荆回廊·俱乐部] 回声猎区 boss 挂机中… 页面={page}")
+            last_heartbeat = now
+        time.sleep(1.0)
+    return False, f"boss 战未收敛（{last_page}）", last_items
+
+
+def _echo_boss_fight(logger: logging.Logger, hwnd, stop_check=None) -> Tuple[str, str]:
+    """中央 boss 计分战：地图 → boss 面板 → 战斗闸门 → 开始降噪 → 收敛。
+
+    战斗闸门（计分战无重复收益，别天天白打）：面板出现「重新降噪/快速降噪」
+    （本期已打过）或「本期最高分贝」≥ 顶档 9000 → 跳过战斗只领奖励；重置期
+    后分数归零闸门自动重开。编队页可能为空 → 「编队成员数量不足，是否自动
+    编队？」弹窗点「确认」（OCR 精确匹配 + 比例兜底）后重等编队页。
+    返回 (status, detail)，status ∈ fought / skipped / failed。
+    """
+    from .baijing_fitting import (  # 延迟导入：fitting 懒引用本模块，防环
+        _click,
+        _page_now,
+        _wait_deploy_settled,
+        _wait_page,
+        BATTLE_START_MAX_ATTEMPTS,
+        BATTLE_VERIFY_DELAY_SEC,
+        P_BATTLE_START,
+        P_TEAM_START,
+        WAIT_DEPLOY,
+        WAIT_TEAM,
+    )
+
+    ok, _items, _expiry = _echo_wait_map(logger, hwnd, stop_check)
+    if not ok:
+        return "failed", "boss：进页后未见猎区地图"
+    if not _echo_boss_open_panel(logger, hwnd, stop_check):
+        _record_step_failure(
+            logger, hwnd, "俱乐部回声猎区:boss面板", "点标题/图标都未开出 boss 面板")
+        return "failed", "boss：面板未打开"
+    items = _scene_results(logger, hwnd)
+    texts = [_normalize_text(str(it.get("text") or "")) for it in items]
+    if any(m in t for t in texts for m in ECHO_BOSS_FIGHT_DONE_MARKS):
+        logger.info("[白荆回廊·俱乐部] 回声猎区 boss：本期已打过（重新降噪/快速降噪在场）")
+        return "skipped", "boss：本期已打过，只领奖励"
+    top = _echo_read_top_score(items)
+    if top is not None and top >= ECHO_BOSS_SCORE_TOP_TIER:
+        logger.info(
+            f"[白荆回廊·俱乐部] 回声猎区 boss：本期最高分贝 {top} 已达顶档，跳过战斗")
+        return "skipped", f"boss：本期最高分贝 {top} 已达顶档，只领奖励"
+    fight = _ocr_best_match(
+        logger, ECHO_BOSS_FIGHT_TEXTS, hwnd,
+        frac_region=(0.55, 0.80, 1.0, 1.0), min_conf=0.55,
+    )
+    if fight:
+        _pyautogui_click_guarded(*fight["center"])
+    else:
+        _click_ratio(logger, hwnd, ECHO_BOSS_FIGHT_FALLBACK, "回声猎区 boss 开始降噪(比例兜底)")
+    logger.info("[白荆回廊·俱乐部] 回声猎区 boss：已点「开始降噪」，等编队页")
+    time.sleep(2.0)
+    ok, page, _items = _wait_page(logger, hwnd, "team", WAIT_TEAM, stop_check)
+    if not ok:
+        # boss 编队页常为空：压着「编队成员数量不足」弹窗时点「确认」自动编队
+        items = _scene_results(logger, hwnd)
+        texts = [_normalize_text(str(it.get("text") or "")) for it in items]
+        if not any(ECHO_AUTOFORM_TEXTS[0] in t for t in texts if t):
+            return "failed", f"boss：编队页未就绪（{page}）"
+        confirm = _pick_result(
+            logger, hwnd, items, ("确认",),
+            frac_region=(0.45, 0.55, 0.90, 0.80), min_conf=0.6, exact_only=True,
+        )
+        if confirm:
+            _pyautogui_click_guarded(*confirm["center"])
+        else:
+            _click_ratio(
+                logger, hwnd, ECHO_AUTOFORM_CONFIRM_FALLBACK, "回声猎区 boss 自动编队确认")
+        logger.info("[白荆回廊·俱乐部] 回声猎区 boss：编队成员不足，已确认自动编队")
+        time.sleep(2.5)
+        ok, page, _items = _wait_page(logger, hwnd, "team", WAIT_TEAM, stop_check)
+        if not ok:
+            return "failed", f"boss：自动编队后编队页仍未就绪（{page}）"
+    if not _click(logger, hwnd, P_TEAM_START, "作战开始"):
+        return "failed", "boss：「作战开始」点击失败"
+    deadline = time.time() + max(WAIT_DEPLOY, 10.0)
+    entered, page = False, "unknown"
+    while time.time() < deadline:
+        if _stopped(stop_check):
+            return "failed", "boss：用户停止"
+        page, _items = _page_now(logger, hwnd)
+        if page in ("deploy", "battle"):
+            entered = True
+            break
+        time.sleep(1.0)
+    if not entered:
+        return "failed", f"boss：作战开始后未进布阵/战斗（{page}）"
+    if page == "deploy":
+        # 布阵稳定等待 + 「开始战斗」补点，与节点链同款（#283：点完当帧离开
+        # 布阵页即算开打，战斗过程本身不检测）
+        if not _wait_deploy_settled(logger, hwnd, stop_check):
+            return "failed", "boss：用户停止"
+        ok_started, last_page = False, "deploy"
+        for attempt in range(1, BATTLE_START_MAX_ATTEMPTS + 1):
+            if _stopped(stop_check):
+                return "failed", "boss：用户停止"
+            if not _click(logger, hwnd, P_BATTLE_START, "开始战斗"):
+                return "failed", "boss：「开始战斗」点击失败"
+            time.sleep(BATTLE_VERIFY_DELAY_SEC)
+            last_page, _items = _page_now(logger, hwnd)
+            if last_page in ("battle", "result") or last_page not in ("team", "deploy"):
+                ok_started = True
+                break
+        if not ok_started:
+            return "failed", f"boss：布阵页未离开（{last_page}）"
+    ok, reason, _items = _echo_boss_wait_settled(
+        logger, hwnd, stop_check, time.time() + ECHO_BOSS_SETTLE_TIMEOUT
+    )
+    if not ok:
+        _record_step_failure(logger, hwnd, "俱乐部回声猎区:boss战斗", reason)
+        return "failed", f"boss：{reason}"
+    logger.info(f"[白荆回廊·俱乐部] 回声猎区 boss：计分战完成（{reason}）")
+    return "fought", "boss：计分战完成"
+
+
+def _echo_boss_claim_ladder(logger: logging.Logger, hwnd, stop_check=None) -> Tuple[int, str]:
+    """领 boss 面板左侧「个人声量奖励」阶梯：OCR 档位金额 → 点右侧奖励图标。
+
+    金额→图标实测偏移 (+118,+20)（「7000」(145,477) → 图标 (263,497)）；金额列
+    限 x<0.20 避开右侧分贝/排名数值。OCR 认不出档位（布局改版）→ 固定比例
+    兜底逐档点。已领档图标置灰，点击为无操作（幂等）。点击间隙处理「点击
+    屏幕继续/新物品已存入」弹窗。返回 (点击档位数, detail)。
+    """
+    from .baijing_fitting import P_RESULT_CONTINUE  # 延迟导入，防环
+
+    items = _scene_results(logger, hwnd)
+    if not _echo_boss_panel_confirmed(items):
+        return 0, "阶梯领取：不在 boss 面板"
+    region = _abs_region(hwnd, ECHO_BOSS_LADDER_REGION)
+    targets: List[Tuple[int, int]] = []
+    for it in items or []:
+        t = _normalize_text(str(it.get("text") or ""))
+        if t not in ECHO_BOSS_LADDER_TIERS:
+            continue
+        cx, cy = it.get("center") or (0, 0)
+        if region:
+            ax, ay, aw, ah = region
+            if not (ax <= cx <= ax + aw and ay <= cy <= ay + ah):
+                continue
+        targets.append((int(cx), int(cy)))
+    targets.sort(key=lambda p: p[1])
+    clicked = 0
+    if targets:
+        for tx, ty in targets:
+            if _stopped(stop_check):
+                break
+            _pyautogui_click_guarded(
+                tx + ECHO_BOSS_LADDER_CLICK_OFFSET[0], ty + ECHO_BOSS_LADDER_CLICK_OFFSET[1])
+            clicked += 1
+            logger.info(f"[白荆回廊·俱乐部] 回声猎区 boss：点击声量阶梯档位 @ ({tx},{ty})")
+            time.sleep(1.5)
+            for _ in range(3):  # 奖励弹窗收尾（新物品已存入 + 点击屏幕继续）
+                items = _scene_results(logger, hwnd)
+                cont = next(
+                    (it for it in items
+                     if "点击屏幕继续" in str(it.get("text") or "")), None)
+                if cont:
+                    _pyautogui_click_guarded(*cont["center"])
+                    time.sleep(1.2)
+                    continue
+                texts = [_normalize_text(str(it.get("text") or "")) for it in items]
+                if any("新物品已存入" in t for t in texts if t):
+                    _click_ratio(logger, hwnd, P_RESULT_CONTINUE, "奖励浮层点空白")
+                    time.sleep(1.2)
+                    continue
+                break
+    else:
+        logger.warning("[白荆回廊·俱乐部] 回声猎区 boss：阶梯金额未 OCR 命中，比例兜底逐档点")
+        for fy in ECHO_BOSS_LADDER_FALLBACK:
+            if _stopped(stop_check):
+                break
+            _click_ratio(logger, hwnd, fy, "回声猎区 boss 声量阶梯(比例兜底)")
+            clicked += 1
+            time.sleep(1.5)
+    return clicked, f"声量阶梯点击 {clicked} 档"
+
+
+def _echo_map_rewards_claim(logger: logging.Logger, hwnd, stop_check=None) -> Tuple[bool, str]:
+    """领地图左下「猎区累计分贝奖励」：入口 OCR 定位 → 一键领取 → 关 X 回地图。
+
+    入口禁比例盲点（活动改版入口可能消失）；奖励页双证据 = 标题「猎区累计
+    分贝奖励」+「一键领取」（地图本体也有同名入口字样，单标题必误判）；
+    「一键领取」幂等（已领齐时无操作）。返回 (是否完成, detail)。
+    """
+    hit = _ocr_best_match(logger, ECHO_MAP_REWARD_ENTRY, hwnd, min_conf=0.55)
+    if not hit:
+        return False, "地图未找到「猎区累计分贝奖励」入口（可能已改版）"
+    _pyautogui_click_guarded(*hit["center"])
+    logger.info(f"[白荆回廊·俱乐部] 回声猎区：点击分贝奖励入口 @ {hit['center']}")
+    time.sleep(2.0)
+    items = _scene_results(logger, hwnd)
+    texts = [_normalize_text(str(it.get("text") or "")) for it in items]
+    if not (
+        any("猎区累计分贝奖励" in t for t in texts if t)
+        and any("一键领取" in t for t in texts if t)
+    ):
+        _record_step_failure(
+            logger, hwnd, "俱乐部回声猎区:分贝奖励页", "点入口后未见奖励页（标题+一键领取双证据不满足）")
+        return False, "分贝奖励页未确认，不盲点"
+    claim = _ocr_best_match(
+        logger, ECHO_MAP_REWARD_CLAIM_ALL, hwnd,
+        frac_region=(0.5, 0.75, 1.0, 1.0), min_conf=0.55,
+    )
+    if claim:
+        _pyautogui_click_guarded(*claim["center"])
+    else:
+        _click_ratio(logger, hwnd, ECHO_MAP_REWARD_CLAIM_ALL_FALLBACK, "猎区分贝奖励一键领取(比例兜底)")
+    logger.info("[白荆回廊·俱乐部] 回声猎区：已点「一键领取」")
+    time.sleep(2.0)
+    for _ in range(3):  # 领取弹窗收尾
+        items = _scene_results(logger, hwnd)
+        cont = next(
+            (it for it in items if "点击屏幕继续" in str(it.get("text") or "")), None)
+        if not cont:
+            break
+        _pyautogui_click_guarded(*cont["center"])
+        time.sleep(1.2)
+    _click_ratio(logger, hwnd, ECHO_MAP_REWARD_CLOSE_FALLBACK, "猎区分贝奖励页关闭")
+    time.sleep(1.5)
+    ok, _items, _exp = _echo_wait_map(logger, hwnd, stop_check, timeout=10.0)
+    if not ok:
+        return False, "关闭奖励页后未回猎区地图"
+    return True, "猎区累计分贝奖励已一键领取"
+
+
+def _echo_boss_and_map_rewards(logger: logging.Logger, hwnd, stop_check=None) -> Dict:
+    """boss 计分战（闸门跳过）→ 个人声量阶梯领取 → 地图左下分贝奖励。
+
+    节点链之后执行（用户口径：abcde → boss → boss 页左侧奖励 → 左下角奖励）。
+    boss/领奖失败不连坐节点链结果，分支层挂 result["boss"] 单独呈现；闸门
+    决定打不打（本期分数达标/已打过 → 只领奖励），重置期后自动重开战斗。
+    """
+    out: Dict = {"status": "skipped", "detail": "", "fought": False, "claims": ""}
+    if _stopped(stop_check):
+        out["detail"] = "用户停止"
+        return out
+    parts: List[str] = []
+    fight_status, fight_detail = _echo_boss_fight(logger, hwnd, stop_check)
+    out["fought"] = fight_status == "fought"
+    parts.append(fight_detail)
+    if fight_status == "failed":
+        out["status"] = "failed"
+        # 失败恢复：尝试一次「返回」回地图（boss 面板/总结页的退出路径），
+        # 让后面的地图奖励领取还有机会执行
+        if not _echo_map_confirmed(_scene_results(logger, hwnd)):
+            _click_ratio(logger, hwnd, ECHO_BOSS_BACK_FALLBACK, "boss 失败后尝试返回")
+            time.sleep(2.0)
+    # 阶梯领取：须在 boss 面板；不在（如战斗直接回图）则重开一次面板
+    claimed, claim_detail = _echo_boss_claim_ladder(logger, hwnd, stop_check)
+    if claimed == 0 and "不在 boss 面板" in claim_detail and fight_status != "failed":
+        if _echo_boss_open_panel(logger, hwnd, stop_check):
+            claimed, claim_detail = _echo_boss_claim_ladder(logger, hwnd, stop_check)
+    parts.append(claim_detail)
+    out["claims"] = claim_detail
+    # 回地图领左下「猎区累计分贝奖励」
+    map_ok = False
+    if not _echo_map_confirmed(_scene_results(logger, hwnd)):
+        _click_ratio(logger, hwnd, ECHO_BOSS_BACK_FALLBACK, "boss 面板返回猎区地图")
+        time.sleep(2.0)
+    if _echo_map_confirmed(_scene_results(logger, hwnd)):
+        map_ok, map_detail = _echo_map_rewards_claim(logger, hwnd, stop_check)
+        parts.append(map_detail)
+    else:
+        parts.append("未能回到猎区地图，跳过左下奖励领取")
+    if fight_status != "failed" and not map_ok:
+        out["status"] = "failed"
+    if out["status"] != "failed":
+        out["status"] = "success" if (out["fought"] or claimed or map_ok) else "skipped"
+    out["detail"] = "；".join(p for p in parts if p)
+    return out
+
+
 def _echo_zone_fight_node(
     logger: logging.Logger, hwnd, letter: str, claim_xy, stop_check=None
 ) -> Tuple[bool, str]:
@@ -3714,12 +4136,15 @@ def _run_club_activity_echo_zone(logger: logging.Logger, hwnd, stop_check=None) 
 
     在俱乐部页上检测右侧「俱乐部活动」卡片的「回声猎区」标题：命中 → 点击进
     猎区地图 → 按 A→E 顺序清节点（`_echo_zone_run_content`，编队链路复用拟合
-    回归）→ 退出回主界面；未命中（活动结束/换期）→ 不点击直接跳过。
-    分支结果挂 result["echo"]，失败不连坐每日任务主状态（10-22 起口径）。
+    回归）→ 中央 boss 计分战 + 个人声量阶梯 + 地图左下分贝奖励
+    （`_echo_boss_and_map_rewards`，2026-11-14 固化，用户口径 abcde → boss →
+    boss 页左侧奖励 → 左下角奖励）→ 退出回主界面；未命中（活动结束/换期）→
+    不点击直接跳过。节点链结果挂 result["echo"]、boss/领奖挂 result["boss"]，
+    失败不连坐每日任务主状态（10-22 起口径）。
     """
     result: Dict = {
         "status": "skipped", "detail": "", "entered": False,
-        "returned_main": None, "echo": None,
+        "returned_main": None, "echo": None, "boss": None,
     }
     if _stopped(stop_check):
         result["detail"] = "用户停止"
@@ -3741,6 +4166,18 @@ def _run_club_activity_echo_zone(logger: logging.Logger, hwnd, stop_check=None) 
     result["echo"] = content
     result["status"] = content["status"]
     result["detail"] = f"回声猎区：{content['detail']}"
+    if content["status"] == "failed":
+        result["detail"] += "（分支失败不影响每日任务主状态）"
+        logger.warning(f"[白荆回廊·俱乐部] {result['detail']}")
+    else:
+        logger.info(f"[白荆回廊·俱乐部] {result['detail']}")
+    # boss + 奖励领取：闸门内只领奖励（本期分数达标/已打过），重置期自动重开
+    # 战斗；失败只追加 detail 不改节点链状态（不连坐口径）。
+    boss = _echo_boss_and_map_rewards(logger, hwnd, stop_check=stop_check)
+    result["boss"] = boss
+    result["detail"] += f"；boss：{boss['status']}（{boss['detail']}）"
+    if boss["status"] == "failed":
+        logger.warning(f"[白荆回廊·俱乐部] 回声猎区 boss：{boss['detail']}（不影响节点链结果）")
     if content["status"] == "failed":
         result["detail"] += "（分支失败不影响每日任务主状态）"
         logger.warning(f"[白荆回廊·俱乐部] {result['detail']}")
