@@ -17,6 +17,9 @@
     到期时 runner 被调并产出报告行（patch.dict 注册表，绝不真跑商店）；
 [6] flow_configs 双份配置静态断言（example 必查；本地文件存在才查镜像）；
 [7] 接线静态锁：调用点/收尾补漏/批次清场都接了版本周期流程。
+[8] _fetch_hsr_update_info 传给日历的 key 必须被映射认出（2026-11-14 实锤：
+    传公告解析 key "hsr" 恒得 None，上线起没读到过日历；真实日历有数据时
+    版本号必须取得到）。
 
 跑法：.venv\\Scripts\\python.exe -m pytest tests\\suite_hsr_version_shop_20261112.py -q
 （经 tests/test_suites.py 子进程跑）
@@ -254,6 +257,32 @@ def test_wiring_static():
     check("CD 常量=42", btr.VERSION_CYCLE_CD_DAYS == 42)
 
 
+def test_fetch_update_info_key():
+    print("[8] _fetch_hsr_update_info 的 key 走真实日历映射")
+    captured = {}
+
+    def fake_get_update_info(app_key, **kwargs):
+        captured["app_key"] = app_key
+        return {"version": "9.9", "open_at": "2026-01-01T00:00:00+08:00"}
+
+    with mock.patch("game_auto.services.game_update_calendar.get_update_info",
+                    side_effect=fake_get_update_info):
+        info = btr._fetch_hsr_update_info()
+    check("日历返回值透传", info == {"version": "9.9", "open_at": "2026-01-01T00:00:00+08:00"})
+    from game_auto.services.game_update_calendar import APP_KEY_TO_GAME
+
+    key = captured.get("app_key")
+    check(f"传入 key {key!r} 在日历映射表里（传 'hsr' 恒 None 教训）",
+          key in APP_KEY_TO_GAME, sorted(APP_KEY_TO_GAME))
+    # 真实日历探针：缓存/网络有数据时必须取到版本号；离线/无公告时放行
+    real = btr._fetch_hsr_update_info()
+    if real:
+        check(f"真实日历取到版本号 {real.get('version')!r}",
+              bool(str((real or {}).get("version") or "").strip()))
+    else:
+        check("真实日历当前不可用（离线/无公告），版本断言放行", True)
+
+
 def main():
     test_version_cycle_due()
     test_parse_meta()
@@ -262,6 +291,7 @@ def main():
     test_dispatch_layer()
     test_flow_configs()
     test_wiring_static()
+    test_fetch_update_info_key()
     print("-" * 60)
     if FAILURES:
         print(f"FAILED {len(FAILURES)}: {FAILURES}")

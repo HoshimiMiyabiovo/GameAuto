@@ -797,6 +797,143 @@
     "close_process_on_finish": false,
     "close_process_on_fail": false
   },
+  "TELEAGENT": {
+    "enabled": true,
+    "_comment": "2026-11-14 用户需求：TeleAgent（电信星辰超级智能体，Electron）每日领 100 积分。入口用户拍板「点击左下角头像/用户名稳定进入签到」：用户面板内积分福利社块，未领态「立即领取 >」、已领态「今日已领 ✓ + 已领 N 天/累计 100积分」（用户两张截图实锤）。成败核验 OCR「今日已领」fail-closed（无本地领取日志可核验，MINIMAX 弃假阳性模板同款思路）。第 4 步 optional_if_missing：已领态「立即领取」不存在 → 幂等跳过，重跑无害。锚「积分余额」+区域限定：主界面左下还有一张悬浮福利社卡片同样有「立即领取」（y≈0.9），锚+区域双闸防误点；先等「积分余额」（面板专属词）出现再点，保证点的是面板。未实机验证：OCR 认字/点击后面板行为/悬浮卡片遮挡关系按首跑取证校准（ocr_debug_snapshot 全开）。",
+    "window_title_keywords": [
+      "TeleAgent"
+    ],
+    "window_process_names": [
+      "TeleAgent.exe"
+    ],
+    "startup_wait_sec": 20,
+    "ocr_match_mode": "smart",
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8
+    ],
+    "match_confidences": [
+      0.88,
+      0.84
+    ],
+    "steps": [
+      {
+        "name": "等待主界面",
+        "action": "wait_template",
+        "template": "",
+        "target_text": [
+          "新建任务",
+          "随时待命"
+        ],
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 60,
+        "post_delay_sec": 1.0,
+        "on_fail": "fail",
+        "search_interval_sec": 1.5,
+        "_comment": "Electron 冷启动慢，20s startup_wait + 60s 等待双保险；主界面特征取侧栏「新建任务」与主标题「你说我做，随时待命」双候选。"
+      },
+      {
+        "name": "点击左下角用户名",
+        "action": "click_template",
+        "template": "",
+        "target_text": [
+          "user_"
+        ],
+        "ocr_match_mode": "smart",
+        "ocr_region_frac": [
+          0.0,
+          0.85,
+          0.3,
+          1.0
+        ],
+        "ocr_debug_snapshot": true,
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 10,
+        "clicks": 1,
+        "post_delay_sec": 1.5,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.0,
+        "_comment": "用户名形如 user_20457617，smart 排序含前缀语义可容忍改名；区域锁死左下角，防匹配到别处 user_ 文本。"
+      },
+      {
+        "name": "等待用户面板",
+        "action": "wait_template",
+        "template": "",
+        "target_text": [
+          "积分余额"
+        ],
+        "ocr_debug_snapshot": true,
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 10,
+        "post_delay_sec": 0.5,
+        "on_fail": "fail",
+        "search_interval_sec": 1.0,
+        "_comment": "「积分余额」是用户面板专属词（主界面悬浮福利社卡片没有），面板开没开以此为准。"
+      },
+      {
+        "name": "点击立即领取",
+        "action": "click_template",
+        "template": "",
+        "target_text": [
+          "立即领取"
+        ],
+        "ocr_anchor": [
+          "积分余额"
+        ],
+        "ocr_near": {
+          "direction": "below",
+          "max_distance": 500
+        },
+        "ocr_region_frac": [
+          0.0,
+          0.15,
+          0.45,
+          0.85
+        ],
+        "ocr_debug_snapshot": true,
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 8,
+        "clicks": 1,
+        "post_delay_sec": 2.0,
+        "optional_if_missing": true,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "search_interval_sec": 1.0,
+        "_comment": "已领态「立即领取」不存在 → optional 跳过（幂等，重跑无害）。锚「积分余额」below 500px + 区域 y<0.85 双闸：主界面悬浮卡片也有「立即领取」且在 y≈0.9，锚距离与区域双双排除，防误点悬浮卡片。"
+      },
+      {
+        "name": "核验今日已领",
+        "action": "wait_template",
+        "template": "",
+        "target_text": [
+          "今日已领",
+          "已领"
+        ],
+        "ocr_region_frac": [
+          0.0,
+          0.15,
+          0.45,
+          0.85
+        ],
+        "ocr_debug_snapshot": true,
+        "enable_ocr_fallback": true,
+        "confirm_type": "none",
+        "timeout_sec": 15,
+        "post_delay_sec": 0.5,
+        "on_fail": "fail",
+        "search_interval_sec": 1.5,
+        "_comment": "成败真相（fail-closed）：面板变「今日已领 ✓ / 已领 N 天 / 累计 100积分」任一即过；TeleAgent 无本地领取日志，OCR 是唯一判据（MINIMAX 教训：模板假阳性 0.95，弃模板）。"
+      }
+    ],
+    "close_process_on_finish": true,
+    "close_process_on_fail": true
+  },
   "HSR_MONTHLY": {
     "enabled": false,
     "_comment": "2026-11-04 用户拍板：崩铁每月事项（自塑尘脂合成、余烬兑换的星轨专票/星轨通票/命运的足迹）整体交给三月七小助手；如本机未装三月七可自行改回 true，但需自行维护月商店翻页与自塑尘脂坐标。",

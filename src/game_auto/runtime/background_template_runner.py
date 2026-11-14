@@ -23,7 +23,7 @@ def run_cj_background(
 
 
 # 薅羊毛集合：依次执行的子流程 key（flow_configs.json），新增羊毛任务在此追加
-WOOL_FLOW_KEYS: List[str] = ["MINIMAX", "WORKBUDDY", "TRAE", "QODER"]
+WOOL_FLOW_KEYS: List[str] = ["MINIMAX", "WORKBUDDY", "TRAE", "QODER", "TELEAGENT"]
 
 
 def _close_wool_flow(logger: logging.Logger, flow_key: str, cfg, ok: bool) -> bool:
@@ -292,11 +292,16 @@ def version_cycle_due(
 
 
 def _fetch_hsr_update_info() -> Optional[dict]:
-    """更新日历取崩铁当前版本公告（模块缓存 6h）；不可用返回 None 走 CD 兜底。"""
+    """更新日历取崩铁当前版本公告（模块缓存 6h）；不可用返回 None 走 CD 兜底。
+
+    键必须是 app_key「HonkaiStarRail」——日历的 APP_KEY_TO_GAME 由注册表
+    app_key/game_key 生成，不含公告解析 key「hsr」（2026-11-14 实锤：传 "hsr"
+    恒得 None，版本商店上线起就没读到过日历，首跑标记版本号落成了 "?"）。
+    """
     try:
         from ..services.game_update_calendar import get_update_info
 
-        return get_update_info("hsr")
+        return get_update_info("HonkaiStarRail")
     except Exception as exc:  # noqa: BLE001 - 日历不可用不影响门控兜底
         LOGGER.warning("[版本商店] 读取更新日历失败: %s", exc)
         return None

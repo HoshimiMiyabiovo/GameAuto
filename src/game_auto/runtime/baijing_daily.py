@@ -3426,14 +3426,46 @@ def _echo_panel_claim(
     return None
 
 
+def _echo_result_frame(items: List[Dict]) -> bool:
+    """回声猎区胜利结算页（2026-11-14 实机）：「任务完成」+「关卡目标」双词同帧。
+
+    文案与拟合回归的「作战完成/达成波次」完全不同——fitting 的 result 分类
+    不认这页，首次实机打完 A 后分类恒 unknown，收敛循环干等 480s 报败。
+    """
+    texts = [_normalize_text(str(it.get("text") or "")) for it in items or []]
+    return (
+        any("任务完成" in t for t in texts if t)
+        and any("关卡目标" in t for t in texts if t)
+    )
+
+
+def _echo_defeat_frame(items: List[Dict]) -> bool:
+    """回声猎区战败页（2026-11-14 实机）：「任务失败」与「推荐」双词同帧。
+
+    战斗目标横幅也含「任务失败」字样，单词命中是误报陷阱（会话两次实锤：
+    误点把开场过场点没了、假回图还假写已清标记）；真战败页独有「推荐您：
+    提升刻印/培养同调者」卡片，必须与「推荐」同帧才算战败。
+    """
+    texts = [_normalize_text(str(it.get("text") or "")) for it in items or []]
+    return (
+        any("任务失败" in t for t in texts if t)
+        and any("推荐" in t for t in texts if t)
+    )
+
+
 def _echo_wait_battle_settled(
     logger: logging.Logger, hwnd, stop_check, deadline: float
 ) -> Tuple[bool, str, List[Dict]]:
-    """战斗开始后自适应等收敛：结算/奖励/浮层逐个点掉，回猎区地图算完成。
+    """战斗开始后自适应等收敛：结算/战败/奖励/浮层逐个点掉，回猎区地图算完成。
 
-    战后落点未实机探明（用户不确定），按证据自适应：结算页按拟合回归同款点
-    空白、奖励页点「点击屏幕继续」、物品浮层按 ESC（复用拟合的关浮层），
-    地图双证据一出现即成功；全程心跳日志，超时交调用方落证据。
+    2026-11-14 实机收口（A~D + boss 全打过），战后落点全套实锤：
+    - 胜利结算页「任务完成/关卡目标」→ 点空白推进（`_echo_result_frame`）；
+    - 战败页「任务失败+推荐您」不自动消失（实机挂 8 分钟）→ 点空白推进，
+      点完回图但节点没打下来——返回 map_defeated 让调用方不写已清标记；
+    - 战斗目标横幅含「任务失败」，单词误报会把开场过场点没，战败判定必须
+      与「推荐」同帧（`_echo_defeat_frame`）；
+    - 奖励页点「点击屏幕继续」、物品浮层按 ESC、地图双证据先到先收（原口径）。
+    全程心跳日志，超时交调用方落证据。
     """
     from .baijing_fitting import (  # 延迟导入：fitting 懒引用本模块，防环
         _dismiss_item_popup,
@@ -3444,13 +3476,25 @@ def _echo_wait_battle_settled(
 
     last_heartbeat = 0.0
     last_page, last_items = "unknown", []
+    defeated = False  # 本场点过战败页 → 回图也不算收录（防假清标记）
     while time.time() < deadline:
         if _stopped(stop_check):
             return False, "用户停止", last_items
         page, items = _page_now(logger, hwnd)
         last_page, last_items = page, items
         if _echo_map_confirmed(items):
-            return True, "map", items
+            return True, ("map_defeated" if defeated else "map"), items
+        if _echo_result_frame(items):
+            _click_ratio(logger, hwnd, P_RESULT_CONTINUE, "回声猎区结算页点空白")
+            time.sleep(2.0)
+            continue
+        if _echo_defeat_frame(items):
+            # 点位取屏幕中心，避开左侧「前往提升刻印/培养同调者」按钮（点了
+            # 会跳养成页）；战败流程：点空白 → 回猎区地图（节点未清）。
+            _click_ratio(logger, hwnd, P_RESULT_CONTINUE, "回声猎区战败页点空白")
+            defeated = True
+            time.sleep(2.5)
+            continue
         if page == "result":
             _click_ratio(logger, hwnd, P_RESULT_CONTINUE, "回声猎区结算页点空白")
             time.sleep(2.0)
@@ -3564,6 +3608,13 @@ def _echo_zone_fight_node(
     )
     if not ok:
         return False, f"节点 {letter} {reason}"
+    if reason == "map_defeated":
+        # 战败回图（11-14 实机：失败页点空白 → 回猎区地图，节点未清）：绝不写
+        # 已清标记——写了下次自动化直接跳过=永久漏奖励；顺序链在战败节点止步，
+        # 报败交人工调整编队/刻印（E 节点实锤：编队缺【轻卫/铁御】时只部署
+        # 1 人，战斗内 toast 提示出战后备同调者，几十秒即败）。
+        logger.warning(f"[白荆回廊·俱乐部] 回声猎区节点 {letter} 战败，未收录")
+        return False, f"节点 {letter} 战败（任务失败），未收录——需调整编队/刻印后重试"
     logger.info(f"[白荆回廊·俱乐部] 回声猎区节点 {letter} 战斗完成，已回猎区地图")
     return True, ""
 

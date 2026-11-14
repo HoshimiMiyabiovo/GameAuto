@@ -1,0 +1,117 @@
+# CI 套件清单（tests/test_suites.py 漂移闸门 consumer）。
+# 行格式：`suite_x.py` = 进 CI；`!suite_y.py  # 原因` = 不进 CI（本机全量照跑）。
+# 分类依据（2026-11-14）：仿真 CI 探针——临时隐藏 flow_configs.json / app_config.json /
+# data/{logs,artifacts,cache,okww,ai_history,backups,reference}/workflow.sqlite3 后全量
+# 实测 107 套件，98 通过；外加个人路径（C:/Users/admin/...）扫描。CI 机器只有仓库内
+# 资源：src / assets/templates(92) / data/models(6，OCR+flash 模型) / tests。
+# 注意：本清单只约束 GAMEAUTO_TEST_TIER=ci；本机 `pytest tests` 仍然全量照跑。
+
+suite_ai_history_rag_hybrid_20261110.py
+suite_ai_history_rag_index_20261110.py
+suite_audit_p2p3_20261109.py
+suite_auto_run_pause_20261104.py
+suite_baijing_activity_panel_20261027.py
+suite_baijing_battle_power_20261103.py
+suite_baijing_cat_exchange_qty_20261101.py
+suite_baijing_club_activity_20261111.py
+suite_baijing_daily_fixes_20261020.py
+suite_baijing_fitting_20261107.py
+suite_baijing_gift_guard_20261025.py
+suite_baijing_launcher_scope_20261102.py
+suite_baijing_memory_breakthrough_20261108.py
+suite_baijing_memory_level_tab_20261111.py
+suite_baijing_scene_registry_20261026.py
+suite_baijing_shop_max_qty_20261020.py
+suite_baijing_tea_false_positive_20261025.py
+suite_baijing_tea_focus_20261107.py
+suite_baijing_tea_invite_20261103.py
+suite_baijing_tea_marker_20261025.py
+suite_baijing_tea_select_drink_20261107.py
+suite_baijing_update_prompt_20261105.py
+suite_bridge_batch_email_20261021.py
+suite_cj_script_update_20261107.py
+suite_config_lock_robustness_20261109.py
+suite_confirm_button_guard_20261107.py
+suite_confirm_disappear_poll_20261021.py
+suite_daily_api_query_gate_20261031.py
+suite_daily_progress_script_failed_20261102.py
+suite_dependency_manifest_20261029.py
+suite_disk_manager_20261108.py
+suite_failsafe_cursor_park_20261110.py
+suite_failure_evidence_cookie_20261104.py
+suite_failures_20261102.py
+suite_flow_config_split_20261028.py
+suite_flow_diagnostics_annotate_20261103.py
+suite_gacha_luck_20261027.py
+suite_game_shot_20261110.py
+suite_genshin_verdict_20261024.py
+suite_hsr_monthly_handoff_20261104.py
+suite_hsr_resin_craft_20261101.py
+suite_hsr_version_shop_20261112.py
+suite_login_agreement_scroll_20261104.py
+suite_minimax_ocr_exclude_20261031.py
+suite_minimax_sign_20261026.py
+suite_monthly_auto_schedule_20261101.py
+suite_monthly_scroll_find_20261102.py
+suite_monthly_shop_buy_20261103.py
+suite_monthly_shop_observability_20261104.py
+suite_nikki_calendar_20261101.py
+suite_nikki_calendar_retry_20261102.py
+suite_nikki_instance_exit_20261109.py
+suite_nikki_launcher_20261022.py
+suite_nikki_page_matrix_20261104.py
+suite_nikki_shop_scancode_20261105.py
+suite_nikki_tab_fingerprint_20261106.py
+suite_nikki_verify_pending_20261113.py
+suite_nte_dayvalue_20261024.py
+suite_nte_ensure_main_20261029.py
+suite_nte_enter_game_20261104.py
+suite_nte_launch_heartbeat_20261105.py
+suite_nte_monthly_20261101.py
+suite_nte_reward_popup_20261105.py
+suite_ocr_structured_match_20261031.py
+suite_okww_module_20261104.py
+suite_onnxocr_precision_20261107.py
+suite_page_judgement_policy.py
+suite_prelaunch_cleanup_20261031.py
+suite_readme_bootstrap_20261107.py
+suite_sched_retry_20261021.py
+suite_script_checklist_tab_20261108.py
+suite_script_monitor_20261104.py
+suite_script_version_check_20261103.py
+suite_shop_no_blind_buy_20261108.py
+suite_stamina_configs_phase2_20261029.py
+suite_stamina_view_perf_20261031.py
+suite_starrail_activity_20261024.py
+suite_start_from_main_20261104.py
+suite_step_ocr_region_20261107.py
+suite_teleagent_sign_20261114.py
+suite_tool_manager_20261103.py
+suite_ui_coords_scaling_20261106.py
+suite_uipi_guard_20261020.py
+suite_update_calendar_20261021.py
+suite_update_preflight_20261021.py
+suite_update_retry_crossday_20261111.py
+suite_view_release_20261101.py
+suite_weekly_flow_disabled_20261111.py
+suite_wool_workbuddy_20261029.py
+suite_wuwa_window_wait_20261102.py
+suite_zzz_activity_verdict_20261024.py
+suite_zzz_chain_cleanup_20261108.py
+suite_zzz_cityfund_exit_20261109.py
+suite_zzz_click_hold_20261104.py
+suite_zzz_direct_launcher_20261107.py
+suite_zzz_enter_loading_20261109.py
+suite_zzz_enter_popup_dismiss_20261107.py
+suite_zzz_main_screen_match_20261021.py
+suite_zzz_menu_key_20261107.py
+suite_zzz_monthly_shop_20261021.py
+suite_zzz_monthly_split_20261106.py
+suite_zzz_notorious_hunt_20261101.py
+suite_zzz_reward_popup_confirm_20261110.py
+suite_zzz_scene_gate_20261108.py
+suite_zzz_shop_entry_20261105.py
+
+!suite_monthly_exchange_20261025.py  # 硬依赖本机 app_config.json 的 exe_from_game 解析（2026-11-14 仿真 CI 探针：隐藏本地配置即失败）
+!suite_zzz_monthly_main_screen_20261021.py  # 硬依赖本机 app_config.json 的 exe_from_app 解析（同上探针实锤）
+!suite_zzz_shop_templates_20261021.py  # 模板质量对比读用户个人目录 C:/Users/admin/Pictures/Screenshots 的真实截图（真机专用）

@@ -20,6 +20,9 @@ A~E 节点顺序解锁，点节点 → 详情面板「开始收录」→ 编队�
      OCR 盲，#283 实锤）→ 卡布阵页补点 3 次报败 / 编队页进不去报败 / 无布阵页
      battle 直进；
 [11] 战后自适应：结算页点空白 / 地图特征先到先收，未收敛如实报败。
+[12] 战后页面实机收口（2026-11-14）：胜利结算页「任务完成/关卡目标」点空白；
+     战败页「任务失败+推荐」点空白且回图后报 map_defeated（不写已清标记）；
+     战斗目标横幅含「任务失败」但无「推荐」绝不误点（误报陷阱实锤两次）。
 
 跑法：.venv\\Scripts\\python.exe -m pytest tests\\suite_baijing_club_activity_20261111.py -q
 （经 tests/test_suites.py 子进程跑）
@@ -392,6 +395,107 @@ def test_battle_settle_adaptive():
     check("超时报败带末次页面", ok is False and "battle" in state, (ok, state))
 
 
+def echo_result_frame():
+    """胜利结算页帧（2026-11-14 实机转录）：任务完成 + 关卡目标 + 达成目标列表。"""
+    return [
+        {"text": "任务完成", "confidence": 0.9, "center": (406, 256)},
+        {"text": "关卡目标", "confidence": 0.9, "center": (244, 359)},
+        {"text": "在4分内通过关卡", "confidence": 0.9, "center": (288, 409)},
+        {"text": "击败所有敌人", "confidence": 0.9, "center": (268, 488)},
+    ]
+
+
+def defeat_frame():
+    """战败页帧（2026-11-14 实机转录）：任务失败 + 推荐您卡片（双词同帧才算）。"""
+    return [
+        {"text": "任务失败", "confidence": 0.9, "center": (400, 260)},
+        {"text": "推荐您:", "confidence": 0.9, "center": (230, 515)},
+        {"text": "提升刻印", "confidence": 0.9, "center": (255, 720)},
+        {"text": "培养同调者", "confidence": 0.9, "center": (460, 720)},
+    ]
+
+
+def banner_frame():
+    """战斗内目标横幅帧：含「任务失败」但无「推荐」——误报陷阱（会话实锤两次）。"""
+    return [
+        {"text": "击败所有敌人", "confidence": 0.9, "center": (420, 45)},
+        {"text": "任务失败", "confidence": 0.9, "center": (700, 45)},
+        {"text": "1/1", "confidence": 0.9, "center": (1230, 55)},
+    ]
+
+
+def test_battle_settle_echo_result_and_defeat():
+    print("[12] 战后页面实机收口：胜利结算页 / 战败页 / 目标横幅误报防护")
+    # 胜利结算页 → 点空白 → 回图 = map
+    blanks = []
+    frames = iter([
+        ("battle", []),
+        (None, echo_result_frame()),
+        (None, map_frame()),
+    ])
+
+    def fake_page_now(lg, hw):
+        page, items = next(frames)
+        return (page or "unknown"), items
+
+    with mock.patch.object(bd, "time", FakeTime()), \
+         mock.patch.object(bd, "_click_ratio",
+                           side_effect=lambda lg, hw, ratio, label="":
+                               blanks.append(label) or True), \
+         mock.patch.object(bfit, "_page_now", side_effect=fake_page_now):
+        ok, state, _items = bd._echo_wait_battle_settled(
+            logging_logger(), 1, None, deadline=FakeTime().time() + 300
+        )
+    check("胜利结算页点空白后回图 = map", ok is True and state == "map", (ok, state))
+    check("结算页点击动作带页面语义", blanks == ["回声猎区结算页点空白"], blanks)
+
+    # 战败页 → 点空白 → 回图 = map_defeated（调用方据此不写已清标记）
+    blanks = []
+    frames = iter([
+        ("battle", []),
+        (None, defeat_frame()),
+        (None, map_frame()),
+    ])
+    with mock.patch.object(bd, "time", FakeTime()), \
+         mock.patch.object(bd, "_click_ratio",
+                           side_effect=lambda lg, hw, ratio, label="":
+                               blanks.append(label) or True), \
+         mock.patch.object(bfit, "_page_now", side_effect=fake_page_now):
+        ok, state, _items = bd._echo_wait_battle_settled(
+            logging_logger(), 1, None, deadline=FakeTime().time() + 300
+        )
+    check("战败页点空白后回图 = map_defeated",
+          ok is True and state == "map_defeated", (ok, state))
+    check("战败页点击动作带页面语义", blanks == ["回声猎区战败页点空白"], blanks)
+
+    # 战斗目标横幅含「任务失败」但无「推荐」→ 绝不点击（误报会把过场点没）
+    blanks = []
+    with mock.patch.object(bd, "time", FakeTime()), \
+         mock.patch.object(bd, "_click_ratio",
+                           side_effect=lambda lg, hw, ratio, label="":
+                               blanks.append(label) or True), \
+         mock.patch.object(bfit, "_page_now",
+                           side_effect=lambda lg, hw: ("battle", banner_frame())):
+        ok, state, _items = bd._echo_wait_battle_settled(
+            logging_logger(), 1, None, deadline=FakeTime().time() + 1
+        )
+    check("横幅「任务失败」不触发战败点击", blanks == [], blanks)
+    check("横幅帧不收敛 → 如实报败", ok is False and "battle" in state, (ok, state))
+
+    # fight_node 收到 map_defeated → 报败（已清标记由 _echo_zone_run_content
+    # 只在 ok=True 时写，报败即不写；这里锁 fight_node 的语义）
+    with mock.patch.object(bd, "_pyautogui_click_guarded", side_effect=lambda *a: None), \
+         mock.patch.object(bd, "time", FakeTime()), \
+         mock.patch.object(bd, "_echo_wait_battle_settled",
+                           side_effect=lambda lg, hw, sc, dl: (True, "map_defeated", [])), \
+         mock.patch.object(bfit, "_wait_page", return_value=(True, "team", [])), \
+         mock.patch.object(bfit, "_click", side_effect=lambda lg, hw, p, label: True), \
+         mock.patch.object(bfit, "_page_now", side_effect=[("battle", [])]):
+        ok, reason = bd._echo_zone_fight_node(logging_logger(), 1, "E", (1500, 900))
+    check("战败回图 → fight_node 如实报败不报成功",
+          ok is False and "战败" in reason and "未收录" in reason, (ok, reason))
+
+
 def main():
     test_constants()
     test_entry_miss_skips_without_click()
@@ -404,6 +508,7 @@ def main():
     test_node_letter_and_fallback()
     test_fight_node_team_chain()
     test_battle_settle_adaptive()
+    test_battle_settle_echo_result_and_defeat()
     print("-" * 60)
     if FAILURES:
         print(f"FAILED {len(FAILURES)}: {FAILURES}")

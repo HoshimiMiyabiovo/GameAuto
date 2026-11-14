@@ -212,6 +212,7 @@ class AutomationView:
         "WORKBUDDY": "WorkBuddy 每日领取",
         "TRAE": "Trae CN 每日签到",
         "QODER": "Qoder 每日积分领取",
+        "TELEAGENT": "TeleAgent 每日签到",
     }
 
     @Slot(result=str)

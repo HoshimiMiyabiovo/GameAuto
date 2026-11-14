@@ -84,6 +84,28 @@
   修复：`confirm_disappear` 改为**每 2s 轮询直到 timeout_sec**（2026-10-21），QODER 点击步 `confirm_timeout_sec=45`。回归 `artifacts/test_confirm_disappear_poll_20261021.py`（8 组：延迟消失等到/永不消失超时/确认模板组合/立即消失快速返回）。
   阈值防线：QODER `match_confidences=[0.97,0.96,0.95]`（生效 0.95）——黑模板对灰「已领取」按钮真实交叉匹配只有 0.754（干净复测；昨天说的 0.922 是测量 bug：循环里覆盖了模板变量导致复合缩放，作废），真匹配 1.000，分离干净。
 - OCR 对「领取」有子串误中风险（描述行含"领取"），仅等待步开 OCR 兜底、点击步纯模板。
+
+### TeleAgent 每日签到（2026-11-14 接入薅羊毛集合）
+
+- **任务事实**：TeleAgent（电信星辰超级智能体 v3.0.1，Electron，`F:\Program Files\teleagent\TeleAgent.exe`，
+  进程 `TeleAgent.exe`，窗口标题含 "TeleAgent"——同进程还有桌面宠物悬浮窗，必须按标题过滤）每日可领
+  100 积分。用户拍板：**并入薅羊毛集合**（`WOOL_FLOW_KEYS` 追加 TELEAGENT，GUI/WebUI/WoolFlow/
+  定时任务自动获得）、**跑完关进程**、**入口 = 点击左下角头像/用户名**（用户实锤「稳定进入签到」）。
+- **页面模型（用户两张截图实锤）**：点头像/用户名 → 弹出用户面板（含 积分余额/权益中心/积分福利社块）。
+  未领态：福利社块显示「每日可领100积分 **立即领取 >**」；已领态：变「**今日已领 ✓**」徽章 +
+  「已领 N 天 | 累计 100积分」。点击「立即领取」后文案就地变化，无已知弹窗。
+- **流程设计**（`flow_configs.json` 的 `TELEAGENT`，五步全 OCR、零模板）：
+  等主界面（新建任务/随时待命，timeout 60 容 Electron 冷启动）→ 点左下角 `user_` 前缀
+  （region 锁左下角，容忍改名）→ 等「**积分余额**」出现（**面板专属词**，主界面左下另有
+  一张悬浮福利社卡片也带「立即领取」，先确认面板开了再点）→ 点「立即领取」（optional_if_missing
+  ——已领态该词不存在，**幂等重跑无害**；锚「积分余额」below 500px + region y≤0.85 双闸排除
+  悬浮卡片的同名文字）→ 核验「今日已领/已领」（fail-closed）。
+- **成败核验口径**：TeleAgent 无本地领取日志可核验（对比 MINIMAX/TRAE/Qoder 都有日志），
+  OCR「今日已领」是唯一判据——沿用 MINIMAX 2026-10-26 教训（已签到模板假阳性 0.95，弃模板走 OCR），
+  全程 `ocr_debug_snapshot` 开着，首跑按证据校准。
+- **未实机验证**：OCR 认字（今日已领✓ 徽章/立即领取）、点头像后面板弹出时序、悬浮卡片与面板
+  遮挡关系、点击后是否冒弹窗——首跑按快照取证校准。回归 `tests/suite_teleagent_sign_20261114.py`。
+
 ## 定时任务补跑 (2026-10-21)
 
 - GUI 定时任务保存在 `app_config.json` 的 `scheduled_tasks`，`UiBridge._sched_timer`

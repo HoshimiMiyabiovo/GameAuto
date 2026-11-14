@@ -24,7 +24,7 @@ STANDALONE_TASK_APPS: Dict[str, Dict[str, object]] = {
         "script_name": "薅羊毛集合流程",
         "virtual_task": True,
         "skip_min_run_warning": True,
-        "friendly_note": "依次执行各软件签到薅羊毛流程（当前：MiniMax Code 每日签到、WorkBuddy 每日领取、Trae CN 每日签到、Qoder 每日积分领取）。",
+        "friendly_note": "依次执行各软件签到薅羊毛流程（当前：MiniMax Code 每日签到、WorkBuddy 每日领取、Trae CN 每日签到、Qoder 每日积分领取、TeleAgent 每日签到）。",
     },
     "QoderFlow": {
         "display_name": "Qoder 每日积分",
