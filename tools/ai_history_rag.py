@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """AI 对话史 RAG：从外部对话导出中筛选本项目的会话，建本地检索库（data/ai_history）。
 
-数据源：F:\\data\\AI对话汇总\\data.json（2026-11-09 00:08 重导出，514 会话 / 83,693 条
-消息 / 约 7594 万字，外部目录不入库；ZCode 会话由 F:\\data\\_ai_organize_tools\\build.py
-的 do_zcode 从 ~/.zcode/cli/db/db.sqlite 直读并入，全部会话进上游、相关的由本工具
-双门控筛进 RAG）。本工具把**与本项目开发相关**的会话筛出、切块，落到
+数据源：F:\\data\\AI对话汇总\\data.json（2026-11-15 10:31 重导出，557 会话 / 95,727 条
+消息 / 约 8708 万字，外部目录不入库；ZCode 会话由 F:\\data\\_ai_organize_tools\\build.py
+的 do_zcode 从 ~/.zcode/cli/db/db.sqlite 直读并入，Grok 由 do_grok 读
+F:\\data\\grok_capture\\export\\grok.json 并入（网页抓取见 tools/grok_capture/），
+全部会话进上游、相关的由本工具双门控筛进 RAG）。本工具把**与本项目开发相关**的会话筛出、切块，落到
 `data/ai_history/`（已 gitignore），并用纯标准库 BM25（字符二元组，中文友好）
 做检索——不引新依赖、不占 GPU（显存留给 OCR）。
 

@@ -5,7 +5,8 @@
 
 断言：
   1. _detect_script_version 解析两种命名形态（【2.8.7】 / ver 2.6.41）
-  2. _find_newer_script_exe 同目录按基础名找更高版本（无关 exe 不误报）
+  2. _find_newer_script_exe 同目录按基础名找更高版本（无关 exe 不误报；
+     候选必须是完整 PE——下载中途的半成品不算新版本，2026-11-15 XM 截断事故）
   3. flow_configs.example.json：XM/CJ 前置 检查更新（optional_if_missing）+
      更新换血（self_update_swap + require_step_hit）
   4. 静态断言：换血分支的跳过/成功路径都显式 i += 1（步骤循环是手动索引制，
@@ -35,6 +36,26 @@ def check(name, cond, detail=""):
         FAILURES.append(name)
 
 
+def write_minimal_pe(path, size=0x400, raw_size=0x200, raw_ptr=0x200):
+    """写一个最小自洽 PE（单节、节表 RawPtr+RawSize 不越界）。
+
+    换血候选必须是完整可启动的 exe：空文件/残缺文件会被 _pe_file_complete
+    判为「未下载完成」而跳过（2026-11-15 XM 截断事故 #357）。
+    """
+    import struct
+    buf = bytearray(size)
+    buf[0:2] = b"MZ"
+    struct.pack_into("<I", buf, 0x3C, 0x80)          # e_lfanew
+    buf[0x80:0x84] = b"PE\x00\x00"
+    struct.pack_into("<HHIIIHH", buf, 0x84, 0x014C, 1, 0, 0, 0, 224, 0x0102)
+    struct.pack_into("<H", buf, 0x98, 0x010B)        # PE32
+    struct.pack_into("<I", buf, 0x98 + 56, 0x2000)   # SizeOfImage
+    sec = 0x98 + 224
+    buf[sec:sec + 8] = b".text\x00\x00\x00"
+    struct.pack_into("<IIII", buf, sec + 8, 0x1000, 0x1000, raw_size, raw_ptr)
+    Path(path).write_bytes(bytes(buf))
+
+
 def test_detect_script_version():
     print("[1] 版本解析与按位比较（末段一位数补零：2.6.5 → 2.6.50）")
     check("【2.8.7】形态", ffr._detect_script_version(r"D:\x\重聚脱机巅峰【2.8.7】.exe") == "2.8.7")
@@ -58,7 +79,7 @@ def test_find_newer_script_exe():
         new_exe = root / "XM Seer脱机日常 ver 2.6.5.exe"
         other = root / "HoYo.Gacha.exe"
         for f in (old_exe, new_exe, other):
-            f.write_bytes(b"")
+            write_minimal_pe(f)
         os.utime(old_exe, (now - 86400, now - 86400))  # 当前版本：一天前
         os.utime(new_exe, (now - 5, now - 5))          # 新下载：5 秒前
         os.utime(other, (now - 5, now - 5))            # 无关程序也是新的
@@ -70,8 +91,8 @@ def test_find_newer_script_exe():
         # mtime 兜底：exe 名不携带版本时按「更新点击之后新落地」识别
         anon_old = root / "SomeTool.exe"
         anon_new = root / "SomeTool ver 9.exe"
-        anon_old.write_bytes(b"")
-        anon_new.write_bytes(b"")
+        write_minimal_pe(anon_old)
+        write_minimal_pe(anon_new)
         os.utime(anon_old, (now - 86400, now - 86400))
         os.utime(anon_new, (now - 5, now - 5))
         check("exe 名无版本 → mtime 兜底找到新落地文件",

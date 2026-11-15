@@ -215,3 +215,73 @@
   三连发至 v3.7.18，全是收缩性变更：砍 tab/下载/赞助、ok-script 3.x、改为
   游戏退出后才查更新），脚本管理页会一直显示「有新版本」——这是**有意保留的
   观测窗口**（盯上游动向），不是误报；勿据此升级，也勿为消红把 repo 置空。
+
+## ok-ww v3.8.3 并行试验版：工坊复活（2026-11-15）
+
+- **背景**：上游 `ok-ww-char-code` 数据仓库与 `cfokwwchar`/`okwwcharcode` 两个
+  域名均已下线（探活 http=000 / GitHub 404），11-04 打的域名补丁也随之失效。
+  根因复查（v3.7.13→v3.8.3 diff 实锤）：**角色代码引擎从未被删**
+  （`CharacterCodeTab.py` 两版逐行一致），上游只是从 config.py 移除了
+  `custom_tabs` 注册项，Qt 页面连同工坊按钮整体不再挂载（对应 issue #1823
+  「改下代码就能打开」）。
+- **构建**：`data/okww/gui-3.8.3-ws/`（源码树 + 3.12 venv，CNB 更新仓库
+  `cnb.cool/ok-oldking/ok-ww-update2.git` tag v3.8.3 浅克隆，GitHub 直连/代理
+  均不通时的替代通道）。与 D 盘 v3.7.13 **并行共存**，不迁移不动现役安装。
+- **三处补丁**：① config.py 恢复 `'custom_tabs': [["src.gui.CharacterCodeTab",
+  "CharacterCodeTab"]]`（多账号 tab 不恢复，上游 #1831 已重构进任务配置）；
+  ② `CharacterCodeTab.py` 三个函数本地镜像优先（fetch_all/fetch_team/导入
+  按 filename 命中 `configs/workshop_mirror/codes/`），远端常量改指
+  okwwcharcode 作兜底；③ 精简镜像落 `configs/workshop_mirror/`（由
+  `data/artifacts/_okww_build_minimirror_20261115.py` 从 11-04 全仓镜像裁剪，
+  仅现役两队 `Aemeath_Chisa_Denia` / `Hsin_Shorekeeper_Suoming` 各 3 版共 6 轴，
+  用户拍板"很多代码冲突不能全用"）。
+- **现役轴迁移**：D 盘 working 的 `configs/custom_teams` 两队原样拷入
+  （CustomCharLoader.py v3.7.13↔v3.8.3 逐字节相同，格式零迁移成本）。
+- **验证**：离线探针 `data/artifacts/_okww_verify_patch_20261115.py` 四项全过
+  （镜像契约/本地 fetch 6 码/导入路径 6/6 命中/slug 对齐）；GUI 冒烟
+  `_okww_smoke_383_20261115.ps1` 启动无 Traceback、config dump 含 custom_tabs、
+  OCR(openvino+onnxocr-ppocrv6) 初始化正常。**待人工**：点开角色代码页确认
+  Workshop 按钮与 2 队 6 轴列表、试导一次。
+- **启动**：`data/okww/gui-3.8.3-ws/start-ok-ww-3.8.3.bat`（pythonw 拉起）。
+  源码运行无 pyappify 壳，不触发自动更新；若日后转正为正式安装需补
+  app.json `MANUAL_UPDATE` 与 repo/working 双份。
+- **更新检测口径**：`games/wuwa.py` 的 repo 指向与版本真值不受本试验版影响，
+  仍按上一节观测窗口执行。
+
+### v3.8.3 转正接入一条龙（2026-11-15 晚）
+
+- **pyappify 正规安装**：`data/okww/ok-ww-v3.8.3/`，布局复刻 D 盘现役壳：
+  根下 `ok-ww.exe`（v1.4.81 壳原样复制，`-t 1 -e` 参数转发语义不变）+
+  `data/apps/ok-ww/{app.json, python/, repo/, working/}`。working = 补丁树
+  （custom_tabs + 工坊本地镜像 + 现役配置全套），repo = `git archive HEAD`
+  的纯 v3.8.3。app.json `MANUAL_UPDATE`、current_version=v3.8.3。
+- **python 运行时**：复制 D 盘 3.12.10 内嵌 python（保壳兼容的
+  `__install__.json`/pip.ini）→ **清空 site-packages 重装 3.8.3 锁定清单**。
+  装依赖**用 uv 别用 pip**：pip 在本机走清华 IPv6 会挂在 CloseWait 空转
+  （CPU 涨、site-packages 不动），uv 自有 HTTP 栈 90s 装完 555MB。
+- **一条龙切换**：`_okww_flip_appconfig_20261115.py` 只改
+  `app_config.json` 的 `_discovery.WutheringWaves` 四字段（launcher /
+  script_exe_path / 两个 monitors 日志目录），CRLF+缩进保留，双备份
+  （`app_config.json.bak_20261115_pre_okww383` 与
+  `data/backups/app_config_before_okww383_20261115.json`）。
+  **回滚** = 把四字段改回 `D:\Program Files\mc\ok-ww-v1.4.81\ok-ww\...`
+  （D 盘安装全程未动，随时可切回）。
+- **验证**：壳冒烟通过——pythonw 引擎窗口标题 `OK-WW v3.8.3 China`，
+  启动日志确认从 working/main.py 起跑且 custom_tabs 生效。唯一报错是
+  UpdateCard 版本列表查询失败（手工 repo/ 无壳期望的 git 元数据）——
+  **预期且有益**：MANUAL_UPDATE 下自更新链路本来就应瘫痪，防补丁被冲。
+  **实跑验收通过（2026-11-15 晚用户确认）**：一条龙经新安装正常跑完
+  鸣潮日常，working/logs/ok-script.log 有任务完成标记，监控路径切换生效。
+- **运维注意**：壳与引擎随 app.json `admin:true` 提权运行，非管理员
+  shell 杀不动，收尾用 `taskkill //F //IM ok-ww.exe`（Git Bash 双斜杠防
+  路径转换）；一条龙监控进程名仍是 ok-ww.exe，pythonw 补刀模式靠
+  cmdline 含 `ok-ww`——新安装目录名刻意带 `ok-ww` 保命中。
+- **壳交互两坑（2026-11-15 晚，用户实机反馈）**：①壳界面「自动启动」开关
+  是**开机自启**（Windows 计划任务 \OK-WW），不是"开壳自动拉起引擎"——
+  双击 ok-ww.exe 永远进管理器、要点「启动应用」，与"检测不到更新"无关
+  （那只是更新卡片文案）。②管理器模式壳会自我提权（admin:true）→
+  UAC「未知发布者」弹窗；exe 无 MotW 污染（ADS 已验）、上游本就不签名。
+  **直启绕过**：`ok-ww-v3.8.3\start-ok-ww-direct.bat` 用内嵌 pythonw 直接
+  拉引擎（cd working → ..\python\pythonw.exe main.py），非提权、无弹窗、
+  已实测出窗可杀；bat 内容必须纯 ASCII（cmd 按 GBK 读，UTF-8 中文注释
+  会变乱码命令）。一条龙 `-t 1 -e` 任务模式不走管理器，不受影响。

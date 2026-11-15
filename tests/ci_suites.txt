@@ -98,6 +98,7 @@ suite_view_release_20261101.py
 suite_weekly_flow_disabled_20261111.py
 suite_wool_workbuddy_20261029.py
 suite_wuwa_window_wait_20261102.py
+suite_xm_script_update_truncated_20261115.py
 suite_zzz_activity_verdict_20261024.py
 suite_zzz_bangboo_monthly_20261115.py
 suite_zzz_chain_cleanup_20261108.py

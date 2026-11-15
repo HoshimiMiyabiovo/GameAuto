@@ -2456,6 +2456,55 @@ def _script_ver_tuple(version: str) -> Tuple[int, ...]:
     return tuple(parts)
 
 
+def _pe_file_complete(path: str) -> bool:
+    """轻量 PE 完整性校验：节表声明的原始数据不得超出文件实际大小。
+
+    2026-11-15 XM 事故（#357）：脚本把新版 exe 下载到同目录（同名基础名 + 更高
+    版本号），下载还没写完文件名就已可见；换血逻辑只比版本号就认定"新版已落地"，
+    立刻杀掉正在下载的旧进程 → 下载中断 → 新版 exe 被截断（实测 PE 声明
+    23,666,688 字节、实际 16,660,480，缺 7.0MB）→ 启动报 WinError 193
+    「不是有效的 Win32 应用程序」，整轮失败。这里只判"文件下全了没"，不解析
+    导入表/签名，成本是读一个头缓冲。
+    """
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return False
+    if size < 0x40:
+        return False
+    try:
+        with open(path, "rb") as f:
+            head = f.read(min(size, 0x10000))
+    except OSError:
+        return False
+    if head[:2] != b"MZ":
+        return False
+    e_lfanew = int.from_bytes(head[0x3C:0x40], "little")
+    if e_lfanew < 0x40 or e_lfanew + 24 > len(head):
+        return False
+    if head[e_lfanew:e_lfanew + 4] != b"PE\x00\x00":
+        return False
+    num_sections = int.from_bytes(head[e_lfanew + 6:e_lfanew + 8], "little")
+    opt_size = int.from_bytes(head[e_lfanew + 20:e_lfanew + 22], "little")
+    opt_off = e_lfanew + 24
+    if opt_size < 64 or opt_off + opt_size > len(head):
+        return False
+    if int.from_bytes(head[opt_off:opt_off + 2], "little") not in (0x10B, 0x20B):
+        return False
+    if int.from_bytes(head[opt_off + 56:opt_off + 60], "little") <= 0:
+        return False
+    sec_off = opt_off + opt_size
+    for idx in range(num_sections):
+        off = sec_off + idx * 40
+        if off + 40 > len(head):
+            return False
+        raw_size = int.from_bytes(head[off + 16:off + 20], "little")
+        raw_ptr = int.from_bytes(head[off + 20:off + 24], "little")
+        if raw_ptr + raw_size > size:
+            return False
+    return True
+
+
 def _find_newer_script_exe(exe_path: str, *, since_ts: float = 0.0) -> str:
     """在同目录找「同名基础名、更新版本」的脚本 exe；没有返回空串。
 
@@ -2477,6 +2526,10 @@ def _find_newer_script_exe(exe_path: str, *, since_ts: float = 0.0) -> str:
             if os.path.abspath(cand) == os.path.abspath(exe_path):
                 continue
             if not cand.name.startswith(base):
+                continue
+            if not _pe_file_complete(str(cand)):
+                # 下载中途的半成品：版本号再新也不能用（2026-11-15 XM 截断事故 #357）
+                logging.getLogger("GameAutomation").debug(f"跳过未下载完整的脚本 exe: {cand}")
                 continue
             cand_ver = _detect_script_version(cand.name)
             cand_tuple = _script_ver_tuple(cand_ver) if cand_ver else None

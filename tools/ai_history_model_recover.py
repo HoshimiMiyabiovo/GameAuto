@@ -48,6 +48,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -614,7 +615,56 @@ def recover_deepseek() -> Dict[str, dict]:
     return out
 
 
+GROK_EXPORT = Path(r"F:\data\grok_capture\export")
+
+# grok.com 抓取导出的 md 里每条 AI 回复标题行带模型角标：
+#   `## 2. Grok · grok-4 · 2026-04-04 11:49:29`
+# 会话头带 `会话 ID：`uuid``。grok.json 转发进 data.json 时只留 {r,t,k,x} 把模型
+# 丢了（2026-11-15 发现 6 个 RAG Grok 会话无模型标记的根因），但抓取端写 md 时
+# 是全量——从 md 直接恢复逐条模型，不用动抓取工具。
+GROK_MSG_RE = re.compile(
+    r"^##\s+\d+\.\s+Grok\s+·\s+([\w.\-]+)\s+·\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+GROK_ID_RE = re.compile(r"会话 ID：`([0-9a-fA-F\-]+)`")
+
+
+def recover_grok() -> Dict[str, dict]:
+    """Grok：从抓取导出的 md 恢复逐条模型（grok.json 本身没有模型字段）。
+
+    时间对齐口径：md 时间是本地墙钟，data.json 的 k 是 epoch 秒——同机同钟下
+    datetime.timestamp() 转换误差远小于 lenscan 的 ±120s 容差。turns 统一写
+    epoch 毫秒（与其他来源口径一致，lenscan 按 /1000 消费）。会话 key 复刻
+    build.py 的 ``grok:`` + uuid[:8]。
+    """
+    out: Dict[str, dict] = {}
+    if not GROK_EXPORT.exists():
+        return out
+    for md in sorted(GROK_EXPORT.glob("*/*.md")):
+        try:
+            text = md.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        mid = GROK_ID_RE.search(text)
+        if not mid:
+            continue
+        turns: List[Tuple[str, str]] = []
+        for line in text.splitlines():
+            mm = GROK_MSG_RE.match(line)
+            if not mm:
+                continue
+            try:
+                epoch_ms = str(int(datetime.strptime(
+                    mm.group(2), "%Y-%m-%d %H:%M:%S").timestamp() * 1000))
+            except ValueError:
+                continue
+            turns.append((epoch_ms, mm.group(1)))
+        if turns:
+            _put(out, "grok:" + mid.group(1)[:8],
+                 _rec("per_message", "grok:export-md", turns, len(turns)))
+    return out
+
+
 RECOVERERS = (
+    ("Grok", recover_grok),
     ("ZCode", recover_zcode),
     ("WorkBuddy", recover_workbuddy),
     ("Qoder", recover_qoder),

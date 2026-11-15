@@ -317,12 +317,13 @@ def test_lenscan_and_lengths():
         # k 为 epoch 秒（build.py 口径）；turn_models.ts 为毫秒（恢复器口径）
         data_json = {
             "meta": {}, "sessions": [
-                {"id": "a", "src": "ZCode", "n": 5, "msgs": [
+                {"id": "a", "src": "ZCode", "n": 6, "msgs": [
                     {"r": "user", "k": 1794498000, "x": "白荆OCR报错了"},
                     {"r": "ai", "k": 1794498010, "x": "我来看看这个失败"},
                     {"r": "think", "k": 1794498010, "x": "思考内容"},
                     {"r": "tool", "k": 1794498011, "x": "工具摘要行"},
                     {"r": "ai", "k": 1794498020, "x": "阈值已修复完成"},
+                    {"r": "ai", "k": 1794498030, "x": "A" * 14000},
                 ]},
                 {"id": "sw", "src": "WorkBuddy", "n": 3, "msgs": [
                     {"r": "ai", "k": 1000, "x": "甲模型答得长一些"},
@@ -365,6 +366,8 @@ def test_lenscan_and_lengths():
         check("tool 保留行", sum(1 for r in a_rows if r["r"] == "tool") == 1)
         check("ai 长度按字符计", any(r["r"] == "ai" and r["n"] == len("我来看看这个失败")
                                     for r in a_rows))
+        check("触顶行带 cap 标记", sum(1 for r in a_rows if r.get("cap") == 1) == 1,
+              f"caps={[r.get('cap') for r in a_rows]}")
         sw_rows = {(r["r"], r["n"]): r for r in lens if r["id"] == "sw"}
         check("时间戳命中归甲", sw_rows[("ai", len("甲模型答得长一些"))]["m"] == "甲")
         check("时间戳命中归乙", sw_rows[("ai", len("乙模型答"))]["m"] == "乙")
@@ -376,13 +379,14 @@ def test_lenscan_and_lengths():
         m = [json.loads(l) for l in
              (td_path / "behavior" / "sessions_metrics.jsonl").open(encoding="utf-8")]
         a_m = next(r for r in m if r["id"] == "a")
-        check("scan 摘要带长度字段", a_m["n_ai_true"] == 2 and a_m["n_tool"] == 1
-              and a_m["ai_len_median"] > 0)
+        check("scan 摘要带长度字段", a_m["n_ai_true"] == 3 and a_m["n_tool"] == 1
+              and a_m["ai_len_median"] > 0 and a_m["n_capped"] == 1)
         with _tmp_lib(td_path), redirect_stdout(io.StringIO()) as out_t:
             beh.main(["table", "--min-sessions", "1"])
         t = out_t.getvalue()
         check("table 出长度段", "模型 × 回复长度" in t and "正文中位" in t)
         check("长度段含两模型", "GLM-5.3-Flash" in t and "甲" in t)
+        check("长度段标注触顶", "触顶截断" in t)
         check("思考不进正文列", "思考条数" in t)
 
 

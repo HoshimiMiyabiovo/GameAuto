@@ -544,8 +544,12 @@ def cmd_lenscan(_args) -> int:
                         matched += 1
                     else:
                         model, how = primary, "primary"
-                f.write(json.dumps({"id": sid, "r": r, "n": n, "m": model, "how": how},
-                                   ensure_ascii=False) + "\n")
+                row = {"id": sid, "r": r, "n": n, "m": model, "how": how}
+                # clean() 截断标记（build.py MAXMSG=14000，保留头72%+尾28%）：恰好
+                # 触顶即真实长度未知——长度统计要把这部分暴露出来而不是默默吸收
+                if r in ("user", "ai") and n >= 14000:
+                    row["cap"] = 1
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
                 rows += 1
     print(f"msg_lens.jsonl：{sessions_done} 会话 / {rows} 条消息；"
           f"换模型会话里按时间戳精确归属 {matched} 条，其余归主模型或未恢复")
@@ -557,7 +561,7 @@ def _load_len_summary() -> Dict[str, dict]:
     if not LENGTHS_PATH.exists():
         return {}
     agg: Dict[str, dict] = defaultdict(
-        lambda: {"ai": [], "user": [], "n_think": 0, "n_tool": 0})
+        lambda: {"ai": [], "user": [], "n_think": 0, "n_tool": 0, "n_cap": 0})
     with LENGTHS_PATH.open(encoding="utf-8") as f:
         for line in f:
             if not line.strip():
@@ -566,6 +570,7 @@ def _load_len_summary() -> Dict[str, dict]:
             a = agg[o["id"]]
             if o["r"] == "ai":
                 a["ai"].append(o["n"])
+                a["n_cap"] += o.get("cap", 0)
             elif o["r"] == "user":
                 a["user"].append(o["n"])
             elif o["r"] == "think":
@@ -580,6 +585,7 @@ def _load_len_summary() -> Dict[str, dict]:
             "n_tool": a["n_tool"],
             "ai_len_median": statistics.median(a["ai"]) if a["ai"] else 0,
             "ai_len_total": sum(a["ai"]),
+            "n_capped": a["n_cap"],
             "user_len_median": statistics.median(a["user"]) if a["user"] else 0,
         }
     return out
@@ -593,6 +599,7 @@ def _load_len_summary_defaults(summary: Optional[dict]) -> dict:
         "n_tool": (summary or {}).get("n_tool", 0),
         "ai_len_median": (summary or {}).get("ai_len_median", 0),
         "ai_len_total": (summary or {}).get("ai_len_total", 0),
+        "n_capped": (summary or {}).get("n_capped", 0),
         "user_len_median": (summary or {}).get("user_len_median", 0),
     }
 
@@ -760,7 +767,8 @@ def cmd_table(args) -> int:
               "比条数无意义，**轮均输出**（未换模型会话的 AI 正文字符 ÷ 用户轮次）"
               "才是可比口径。\n")
         allow_ids = {r["id"] for r in records}
-        pool: Dict[str, dict] = defaultdict(lambda: {"ai": [], "think": [], "tool": 0})
+        pool: Dict[str, dict] = defaultdict(
+            lambda: {"ai": [], "think": [], "tool": 0, "cap": 0})
         # 轮均输出的分子分母必须同口径：都只取「未换模型会话」——该会话全部
         # AI 输出确定归其主模型；换模型会话的归属是近似，混进来会虚增
         # （首版 bug：分子含换模型会话的归属消息、分母只有未换模型会话，
@@ -780,6 +788,7 @@ def cmd_table(args) -> int:
                 d = pool[o["m"]]
                 if o["r"] == "ai":
                     d["ai"].append(o["n"])
+                    d["cap"] += o.get("cap", 0)
                 elif o["r"] == "think":
                     d["think"].append(o["n"])
                 elif o["r"] == "tool":
@@ -802,6 +811,11 @@ def cmd_table(args) -> int:
             print(f"| {model} | {len(ai)} | {statistics.median(ai):.0f} | "
                   f"{sum(ai) / len(ai):.0f} | {rng} | {per_turn} | {len(th)} | "
                   f"{statistics.median(th) if th else 0:.0f} | {d['tool']} |")
+        capped_total = sum(d["cap"] for _, d in len_rows)
+        if capped_total:
+            detail = "、".join(f"{m}×{d['cap']}" for m, d in len_rows if d["cap"])
+            print(f"> ⚠ 触顶截断 {capped_total} 条（build.py MAXMSG=14000，保留头72%+尾28%，"
+                  f"真实长度未知）——这些消息按 14000 计，均值/总量被轻微低估：{detail}")
     else:
         print("\n（模型 × 回复长度：先跑 lenscan 生成 msg_lens.jsonl）")
 
