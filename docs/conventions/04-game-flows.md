@@ -178,6 +178,24 @@ This file mirrors important repository-level development notes inside the projec
   - **通用教训**：「等某个按钮」时先确认按钮属于哪个窗口。启动器按钮 ≠ 游戏内按钮，
     两者同名/同义时，模板必须在**对应那个窗口**里找，OCR 兜底要覆盖另一种形态。
 
+- **绝区零邦布币商店 ZZZ_BANGBOO_MONTHLY（2026-11-15 用户新增）**：主界面 → `zzz_enter_main`
+  场景校正 → ESC → 商城(24HOUR) → 信源清单 → **邦布币** 页签，**只买邦布券×5**
+  （月剩余 5，50% 折扣单价 20 邦布币；特邀帮手礼盒/浓缩型冷却液/邦布系统控件/玛瑟尔改装原件
+  **不买**——用户 11-15 拍板，这四件只当页签特征指纹）。页签走内容优先路径：
+  `tab_content_markers` 四件本页独占商品任一命中即放行购买（**礼盒卡片名是「特邀帮手」**，
+  OCR 子串会被书名号断开，特征词不能写整名）；`tab_point_frac [0.8153,0.1483]` 从 11-15 实机
+  截图实测（黄色页签中心 1564.5,160 @1919x1079），`tab_between_texts ["信号残响","母带兑换"]`
+  中点兜底。`forbidden_texts` = 邻页独占商品（储值电卡/硫磺石/燃狱齿轮/嵌合编译器/啜泣摇篮/
+  嚼泣摇篮/原装母带/加密母带）第二道闸。商品模板 `绝区零-商店-邦布币页-邦布券.png` 从实机截图
+  裁**图标区**（120×108，避开 50% OFF 角标——折扣可能随版本变化；物流店的
+  `绝区零-商店-邦布券.png` 是协会物资页裁片，图案不同不混用）。
+  参考图 `data/artifacts/ref_zzz_bangboo_coin_20261115.png`。
+  **为什么独立第三条流程**：邦布券买满后整卡消失（同母带口径），塞进 ZZZ_MONTHLY 共用标记的话
+  任一步失败后的重跑会因先跑的那步商品消失而永久失败、后一步永远轮不到。挂
+  `_EXTRA_MONTHLY_FLOWS` 第 2 条（后勤之后）、独立 `monthly_flow:ZZZ_BANGBOO_MONTHLY` 门控，
+  `close_process_on_finish: true`（ZZZ 月流程槽最后一个任务，跑完关游戏）。
+  回归 `tests/suite_zzz_bangboo_monthly_20261115.py`（配置镜像/接线/重跑语义桩）。
+
 - **彩色模板匹配 `color_match`（2026-11-01 新增，默认关闭）**：`_match_template_cv2_once(..., use_color=True)`
   → `_locate_template_in_window` / `_locate_template_on_screen` / `zzz_monthly_shop._locate` 全链透传；
   step/item 配 `color_match: true` 才开。意义不是"灰度认不出目标"，而是**目标消失后会误认隔壁同类图标**：
@@ -1615,6 +1633,11 @@ Env 都必须隔离 `mod.pyautogui`**（press 记录式），三个旧测试已�
 - 每个独立刷新周期一个 `flow_key`，各自 `monthly_flow:<KEY>` 门控、各自成败。
 - `ZZZ_MONTHLY` 只留信号残响 3 步；新增 `ZZZ_LOGISTICS_MONTHLY` 6 步
   （启动 → 主界面 → 功能菜单 → 后勤商店 → 商店页 → 采购）。
+- **2026-11-15 补第三例**：邦布币商店（`ZZZ_BANGBOO_MONTHLY`，买满邦布券）也没有并进
+  `ZZZ_MONTHLY`——除了上面这条理由，还有个更硬的死锁：商品**买满后整卡消失**（11-08 起
+  「一件没买到就看不到 = 失败不写标记」），共流程时任一步失败后的下批重跑，先跑的那步会因
+  商品已消失永久失败，后一步永远轮不到。两条独立流程共享同一刷新周期没有问题；共享的是
+  **标记和失败传播**才有问题。
 - 调度主映射 `_MONTHLY_FLOW_BY_APP` / `_MONTHLY_RUNNERS` 仍是「一个 app 一条主流程」，
   **其它三个游戏零影响**；附加流程走 `_EXTRA_MONTHLY_FLOWS` /
   `_EXTRA_MONTHLY_RUNNERS`，`_append_monthly_report` 无论主流程成功、失败还是

@@ -132,7 +132,9 @@ def test_close_and_config():
     # 只检查其它「月度」流程没被一起打开。
     # 2026-11-06 例外：绝区零两条月流程拆分后都显式设 close_process_on_finish=true，
     # 目的是各自启动/关闭、避免上一条失败把游戏停在商城页影响下一条。
-    zzz_split = ("ZZZ_MONTHLY", "ZZZ_LOGISTICS_MONTHLY")
+    # 2026-11-15 例外：邦布币商店 ZZZ_BANGBOO_MONTHLY 加入同一机制（ZZZ 月流程槽
+    # 最后一个任务，跑完关游戏，reused_window 不误杀）。
+    zzz_split = ("ZZZ_MONTHLY", "ZZZ_LOGISTICS_MONTHLY", "ZZZ_BANGBOO_MONTHLY")
     others = [
         k for k, v in a.items()
         if k.endswith("_MONTHLY") and k != "NTE_MONTHLY" and k not in zzz_split

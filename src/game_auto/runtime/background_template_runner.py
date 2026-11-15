@@ -225,6 +225,17 @@ def run_zzz_logistics_monthly_background(logger: logging.Logger) -> Tuple[bool, 
     return _run_monthly_flow(logger, "ZZZ_LOGISTICS_MONTHLY", "绝区零后勤商店")
 
 
+def run_zzz_bangboo_monthly_background(logger: logging.Logger) -> Tuple[bool, str]:
+    """绝区零邦布币商店（信源清单→邦布币，买满邦布券）：第三条独立月流程。
+
+    2026-11-15 用户拍板：邦布券买满后卡片整卡消失（同母带口径），若与信号残响
+    共用一条流程一个标记，任一步失败后的重跑会因先跑的那步商品消失而永久失败、
+    后一步永远轮不到。独立 flow_key / 独立 `monthly_flow:ZZZ_BANGBOO_MONTHLY`
+    门控，与主流程、后勤流程互不阻断。
+    """
+    return _run_monthly_flow(logger, "ZZZ_BANGBOO_MONTHLY", "绝区零邦布币商店")
+
+
 def run_nte_monthly_background(logger: logging.Logger) -> Tuple[bool, str]:
     return _run_monthly_flow(logger, "NTE_MONTHLY", "异环每月")
 

@@ -126,10 +126,17 @@ def test_esc_gate_and_config():
         check("比例对应实机 1920x1080 命中点 (1348,950)",
               abs(frac[0] * 1920 - 1348) < 3 and abs(frac[1] * 1080 - 950) < 3,
               (frac[0] * 1920, frac[1] * 1080))
-    check("其它流程未被写入该键",
-          not any("shop_entry_point_frac" in s
-                  for k, v in a.items() if k != "ZZZ_MONTHLY" and isinstance(v, dict)
-                  for s in v.get("steps", []) if isinstance(s, dict)))
+    # 2026-11-15 起邦布币流程 ZZZ_BANGBOO_MONTHLY 合法共用同一商城入口坐标
+    # （同一家 24HOUR 商城），守卫从「仅 ZZZ_MONTHLY 可用」放宽为「用该键的
+    # 流程坐标必须同源」，防止某个流程抄到过期/偏移的旧坐标。
+    users = [
+        s for v in a.values() if isinstance(v, dict)
+        for s in v.get("steps", []) if isinstance(s, dict)
+        if "shop_entry_point_frac" in s
+    ]
+    check("用 shop_entry_point_frac 的流程坐标同源（商城入口唯一）",
+          users and all(s["shop_entry_point_frac"] == [0.7021, 0.8796] for s in users),
+          [s["shop_entry_point_frac"] for s in users])
 
 
 def test_evidence_files():

@@ -12,6 +12,8 @@
   独立写 monthly_flow:ZZZ_LOGISTICS_MONTHLY。
 - task_batch_runner: _EXTRA_MONTHLY_FLOWS / _EXTRA_MONTHLY_RUNNERS；
   _append_monthly_report 无论主流程成功/失败/已完成都跑附加流程。
+- 2026-11-15：附加流程挂第 2 条 ZZZ_BANGBOO_MONTHLY（邦布币商店，买满邦布券），
+  隔离断言同步扩到 2 条（细节见 suite_zzz_bangboo_monthly_20261115.py）。
 - 主映射 _MONTHLY_FLOW_BY_APP / _MONTHLY_RUNNERS 与 _run_pending_monthly_flow
   的默认返回值保持原样，其它游戏零影响。
 
@@ -102,12 +104,14 @@ def test_wiring():
     check("_MONTHLY_RUNNERS 仍是 4 条（其它游戏零影响）",
           set(tbr._MONTHLY_RUNNERS) == {v[0] for v in tbr._MONTHLY_FLOW_BY_APP.values()},
           sorted(tbr._MONTHLY_RUNNERS))
-    check("附加流程挂到绝区零",
+    check("附加流程挂到绝区零（11-15 起第 2 条=邦布币商店）",
           tbr._EXTRA_MONTHLY_FLOWS.get("ZenlessZoneZero")
-          == (("ZZZ_LOGISTICS_MONTHLY", "绝区零后勤商店"),))
+          == (("ZZZ_LOGISTICS_MONTHLY", "绝区零后勤商店"),
+              ("ZZZ_BANGBOO_MONTHLY", "绝区零邦布币商店")))
     check("附加流程有独立 runner",
-          set(tbr._EXTRA_MONTHLY_RUNNERS) == {"ZZZ_LOGISTICS_MONTHLY"}
-          and callable(tbr._EXTRA_MONTHLY_RUNNERS["ZZZ_LOGISTICS_MONTHLY"]))
+          set(tbr._EXTRA_MONTHLY_RUNNERS) == {"ZZZ_LOGISTICS_MONTHLY", "ZZZ_BANGBOO_MONTHLY"}
+          and callable(tbr._EXTRA_MONTHLY_RUNNERS["ZZZ_LOGISTICS_MONTHLY"])
+          and callable(tbr._EXTRA_MONTHLY_RUNNERS["ZZZ_BANGBOO_MONTHLY"]))
     with mock.patch.object(btr, "_run_monthly_flow", return_value=(True, "ok")) as run:
         ok, msg = btr.run_zzz_logistics_monthly_background(LOG)
     check("runner 用独立 flow_key 调 _run_monthly_flow",
@@ -116,20 +120,28 @@ def test_wiring():
 
 def test_failure_isolation():
     print("[3] 主流程失败 / 已完成，附加流程照样跑")
+    # 2026-11-15 起 _EXTRA_MONTHLY_FLOWS 有 2 条（后勤 + 邦布币）：
+    # 主流程 1 次调用 + 附加 2 次，报告/警告行数同步 +1。
     for label, main_result, expect_lines, expect_warn in (
-        ("主流程失败", ("信号残响 ❌", False), 2, 1),
-        ("主流程本月已完成", None, 1, 0),
+        ("主流程失败", ("信号残响 ❌", False), 3, 1),
+        ("主流程本月已完成", None, 2, 0),
     ):
         calls = []
 
         def fake(controller, app_key, *, _override=None):
             calls.append(_override)
-            return main_result if _override is None else ("后勤商店 ✅", True)
+            return main_result if _override is None else ("附加月流程 ✅", True)
 
         report, warnings = [], []
         with mock.patch.object(tbr, "_run_pending_monthly_flow", side_effect=fake):
             tbr._append_monthly_report(FakeController(), "ZenlessZoneZero", report, warnings)
-        check(f"{label} → 附加流程仍执行", len(calls) == 2 and calls[0] is None, calls)
+        check(f"{label} → 附加流程仍执行",
+              len(calls) == 3 and calls[0] is None
+              and calls[1] == ("ZZZ_LOGISTICS_MONTHLY", "绝区零后勤商店",
+                               tbr._EXTRA_MONTHLY_RUNNERS)
+              and calls[2] == ("ZZZ_BANGBOO_MONTHLY", "绝区零邦布币商店",
+                               tbr._EXTRA_MONTHLY_RUNNERS),
+              calls)
         check(f"{label} → 报告 {expect_lines} 行、警告 {expect_warn} 行",
               len(report) == expect_lines and len(warnings) == expect_warn,
               (report, warnings))

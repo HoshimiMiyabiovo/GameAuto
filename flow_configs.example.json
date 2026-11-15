@@ -1457,6 +1457,104 @@
     "close_process_on_fail": true,
     "_comment_scene_gate": "2026-11-08 #220 重构：第一步 zzz_enter_main 场景表校正（接管运行中游戏或冷启动后统一拉回大世界）；close_process_on_finish=true——本流程是 ZZZ 槽最后一个任务，跑完关游戏。"
   },
+  "ZZZ_BANGBOO_MONTHLY": {
+    "enabled": true,
+    "exe_from_app": "ZenlessZoneZero",
+    "window_title_keywords": [],
+    "window_process_names": [
+      "ZenlessZoneZero.exe"
+    ],
+    "startup_wait_sec": 15,
+    "match_scales": [
+      1.0,
+      1.25,
+      1.5,
+      0.8,
+      0.67
+    ],
+    "match_confidences": [
+      0.88,
+      0.84,
+      0.8
+    ],
+    "close_process_on_finish": true,
+    "reuse_existing_window": true,
+    "close_process_on_fail": true,
+    "_comment_scene_gate": "2026-11-15 新增：第一步 zzz_enter_main 场景表校正（接管运行中游戏或冷启动后统一拉回大世界，11-08 #220 同款）；close_process_on_finish=true——邦布币在 _EXTRA_MONTHLY_FLOWS 里排在后勤之后，是 ZZZ 月流程槽的最后一个任务，跑完关游戏（reused_window 时不误杀用户已开的窗口）。",
+    "steps": [
+      {
+        "name": "场景校正到大世界",
+        "action": "zzz_enter_main",
+        "timeout_sec": 240,
+        "post_delay_sec": 1.0,
+        "on_fail": "fail",
+        "max_attempts": 1,
+        "_comment": "2026-11-08 #219/#220：进入段不再假设冷启动登录态——场景登记表把画面从任意状态（登录页/月卡弹窗/功能菜单/商店页残留）校正到大世界（runtime/zzz_scene.py，参照白荆 recover_scene：单次 OCR 共享、按序认领、unknown 连续 2 轮落证据失败、绝不盲点）。游戏已在运行时配合 reuse_existing_window 直接接管，不再关了重开。"
+      },
+      {
+        "name": "邦布币每月兑换",
+        "action": "monthly_exchange",
+        "purchase_verify": {
+          "labels": [
+            "月剩余"
+          ]
+        },
+        "_comment_purchase_verify": "同 ZZZ_MONTHLY（2026-11-07 实机教训）：买前/买后各扫一次整窗 OCR 的「月剩余×N」数字签名，完全相同判失败、不写月度标记。邦布币页有 4 张卡带 月剩余（券5/礼盒1/冷却液10/控件25），买一张券签名必变。",
+        "log_label": "邦布币兑换",
+        "item_scroll_search": false,
+        "shop_entry_template": "assets/templates\\绝区零-商城入口.png",
+        "shop_entry_text": "商城",
+        "shop_entry_point_frac": [
+          0.7021,
+          0.8796
+        ],
+        "_comment_shop_entry": "与 ZZZ_MONTHLY 步 3 同一入口：主菜单底部商城是「24 HOUR」纯图标，OCR 常识别不到，按过 ESC 之后允许用窗口比例坐标兜底（2026-11-06 实机 (1348,950) → [0.7021,0.8796]）。",
+        "nav_text": "信源清单",
+        "tab_text": "邦布币",
+        "tab_point_frac": [
+          0.8153,
+          0.1483
+        ],
+        "tab_between_texts": [
+          "信号残响",
+          "母带兑换"
+        ],
+        "tab_content_markers": [
+          "特邀帮手",
+          "浓缩型冷却液",
+          "邦布系统控件",
+          "玛瑟尔改装原件"
+        ],
+        "tab_template": "",
+        "forbidden_texts": [
+          "储值电卡",
+          "硫磺石",
+          "燃狱齿轮",
+          "嵌合编译器",
+          "啜泣摇篮",
+          "嚼泣摇篮",
+          "原装母带",
+          "加密母带"
+        ],
+        "confirm_template": "assets/templates\\绝区零-商店-确认.png",
+        "exit_marker_template": "assets/templates\\绝区零-主菜单按钮.png",
+        "timeout_sec": 600,
+        "post_delay_sec": 2.0,
+        "on_fail": "fail",
+        "max_attempts": 1,
+        "items": [
+          {
+            "name": "邦布券",
+            "count": 5,
+            "template": "assets/templates\\绝区零-商店-邦布币页-邦布券.png"
+          }
+        ],
+        "_comment": "主界面 → 场景校正 → ESC → 商城(24HOUR) → 信源清单 → 邦布币。2026-11-15 用户拍板清单：**只买邦布券×5**（月剩余 5，50% 折扣单价 20 邦布币；特邀帮手礼盒/浓缩型冷却液/邦布系统控件/玛瑟尔改装原件不买）。**买满后卡片整卡消失**（同信号残响母带口径），故与 ZZZ_MONTHLY 拆独立流程：共用标记时任一步失败下批重跑，先跑的那步会因商品消失永久失败、后一步永远轮不到（11-06 后勤拆分同因）。模板 绝区零-商店-邦布币页-邦布券.png 从 11-15 实机截图裁图标区（120x108，避开 50% OFF 角标——折扣可能随版本变化；旧 绝区零-商店-邦布券.png 是物流店协会物资页裁片、图案不同不混用）。参考图 data/artifacts/ref_zzz_bangboo_coin_20261115.png。",
+        "_comment_tab": "内容优先路径（monthly_exchange._select_tab 有 tab_content_markers 时不看页签模板/亮度）：tab_point_frac [0.8153,0.1483] 从 11-15 用户截图黄色页签实测（中心 1564.5,160 @1919x1079），坐标/OCR/相邻页签中点只负责「点哪里」，点完必须看到本页独占商品才放行购买。特征词为用户 11-15 拍板的四件本页独占商品；「特邀帮手」礼盒卡片带书名号「特邀帮手」，OCR 子串会被断开，故特征词只写「特邀帮手」。forbidden_texts=邻页独占商品第二道闸（信号余波 S 引擎+同名母带、信号残响储值电卡），命中即整步失败不购买。"
+      }
+    ],
+    "_comment_independent": "2026-11-15 用户拍板：邦布币商店每月刷新，与信号残响/后勤商店互相独立——独立 flow_key、独立 monthly_flow:ZZZ_BANGBOO_MONTHLY 门控、独立 runner（task_batch_runner._EXTRA_MONTHLY_FLOWS 第 2 条）。主流程失败/已完成都不影响本流程执行，反之亦然。"
+  },
   "GENSHIN_MONTHLY": {
     "enabled": true,
     "_comment": "原神每月任务：直接启动游戏本体（exe_from_game 走 apps.GenshinImpact._discovery.game_exe_path，不能走 exe_from_app——那只配了 BetterGI）→ genshin_enter_main 进主界面 → ESC 商城 → 尘辉兑换 → 星尘兑换 每月采购。2026-11-01 清单已定：纠缠之缘/相遇之缘各买满 5 个；确认模板已补（弹窗截图）。",

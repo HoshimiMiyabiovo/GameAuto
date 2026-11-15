@@ -128,6 +128,46 @@ def _menu_center(hwnd: int, scales):
     return _locate_template_on_screen(CENTER_TEMPLATE, region, scales, MENU_CONFIDENCES)
 
 
+# 权益中心网络错误页（2026-11-14 17:42 实跑截图 OCR 实锤）：
+# 「活动加载失败」+「请检查网络后重新加载。」+「重新加载」按钮。
+LOAD_FAIL_TEXTS = ("活动加载失败", "请检查网络后重新加载")
+RELOAD_TEXTS = ("重新加载",)
+
+
+def _dismiss_load_fail_and_reload(hwnd: int, logger: Optional[logging.Logger] = None) -> bool:
+    """检测到权益中心「活动加载失败」网络错误页时点「重新加载」刷新。
+
+    返回 True=点了刷新（调用方应续等页面加载）；False=没检测到错误页。
+    OCR 不可用按"没有错误页"处理，不拖垮打开流程。
+    """
+    logger = logger or LOGGER
+    from .ocr_click_tester import ocr_window_content
+
+    try:
+        results = ocr_window_content(logger, hwnd=hwnd) or []
+    except Exception as exc:  # noqa: BLE001 - OCR 不可用就当没有错误页
+        LOGGER.debug("[Qoder] 检测加载失败页 OCR 失败: %s", exc)
+        return False
+    texts = [str(r.get("text") or "") for r in results]
+    if not any(any(k in t for k in LOAD_FAIL_TEXTS) for t in texts):
+        return False
+    # 点「重新加载」按钮：整块文本精确等于「重新加载」——说明文字
+    # 「请检查网络后重新加载。」含子串「重新加载」，子串匹配会先命中说明行
+    # 把提示文字当按钮点（11-14 首版 bug，回归 [1]/[3] 抓到）。
+    for r in results:
+        text = str(r.get("text") or "").strip()
+        if text not in RELOAD_TEXTS:
+            continue
+        center = r.get("center")
+        if not center or len(center) < 2:
+            continue
+        logger.info("[Qoder] 权益中心网络错误页（活动加载失败），点「重新加载」刷新 @ %s", center)
+        _click((int(center[0]), int(center[1])))
+        return True
+    LOGGER.warning("[Qoder] 检测到「活动加载失败」但未定位到「重新加载」按钮")
+    return False
+
+
 def _ensure_visible(hwnd: int) -> Tuple[bool, str]:
     from .foreground_flow_runner import _focus_window
     from .ocr_click_tester import _window_obscured_ratio
@@ -205,11 +245,19 @@ def open_campaign(logger: Optional[logging.Logger] = None, hwnd: int = 0,
         logger.info("[Qoder] 已点击头像菜单「权益中心」")
 
         end = time.time() + max(1, timeout_sec)
+        reload_tried = False
         while time.time() < end:
             if stopped():
                 return False, "用户请求停止"
             if _claim_button_visible(hwnd, scales, confidences):
                 return True, "已打开权益中心"
+            # 2026-11-14 实锤：网络不好时权益中心弹「活动加载失败 / 请检查网络后
+            # 重新加载 / 重新加载」错误页，领取/已领取模板永远不出现，旧代码干等
+            # 20s 后判「未检测到活动页」。检测到加载失败页就点「重新加载」刷新
+            # （只点一次，避免错误页循环时无限重试）。
+            if not reload_tried and _dismiss_load_fail_and_reload(hwnd, logger):
+                reload_tried = True
+                end = max(end, time.time() + max(1, timeout_sec))
             time.sleep(1.0)
         return False, "点击权益中心后未检测到活动页"
 

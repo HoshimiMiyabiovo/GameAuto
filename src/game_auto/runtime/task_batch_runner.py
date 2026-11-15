@@ -47,6 +47,7 @@ from .background_template_runner import (
     run_wool_background,
     run_wool_flow_background,
     run_xm_background,
+    run_zzz_bangboo_monthly_background,
     run_zzz_logistics_monthly_background,
     run_zzz_monthly_background,
     run_zzz_notorious_hunt_background,
@@ -145,10 +146,17 @@ _MONTHLY_RUNNERS: Dict[str, Callable[..., Tuple[bool, str]]] = {
 # 独立月流程单独挂出来：独立 flow_key、独立 monthly_flow:<KEY> 门控、独立 runner，
 # 主流程失败/已完成都不影响附加流程执行。
 _EXTRA_MONTHLY_FLOWS: Dict[str, Tuple[Tuple[str, str], ...]] = {
-    "ZenlessZoneZero": (("ZZZ_LOGISTICS_MONTHLY", "绝区零后勤商店"),),
+    # 2026-11-15 加第 2 条：邦布币商店（信源清单→邦布币，买满邦布券）。
+    # 邦布券买满后卡片整卡消失，与信号残响共用流程+标记会让重跑永远卡死在
+    # 先跑的那步（11-06 后勤拆分同因），故独立 flow_key / 标记 / runner。
+    "ZenlessZoneZero": (
+        ("ZZZ_LOGISTICS_MONTHLY", "绝区零后勤商店"),
+        ("ZZZ_BANGBOO_MONTHLY", "绝区零邦布币商店"),
+    ),
 }
 _EXTRA_MONTHLY_RUNNERS: Dict[str, Callable[..., Tuple[bool, str]]] = {
     "ZZZ_LOGISTICS_MONTHLY": run_zzz_logistics_monthly_background,
+    "ZZZ_BANGBOO_MONTHLY": run_zzz_bangboo_monthly_background,
 }
 
 # 本批次已检查过月商店的游戏（批次开始时清空）。
