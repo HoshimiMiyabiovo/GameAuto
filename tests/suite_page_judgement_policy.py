@@ -55,6 +55,8 @@ REGISTRY = {
     ("baijing_fitting.py", "_is_result_page"): "「作战完成」AND「达成波次」双证据",
     ("baijing_fitting.py", "_is_reward_page"): "「新物品已存入」AND「点击屏幕继续」双证据（后者单独会在别的过场出现）",
     ("baijing_fitting.py", "_is_item_popup_page"): "物品详情浮层「获取方式」AND「库存」双证据（结构词不随物品名变；2026-11-08 实锤帧 ref_baijing_fitting_item_popup_20261108.jpg）",
+    # 2026-11-15 白荆「联合训练场」入口层：实机帧 ref_baijing_joint_{center,zones}_20261115.png
+    ("baijing_joint_training.py", "_is_joint_zone_page"): "防区页：标题含「联合训练」AND body 独有词（防区未完成/防区推演进度）≥1；外勤 hub 页的「联合训练场」是标题超集但永无 body 词，互斥成立（防区全领后「防区未完成」消失、「防区推演进度」仍在）",
 }
 
 FAILURES = []

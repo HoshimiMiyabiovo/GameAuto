@@ -1619,6 +1619,11 @@ def _make_stop_check_with_heartbeat(controller):
             except Exception:
                 # 心跳上报失败不能影响停止判定（beat 只是时间戳写入，实际不会抛）
                 pass
+        # 看门狗止损只中止当前任务，也要让白荆流程的等待循环响应；
+        # 有控制器方法时优先走它，老调用方/测试桩仍回退到原始标志。
+        task_abort = getattr(controller, "_task_abort_requested", None)
+        if callable(task_abort):
+            return bool(task_abort())
         return bool(getattr(controller, "stop_current_task", False))
 
     return _stop_and_beat
@@ -1730,6 +1735,29 @@ def run_baijing_full_flow(config: dict, logger: logging.Logger, controller=None)
                 logger.info(fitting_line)
         except Exception as e:
             logger.warning(f"[白荆回廊] 拟合回归阶段异常: {e}")
+
+        # 4.6) 联合训练场（2026-11-15 入口层）：只读侦察——外勤 → 联合训练场 →
+        #      防区状态识别取证；摆队（队长不可重复）/每周结算领取等实机取证
+        #      后接入（phase 2）。分支失败不连坐（同回声猎区口径）。
+        try:
+            from .baijing_joint_training import run_joint_training_recon
+
+            joint = run_joint_training_recon(logger, hwnd, stop_check=stop_check)
+            _record_baijing_task(
+                logger,
+                "joint_training",
+                "联合训练场",
+                joint.get("status", "skipped"),
+                joint.get("detail", ""),
+                extra={
+                    k: joint[k]
+                    for k in ("zones", "countdown", "entered", "returned_main")
+                    if joint.get(k) is not None
+                },
+            )
+            logger.info(f"[白荆回廊] 联合训练场：{joint.get('status')} {joint.get('detail')}")
+        except Exception as e:
+            logger.warning(f"[白荆回廊] 联合训练场阶段异常: {e}")
 
         if stop_check and stop_check():
             _close_baijing_game(logger)

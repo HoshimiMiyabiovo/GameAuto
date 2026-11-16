@@ -90,6 +90,17 @@ PROFILE = GameProfile(
         # ok-ww.exe 只是 pyappify 包装器（参考异环 ok-nte 同款坑）：
         # 包装器先退，真正干活的 pythonw 引擎按名杀不到，只能按命令行补刀，
         # 否则一条龙结束后引擎一直活着（实测 1.6G 常驻）。
+        # 鸣潮启动链 (重要)：prelaunch_flow="WuwaLauncher" 先走官方启动器。
+        # 收尾清理官方启动器（2026-11-15 实锤事故）：launcher.exe 拉起后主进程是
+        # launcher_main.exe（PID 不同），且装在**独立目录**（不在游戏目录）——
+        # _sweep_post_close_launcher_once 的"游戏目录扫 *launcher*.exe"够不到它，
+        # 不配置就会在任务结束后残留、过一会儿自我激活拉到前台，遮挡下一个游戏
+        # （09:27 鸣潮收尾杀漏 → 09:35 暖暖游戏窗口 100% 被遮挡，任务失败）。
+        # cleanup_processes = 任务各杀点（收尾/止损/启动前清理）立即杀；
+        # close_launcher_processes = 收尾 4s 轮询扫杀（覆盖"游戏关掉后过几秒
+        # 启动器才自我激活"的延迟场景）。杀启动器对进入游戏无影响（游戏已独立运行）。
+        "cleanup_processes": ["launcher.exe", "launcher_main.exe"],
+        "close_launcher_processes": ["launcher.exe", "launcher_main.exe"],
         "cleanup_cmd_patterns": [
             {"name": "pythonw.exe", "cmdline": "ok-ww"},
         ],

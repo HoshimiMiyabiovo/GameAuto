@@ -23,6 +23,12 @@
 转成 FailSafeAborted 抛出，本层收口成 should_stop_batch=True——优雅终止整批、
 不重试不继续，绝不裸抛 traceback。
 
+**看门狗契约（2026-11-16）**：任务线程心跳超时是单任务级事故，
+`AutomationController.watchdog_aborted_task` 只让当前任务的等待循环退出；
+批次停止仍只认 `stop_current_task`（用户主动停止/FailSafe）。任务返回后
+`_settle_watchdog_abort` 把看门狗止损收口成"本任务失败"，后续任务和统一
+重试照常进行，绝不让一个卡死的游戏带崩整批。
+
 关键数据结构：TaskAppResult（单任务结果，state: success/failed/skipped/warning）、
 TaskBatchHooks（bridge 注入的进度回调）、TaskBatchResult（report 行 + warnings）。
 """
@@ -71,6 +77,30 @@ def _interruptible_sleep(controller, seconds: float, step: float = 1.0):
     while seconds > 0 and not controller.stop_current_task:
         time.sleep(min(step, seconds))
         seconds -= step
+
+
+def _settle_watchdog_abort(controller, success: bool, message: str):
+    """任务已退出后收口看门狗止损：只判死本任务，不扩散到整批。
+
+    2026-11-16 实跑事故：看门狗原先直接写批次级 stop_current_task，
+    这里便把鸣潮算作 stopped（用户终止）并静默 break，后面 6 个游戏全没跑。
+    现在看门狗只置 `watchdog_aborted_task` 让当前任务的等待循环退出，
+    任务结果回来后在这里清掉标志、强制失败并去掉"用户终止"字样，
+    使其进入统一重试，后续任务照常执行。
+    """
+    if not getattr(controller, "watchdog_aborted_task", False):
+        return success, message
+    controller.watchdog_aborted_task = False
+    controller.logger.warning(
+        "[一条龙] 当前任务被心跳看门狗止损，按本任务失败处理；后续任务继续"
+    )
+    message = str(message or "")
+    # execute_task 在任务级中止时可能返回"用户终止"，那是看门狗触发的，
+    # 不能让下面的 stopped 判定再次把这个任务当成用户停止。
+    message = message.replace("用户终止", "看门狗止损").replace("快捷键", "看门狗止损")
+    if "看门狗止损" not in message:
+        message = f"{message}（任务线程心跳超时，看门狗止损）"
+    return False, message
 
 
 def _is_game_script_done_today(app_key: str) -> bool:
@@ -1029,6 +1059,10 @@ def _run_single_task(
                 stop_check=lambda: controller.stop_current_task,
             )
 
+    # 看门狗止损在单任务层收口：ok 脚本分支和常规分支都会走到这里。
+    # 清掉任务级中止标志、本任务判失败；stop_current_task（用户停止整批）不动。
+    success, message = _settle_watchdog_abort(controller, success, message)
+
     bettergi_summary = None
     if app_key == "GenshinImpact":
         bettergi_summary = bettergi_monitor.build_summary() if bettergi_monitor is not None else None
@@ -1226,6 +1260,8 @@ def run_task_batch(
     # 在下方 controller.stop_current_task 检查时直接返回空批次，表现为"刚启动就自动停止"；
     # 完整重启程序会新建 controller 从而恢复，历史上即"重启程序恢复"。
     controller.stop_current_task = False
+    # 任务级看门狗标志也要清：上一批次若在止损后异常退出，不能带进新批次。
+    controller.watchdog_aborted_task = False
 
     # 新批次开始：本批次已检查过月商店的游戏清空（收尾补漏要用）。
     _MONTHLY_CHECKED.clear()

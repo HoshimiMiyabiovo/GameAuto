@@ -8,6 +8,10 @@
 > （2025-02 萌芽 → 前身项目 → ok-* 脚本群 → 重构）归档到
 > [notes/ai-dev-history-202611.md](notes/ai-dev-history-202611.md)。
 
+## 2026-11-16
+
+- 修看门狗止损带崩整批（用户怒斥「一个任务带崩整个批次」）：11-16 鸣潮 ok-ww 启动卡死触发心跳看门狗，回调原先写批次级 `stop_current_task`，被 task_batch_runner 当成用户停止，把鸣潮判 stopped 后静默 break，后面 6 个游戏全没跑且没统一重试。现在看门狗只置任务级 `watchdog_aborted_task`，控制器等待循环统一看 `_task_abort_requested()`，`_settle_watchdog_abort` 在任务返回后收口为本任务失败并清标志，后续任务与重试照常；用户主动停止/FailSafe 仍整批终止。回归 `tests/suite_watchdog_task_scope_20261116.py` 24 项 ALL PASS。
+
 ## 2026-11-15
 
 - 修展示页详情头模型重复渲染（用户截图反馈）：上游 note 里的「模型：xxx」单值经别名替换后，与新增的模型徽标内容重复，且换模型会话里 note 只记首个模型会与主模型矛盾。`viewer_template.html` 的 `aliasNote()` 现在按 `｜` 分段、剥掉 `^模型[：:]` 纯模型段，其它 note（网页版导出/来源说明等）原样保留；`open()` 用 `noteText` 局部变量，空串时不渲染空 span。给 `tools/ai_history_model_inject.py` 加 `--rebuild`（默认幂等只换数据块，模板渲染逻辑改动必须强制按模板重建），并用它重生成 `AI对话全览.html`。核查 52 个含模型的 note 全是纯模型段、444 个其它 note 不受影响；验证 B64 与备份 sha 逐字节一致、aliasNote 五组输入输出符合预期、两个数据块可解析、页面主脚本 node --check、py_compile/ruff 通过；模板与页面各留 `.bak_20261115_pre_note`。
@@ -249,3 +253,5 @@
 - ok-ww v3.8.3 并行试验版落地 `data/okww/gui-3.8.3-ws/`：复查实锤角色代码引擎未删、上游只摘了 config.py 的 `custom_tabs` 注册；恢复注册 + 工坊三函数改本地镜像优先（远端 cfokwwchar/okwwcharcode/char-code 仓库均已下线，用 11-04 全仓镜像裁剪出现役两队 6 轴的精简镜像）+ D 盘 v3.7.13 现役 custom_teams 原样迁入。离线探针四项全过、GUI 冒烟零 Traceback，与现役安装并行共存待人工点验（明细见 conventions/08-game-config.md「工坊复活」节）。
 - 一条龙的鸣潮脚本切到 ok-ww v3.8.3：在 `data/okww/ok-ww-v3.8.3/` 用现役 v1.4.81 壳拼出正规 pyappify 安装（working=补丁树/repo=纯 v3.8.3/内嵌 python 清 site-packages 后由 uv 重装 3.8.3 锁定依赖——pip 走清华 IPv6 会挂 CloseWait 空转），壳冒烟通过后由 `_okww_flip_appconfig_20261115.py` 切 app_config 四字段（双备份，D 盘 v3.7.13 未动随时回滚）。
 - ok-ww v3.8.3 转正验收通过：一条龙实跑鸣潮日常正常完成（任务完成标记 + 日志监控路径生效），D 盘 v3.7.13 退役为回滚备份。
+- 白荆回廊「联合训练场」入口层落地（新活动 联合训练·捷速难逃，至 2026-12-21）：新增 `runtime/baijing_joint_training.py` 只读侦察流（外勤→联合训练场→防区页识别：未完成防区数/总进度 0%/180%/活动结束与解锁文案），挂 baijing_flow 4.6 步失败不连坐，daily 卡片加 joint_training 占位。玩法口径（用户 11-15）：每周结算（周一 04:00）、纯挂机无战斗、摆队约束队长不可重复；防区页判定 `_is_joint_zone_page` 双证据已登记 policy REGISTRY。摆队/结算领取等实机取证后做 phase 2。py_compile/ruff 过，实机验证随下次一条龙。
+- 修鸣潮收尾杀漏官方启动器（2026-11-15 事故：09:27 鸣潮收尾未杀 launcher_main.exe → 启动器残留并自我激活拉前台 → 09:35 暖暖游戏窗口 100% 被遮挡任务失败）：`games/wuwa.py` default_app 补 `cleanup_processes`（任务各杀点立即杀）+ `close_launcher_processes`（收尾 4s 轮询扫杀）双键含 launcher.exe/launcher_main.exe——启动器装独立目录，`_sweep_post_close_launcher_once` 的游戏目录扫描天生够不到，不配置三路候选全空；`_cooldown_before_next_task` 系死代码无调用点。回归 `tests/suite_wuwa_launcher_cleanup_20261115.py`（模板/生效配置 merge/两杀点行为/sweep 行为）。

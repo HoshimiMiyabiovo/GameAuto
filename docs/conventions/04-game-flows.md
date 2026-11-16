@@ -329,6 +329,22 @@ This file mirrors important repository-level development notes inside the projec
   运行时固定 `data/okww/src`（v3.7.17），`configs` 用 junction 指向现有安装；
   旧链路保留，改回 false 即回滚。输入节流和验收口径见
   `docs/鸣潮自动战斗脚本编写流程.md` 第 13 节。
+- **收尾必须清理官方启动器（2026-11-15 事故固化）**：官方启动器 launcher.exe
+  （主进程 launcher_main.exe，装**独立目录**）在鸣潮任务收尾后残留，会自我
+  激活拉到前台遮挡下一个游戏——09:27 鸣潮收尾杀漏 → 09:35:20 暖暖启动时
+  「窗口归属不符已跳过: launcher_main.exe 标题=鸣潮」→ 09:35:38 暖暖游戏窗口
+  「被遮挡约 100%」失败（11:08 重试成功只是启动器已被关掉的时序运气）。
+  根因：`_kill_related_processes` 清单来源里 config["launcher"]（鸣潮没配）、
+  `cleanup_processes`（没配）；`_sweep_post_close_launcher_once` 三路候选
+  （launcher 键 / `close_launcher_processes` / **游戏目录扫 \*launcher\*.exe**）
+  全空——启动器不在游戏目录，第三路天生扫不到；`_cooldown_before_next_task`
+  的冷却期扫杀是死代码无调用点。修法：`games/wuwa.py` default_app 配
+  `cleanup_processes` + `close_launcher_processes` 双键（launcher.exe /
+  launcher_main.exe）——前者任务各杀点（含启动前预清理，时序在 prelaunch
+  之前安全）立即杀，后者收尾 4s 轮询扫杀覆盖延迟弹出。回归
+  `tests/suite_wuwa_launcher_cleanup_20261115.py`。**同款排查提示**：其它
+  用独立目录官方启动器的游戏（暖暖 xstarter.exe 等）如有同类遮挡事故，
+  照此配两个键即可。
 ### 无限暖暖进入主界面 (2026-10-22)
 
 - **接线状态**：2026-10-22 初次验证时默认不接线（一条龙由 whimbox 自己启动游戏）；
@@ -862,6 +878,24 @@ This file mirrors important repository-level development notes inside the projec
   17 组 ALL PASS、py_compile/ruff 过；实机证据（截图+会话日志）在 tmp_echo_takeover/
   （未跟踪）。仍待下批：E 重试（新编队）、「已清节点面板形态」仍未探明（面板
   「开始收录」在场与否仍是唯一真闸）。
+- **联合训练场入口层（2026-11-15 用户新增，`runtime/baijing_joint_training.py`）**：
+  新活动「联合训练·捷速难逃」（外勤作战中心 → 联合训练场，2026-12-21 结束）。
+  **玩法口径（用户 11-15）**：3 防区各 3 槽位摆队后**纯挂机推演**（无战斗），
+  总进度 0%/180%；**每周结算**（周一 04:00 周重置——hub 页「6小时54分后结算」
+  倒计时即距周一 04:00 的剩余时间）；摆队约束 **队长不可重复**；防区分期解锁
+  （11-18 04:00 解锁下一个）。**phase 1 只读侦察**（用户拍板「先实装入口层」）：
+  主界面 → 外勤（复用 fitting P_FIELD_ENTRY/field 判定）→ OCR 点「联合训练场」
+  入口（区域限定 (0.50,0.50,0.78,0.66)，实测 (1220,616)@1919x1080；**未命中=skip
+  不点击**）→ 防区页双证据判定 `_is_joint_zone_page`（标题含「联合训练」AND
+  body 独有词「防区未完成/防区推演进度」≥1——hub 的「联合训练场」是标题超集
+  但永无 body 词）→ 状态解析（未完成防区数/进度/结束与解锁文案）→ 快照 →
+  左上返回 → `_ensure_main_ui`。挂 `baijing_flow` 4.6 步（拟合回归之后），
+  失败不连坐；活动过期（EVENT_END=2026-12-21）直接 skip。**入口点击先点标签
+  再按比例点图标兜底**（echo boss 同款，每次点击后都有页面验证）。实机帧
+  `data/artifacts/ref_baijing_joint_{center,zones}_20261115.png` + OCR 转录
+  `ref_baijing_joint_ocr_20261115.json`；回归 `tests/suite_baijing_joint_training_20261115.py`。
+  **phase 2 待实机取证**：点「+」槽位后的选队页面（队长不可重复约束怎么落）、
+  结算/领取界面形态、`weekly_flow` 门控写入。
 - **有猫兑换每月购买**（`runtime/baijing_cat_exchange.py`，2026-10-25 用户新增需求）：
   「有猫零售 → 有猫兑换」页每月刷新，可以每月买点小东西；清单做成配置
   `app_config.json → baijing.cat_exchange.items`（2026-10-25 时待定；**2026-11-01 用户

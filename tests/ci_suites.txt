@@ -18,6 +18,7 @@ suite_baijing_club_activity_20261111.py
 suite_baijing_daily_fixes_20261020.py
 suite_baijing_fitting_20261107.py
 suite_baijing_gift_guard_20261025.py
+suite_baijing_joint_training_20261115.py
 suite_baijing_launcher_scope_20261102.py
 suite_baijing_memory_breakthrough_20261108.py
 suite_baijing_memory_level_tab_20261111.py
@@ -28,6 +29,7 @@ suite_baijing_tea_focus_20261107.py
 suite_baijing_tea_invite_20261103.py
 suite_baijing_tea_marker_20261025.py
 suite_baijing_tea_select_drink_20261107.py
+suite_wuwa_launcher_cleanup_20261115.py
 suite_baijing_update_prompt_20261105.py
 suite_bridge_batch_email_20261021.py
 suite_cj_script_update_20261107.py
@@ -95,6 +97,7 @@ suite_update_calendar_20261021.py
 suite_update_preflight_20261021.py
 suite_update_retry_crossday_20261111.py
 suite_view_release_20261101.py
+suite_watchdog_task_scope_20261116.py
 suite_weekly_flow_disabled_20261111.py
 suite_wool_workbuddy_20261029.py
 suite_wuwa_window_wait_20261102.py

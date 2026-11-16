@@ -74,6 +74,10 @@ class AutomationController:
     def __init__(self):
         self.logger = self._init_logger()
         self.stop_current_task = False
+        # 任务级中止标志（2026-11-16）：心跳看门狗只让当前卡死的任务退出，
+        # 绝不能写 stop_current_task——那是"用户停止整批"的语义，写了会让
+        # task_batch_runner 把当前任务算作 stopped 并静默 break 掉后续所有游戏。
+        self.watchdog_aborted_task = False
         # ok-ww 模块化 runner（阶段 1：DailyTask）。保持 None 时走旧的可执行文件链路。
         self._module_session = None
         self._module_task_thread = None
@@ -91,6 +95,18 @@ class AutomationController:
             ),
         )
         self.logger.info("键盘检测与快捷键监听功能已禁用")
+
+    def _task_abort_requested(self) -> bool:
+        """当前任务是否该退出。
+
+        用户点停止（整批）和看门狗止损（仅本任务）都算；批次调度层只读
+        `stop_current_task`，因此看门狗不会连坐后面的任务。
+        """
+        # 既有测试桩常用 __new__ 绕过构造，两个标志都要防御式读取。
+        return bool(
+            getattr(self, "stop_current_task", False)
+            or getattr(self, "watchdog_aborted_task", False)
+        )
 
     def _init_logger(self):
         logger = logging.getLogger("GameAutomation")
@@ -436,7 +452,7 @@ class AutomationController:
         updating_announced = False
         while True:
             now = time.time()
-            if self.stop_current_task:
+            if self._task_abort_requested():
                 return None, ""
 
             snapshot = ProcessSupervisor.find_process_snapshot(configured_name, exact_name=True)
@@ -638,7 +654,7 @@ class AutomationController:
             return True, ""
 
         self.logger.info(f"[{game_display}] 执行前置启动流程: {flow_key}")
-        ok, msg = run_flow(self.logger, flow_key, stop_check=lambda: self.stop_current_task)
+        ok, msg = run_flow(self.logger, flow_key, stop_check=self._task_abort_requested)
         if ok:
             self.logger.info(f"[{game_display}] 前置启动流程完成: {msg}")
         else:
@@ -743,7 +759,7 @@ class AutomationController:
         last_report = 0.0
         last_state = ""
         while time.time() < deadline:
-            if self.stop_current_task:
+            if self._task_abort_requested():
                 return False
             # 长等待循环必须每轮打心跳（06-robustness 口径）：等预算
             # game_window_wait_sec 默认 300s，叠加 prelaunch 可超看门狗阈值
@@ -922,7 +938,7 @@ class AutomationController:
         """
         remaining = max(0.0, float(seconds))
         while remaining > 0:
-            if self.stop_current_task:
+            if self._task_abort_requested():
                 self.logger.info("[启动] 初始化等待期间收到停止请求，提前结束等待")
                 return
             self._watchdog_beat()
@@ -966,7 +982,7 @@ class AutomationController:
             launcher_stem = os.path.splitext(launcher_name)[0]
             is_script_file = launcher_name.lower().endswith((".bat", ".cmd", ".py"))
             while time.time() - start_time < 10:
-                if self.stop_current_task:
+                if self._task_abort_requested():
                     # 用户停止：不再空等进程发现窗口（最多 10s+20s initial_wait），
                     # 脚本已拉起的收尾交给调用方的既有停止链路
                     self.logger.info("[启动] 等待脚本进程期间收到停止请求，提前结束启动等待")
@@ -1103,7 +1119,7 @@ class AutomationController:
             session = OkwwModuleSession.from_app_config(
                 config, event_callback=self._on_module_event
             )
-            session.start(stop_check=lambda: self.stop_current_task)
+            session.start(stop_check=self._task_abort_requested)
         except Exception as exc:  # noqa: BLE001
             self.logger.error(
                 "[%s] ok-ww 模块 runner 启动失败: %s", game_display, exc
@@ -1140,7 +1156,7 @@ class AutomationController:
         if initial_wait:
             deadline = time.time() + initial_wait
             while time.time() < deadline:
-                if self.stop_current_task:
+                if self._task_abort_requested():
                     self.logger.info("[%s] 模块 runner 初始化等待中收到停止请求", game_display)
                     try:
                         session.stop()
@@ -1252,7 +1268,7 @@ class AutomationController:
 
         while True:
             duration = int(time.time() - start)
-            if self.stop_current_task:
+            if self._task_abort_requested():
                 self.logger.info("[%s] 收到停止请求，结束 ok-ww 模块任务", game_display)
                 session = self._module_session
                 if session is not None:
@@ -1372,7 +1388,7 @@ class AutomationController:
             self.logger.debug(f"等待目标程序启动... (已等待: {elapsed}s, 剩余: {remaining}s)")
             time.sleep(CHECK_INTERVAL)
            
-            if self.stop_current_task:
+            if self._task_abort_requested():
                 self.logger.info("检测到终止请求，停止启动过程")
                 return False, None
         self.logger.warning(f"未检测到目标窗口或进程 (等待超时: {timeout}秒)")
@@ -1425,7 +1441,7 @@ class AutomationController:
             progress_hint=progress_hint,
         )
         if game_snapshot is None:
-            if self.stop_current_task:
+            if self._task_abort_requested():
                 self._kill_related_processes(config, script_pid, runtime_processes=runtime_processes)
                 return False, 0, "user_stop"
             if wait_reason == "updating":
@@ -1461,7 +1477,7 @@ class AutomationController:
             )
 
         while time.time() - start_time < monitor_timeout:
-            if self.stop_current_task:
+            if self._task_abort_requested():
                 self.logger.info("检测到快捷键终止请求，结束当前任务")
                 self._kill_related_processes(config, script_pid, runtime_processes=runtime_processes)
                 duration = int(time.time() - start_time)
@@ -1780,7 +1796,7 @@ class AutomationController:
         self.logger.info(f"[{app_key}] 任务间隔冷却 {int(delay_sec)} 秒，期间持续清理残留启动器窗口")
         elapsed = 0.0
         while elapsed < delay_sec:
-            if self.stop_current_task:
+            if self._task_abort_requested():
                 self.logger.info(f"[{app_key}] 冷却期间用户请求停止，提前结束间隔")
                 break
             self._sweep_post_close_launcher_once(app_cfg, {})
@@ -1811,7 +1827,9 @@ class AutomationController:
                 f"[{game_display}] 任务线程心跳超时，强制结束任务"
                 "（现场栈已写入 watchdog_task_heartbeat.log）"
             )
-            self.stop_current_task = True
+            # 只中止本任务：写 stop_current_task 会被批次层当成"用户停止整批"，
+            # 导致后面的游戏全部静默不跑（2026-11-16 实跑事故）。
+            self.watchdog_aborted_task = True
             try:
                 self._kill_related_processes(
                     config, script_pid, runtime_processes=runtime_processes
@@ -1835,7 +1853,7 @@ class AutomationController:
             # 关闭窗口时又启动一次 BetterGI，表现为"关不掉、还在开脚本"。
             # 新批次由 run_task_batch 入口统一清除停止标志。
             self._cleanup_key_listener()
-            if self.stop_current_task:
+            if self._task_abort_requested():
                 self.logger.info(f"[{game_display}] 启动前收到停止请求，直接退出")
                 return False, "用户终止", 0
             _clear_parked_failsafe_cursor(self.logger)
@@ -1881,7 +1899,7 @@ class AutomationController:
                         f"已提前止损（不拉脚本空跑，游戏进程保留）"
                     ), 0
 
-            if self.stop_current_task:
+            if self._task_abort_requested():
                 # 关闭窗口/点停止时，prelaunch 可能已经跑完；绝不在这里再启动脚本
                 self.logger.info(f"[{game_display}] 拉脚本前收到停止请求，不再启动脚本")
                 return False, "用户终止", 0
@@ -1947,7 +1965,7 @@ class AutomationController:
                 self.logger.info(f"[{game_display}] 启动后检查游戏是否停留在「进入游戏」界面...")
                 try:
                     entered, enter_msg = ensure_game_main(
-                        self.logger, stop_check=lambda: self.stop_current_task
+                        self.logger, stop_check=self._task_abort_requested
                     )
                 except Exception as exc:
                     entered, enter_msg = True, f"检查异常，按原流程继续: {exc}"
@@ -1974,8 +1992,8 @@ class AutomationController:
                     self._kill_related_processes(config, script_pid, runtime_processes=runtime_processes)
                 except Exception as exc:
                     self.logger.warning("[%s] 兜底清理残留进程失败: %s", game_display, exc)
-                if self.stop_current_task:
-                    status = "用户终止"
+                if self._task_abort_requested():
+                    status = "看门狗止损" if self.watchdog_aborted_task else "用户终止"
                     self.logger.info(f"\n{'='*40}\n[{game_display}] 任务结束: {status} (脚本: {script_display}, 运行时间: {duration//60}分{duration%60}秒)\n{'='*40}")
                     return False, status, duration
                 if not ok_full:
@@ -1987,7 +2005,7 @@ class AutomationController:
                 else:
                     status = "成功"
                 self.logger.info(f"\n{'='*40}\n[{game_display}] 任务结束: {status} (脚本: {script_display}, 运行时间: {duration//60}分{duration%60}秒)\n{'='*40}")
-                success = duration >= MIN_RUN_TIME and not self.stop_current_task
+                success = duration >= MIN_RUN_TIME and not self._task_abort_requested()
                 return success, status, duration
 
             # 监控游戏进程 / ok-ww 模块任务
@@ -2014,8 +2032,8 @@ class AutomationController:
             # MIN_RUN_TIME；DailyTask 2-4 分钟完成是正常现象。
             if self._module_mode_active(config):
                 result = self._module_task_result
-                if self.stop_current_task:
-                    status = "用户终止"
+                if self._task_abort_requested():
+                    status = "看门狗止损" if self.watchdog_aborted_task else "用户终止"
                 elif monitor_result:
                     status = "成功"
                 elif result is not None and result.error:
@@ -2026,7 +2044,7 @@ class AutomationController:
                     f"\n{'='*40}\n[{game_display}] 任务结束: {status} "
                     f"(模块: {getattr(result, 'task', 'ok-ww')}, 运行时间: {duration//60}分{duration%60}秒)\n{'='*40}"
                 )
-                return monitor_result and not self.stop_current_task, status, duration
+                return monitor_result and not self._task_abort_requested(), status, duration
 
             # ok-ww（鸣潮）特例：日常 2-4 分钟就能跑完，MIN_RUN_TIME(300s) 的
             # "运行时间过短"全是误报。游戏是自己退的（end_reason=game_exited，
@@ -2046,8 +2064,8 @@ class AutomationController:
                     )
 
             status = ""
-            if self.stop_current_task:
-                status = "用户终止"
+            if self._task_abort_requested():
+                status = "看门狗止损" if self.watchdog_aborted_task else "用户终止"
             elif end_reason == "launch_timeout":
                 status = "启动超时"
             elif end_reason == "updating":
@@ -2067,7 +2085,7 @@ class AutomationController:
             success = (
                 monitor_result
                 and (duration >= MIN_RUN_TIME or wuwa_script_done)
-                and not self.stop_current_task
+                and not self._task_abort_requested()
             )
             return success, status, duration
         

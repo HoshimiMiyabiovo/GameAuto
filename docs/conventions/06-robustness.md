@@ -15,8 +15,14 @@
 **任务鲁棒性三层防护（任务线程卡死不再无声无息）**：
 1. **日志队列化**（`automation_controller._init_logger`）：GameAutomation logger 只挂 QueueHandler，写盘/UI 转发由 QueueListener 消费线程执行。盘 IO 卡住只卡消费线程，业务线程 `logger.*` 永不阻塞（冒烟：10 条日志入队 0.3ms vs 同步写 20s）
 2. **watcher 读超时**（`services.utils.read_file_with_timeout`）：四套日志监控（script_error_log_monitor / ok_ww_log_monitor / bettergi_log_monitor / whimbox_log_monitor）的 open/read 全部带超时（默认 10s，配置键 `read_timeout`），超时放弃本轮、offset 不退，下轮重试；读线程 daemon 化，挂起不拖累进程退出。2026-11-09 审计发现 bettergi/whimbox 两套漏接（裸 read 在坏盘 IO 时钉死监控线程——原神 fail-closed 必败、暖暖完成回调丢失），已补齐。**新增第五套监控时必须同样接 `read_file_with_timeout`**
-3. **任务线程心跳看门狗**（`services/task_heartbeat_watchdog.py`）：`_monitor_game` 循环每轮 `beat()`，超过 `task_heartbeat_timeout_sec`（默认 600s，远大于 CHECK_INTERVAL=10s）无心跳 → dump 全线程栈到 watchdog.log + 置 stop_current_task + 杀进程树。与 hang_watchdog（只盯主线程）互补——**主线程 QTimer 照常心跳时任务线程卡死的场景以前完全无感**
+3. **任务线程心跳看门狗**（`services/task_heartbeat_watchdog.py`）：`_monitor_game` 循环每轮 `beat()`，超过 `task_heartbeat_timeout_sec`（默认 600s，远大于 CHECK_INTERVAL=10s）无心跳 → dump 全线程栈到 watchdog.log + 置**任务级** `watchdog_aborted_task` + 杀进程树。与 hang_watchdog（只盯主线程）互补——**主线程 QTimer 照常心跳时任务线程卡死的场景以前完全无感**
 - 已验证：入队不阻塞 / 读超时返回 / 看门狗触发+栈落盘 / 持续 beat 不误触发，全部 PASS
+### 看门狗止损只管当前任务，不许连坐整批 (2026-11-16 实跑事故)
+
+- **事故**：鸣潮 ok-ww 启动调用卡在 ShellExecuteW，看门狗 606s 无心跳止损；因为回调直接写批次级 `stop_current_task=True`，`task_batch_runner` 把鸣潮判成 `state=stopped`（用户终止）并在 `should_stop_batch` 分支静默 break——后面的终末地/暖暖/白荆/薅羊毛/异环/CJFlow 六个游戏一个没跑，统一重试也被 stop 标志挡掉。日志里甚至没有"用户已请求停止"，因为 break 发生在下一轮循环检查之前。
+- **口径**：`stop_current_task` = 用户主动停止/FailSafe，才是整批语义；看门狗改置 `AutomationController.watchdog_aborted_task`，控制器内部所有等待/停止检查统一走 `_task_abort_requested()`（用户停止 OR 看门狗），白荆 `baijing_flow._stop_and_beat` 同样透传。
+- **收口**：`_run_single_task` 在单任务结果回来后调 `_settle_watchdog_abort`：清掉任务级标志、强制本任务 `failed`、把 execute_task 可能因任务级中止返回的"用户终止/快捷键"改成"看门狗止损"，使 `stopped=False`。这样后续任务照跑、失败项进入统一重试；用户同时点停止时 `stop_current_task` 保留，整批仍停。
+- 新批次入口会同时清两个标志，避免上批异常退出遗留。回归 `tests/suite_watchdog_task_scope_20261116.py`（5 组行为测试，含真 `_run_single_task` 路径）。
 ### 脚本报错日志监控（ok- 系 pyappify 脚本）(重要)
 
 - **pyappify 壳脚本有两套日志目录，监控必须指对**：
