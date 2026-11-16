@@ -214,6 +214,19 @@ class OkwwModuleSession:
             str(self.paths.humanize_config),
         ]
         env = os.environ.copy()
+        # 剥掉继承来的项目 src/ 路径：GUI 由 start_gui_admin.bat 启动时把
+        # <项目>/src 塞进 PYTHONPATH，runner 用 ok-ww 内嵌 python 跑，一旦继承
+        # 这个路径，ok-ww 引擎 `import onnxocr` 就会命中本项目的 src/onnxocr
+        # （硬依赖 onnxruntime，内嵌 python 没装）而非 ok-ww 自带的 openvino 版，
+        # DailyTask 55s 后报 "No module named 'onnxruntime'"（2026-11-16 实锤）。
+        # runner 本身只有标准库 import（协议不依赖 game_auto），不需要项目路径。
+        _project_src = str(Path(__file__).resolve().parents[2]).replace("/", "\\").rstrip("\\").lower()
+        _kept = []
+        for _entry in env.get("PYTHONPATH", "").split(os.pathsep):
+            _e = _entry.replace("/", "\\").strip().rstrip("\\").lower()
+            if _e and _e != _project_src:
+                _kept.append(_entry)
+        env["PYTHONPATH"] = os.pathsep.join(_kept)
         env.setdefault("PYTHONIOENCODING", "utf-8")
         env.setdefault("PYTHONUTF8", "1")
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)

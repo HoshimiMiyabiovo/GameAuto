@@ -96,8 +96,17 @@ storage/cache/
 
 # Perch MCP 项目笔记（工具自动生成，不入库）
 .perch/
+# CodeArts Agent 本地工具状态目录（2026-11-16 出现在根目录，纯会话配置不入库）
+.arts/
+.codeartsdoer/
 
 # SQLite WAL/SHM 运行时残留（主库 *.sqlite3 已在 /data/ 忽略；-wal/-shm 是
 # 连字符后缀而非点号，/data/*.sqlite3.* 匹配不到，补一刀兜住任意位置）
 *.sqlite3-wal
 *.sqlite3-shm
+
+# 测试临时目录兜底（2026-11-16：tempfile.mkdtemp/pytest tmp_path 在 TMP 环境变量
+# 缺失时会落到 cwd，跑几轮全量就在项目根堆 tmp*/ 和 pytest-of-*/；套件侧已修
+# 清理，这里再兜一层防误提交）
+/tmp*/
+/pytest-of-*/

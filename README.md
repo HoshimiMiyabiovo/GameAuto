@@ -66,6 +66,7 @@ setup_deps.bat
 
 # 3. 先自检：不提权、不启动游戏、不写个人配置，能立刻看到环境是否装好
 .venv\Scripts\python.exe -m pytest tests -q
+#    默认跑 fast 档（约 2 分钟）；要跑含真机套件的全量用 GAMEAUTO_TEST_TIER=full
 
 # 4. 启动（会弹 UAC；启动时只检查依赖，缺包会提示运行 setup_deps.bat；随后进入配置向导）
 ```
@@ -189,8 +190,10 @@ set PYTHONPATH=%CD%\src
 重复踩坑的工程约定（依赖新增规则、日志规则、QML 兼容性避坑、米哈游协议已验证事实等）按主题记录在 [AGENTS.md](AGENTS.md)（索引）与 `docs/conventions/`，改代码前先看对应分篇；每次改动在 [docs/changelog.md](docs/changelog.md) 追加一行。
 
 ```bash
-# 纯逻辑回归套件（tests/suite_*.py，逐个子进程隔离）
+# 快回归（tests/suite_*.py 逐个子进程隔离，默认 fast 档约 2 分钟，结尾打印最慢 10 项）
 .venv\Scripts\python.exe -m pytest tests -q
+# 真机/慢套件全量（十几分钟，显式 opt-in）
+set GAMEAUTO_TEST_TIER=full && .venv\Scripts\python.exe -m pytest tests -q
 
 # 静态检查（E9 / F821 / E722 窄规则集）
 .venv\Scripts\ruff.exe check .

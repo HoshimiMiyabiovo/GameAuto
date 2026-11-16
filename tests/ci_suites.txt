@@ -33,7 +33,6 @@ suite_wuwa_launcher_cleanup_20261115.py
 suite_baijing_update_prompt_20261105.py
 suite_bridge_batch_email_20261021.py
 suite_cj_script_update_20261107.py
-suite_codearts_wool_20261116.py
 suite_config_lock_robustness_20261109.py
 suite_confirm_button_guard_20261107.py
 suite_confirm_disappear_poll_20261021.py
@@ -75,8 +74,10 @@ suite_nte_monthly_20261101.py
 suite_nte_reward_popup_20261105.py
 suite_ocr_structured_match_20261031.py
 suite_okww_module_20261104.py
+suite_okww_module_pythonpath_20261116.py
 suite_onnxocr_precision_20261107.py
 suite_page_judgement_policy.py
+suite_popup_dismisser_20261116.py
 suite_prelaunch_cleanup_20261031.py
 suite_qoder_reload_20261114.py
 suite_readme_bootstrap_20261107.py

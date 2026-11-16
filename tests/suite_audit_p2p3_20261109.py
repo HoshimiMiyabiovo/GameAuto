@@ -253,24 +253,27 @@ def test_watchdog_generation_behavior():
     print("[8] 看门狗代际行为（动态）")
     from game_auto.services.task_heartbeat_watchdog import TaskHeartbeatWatchdog
     import logging as _log
-    w = TaskHeartbeatWatchdog(_log.getLogger("GameAutomation"), Path(tempfile.mkdtemp()) / "dump.log")
-    fired = []
-    w._task_key, w._task_label = "old", "old"
-    w._stall_callback = lambda k, l: fired.append(("old", k))
-    w._generation = 1
-    # 模拟：dump 完成前 stop()+新任务 start()（代际前进到 2）
-    w._on_stall("old", "old", 600.0, w._stall_callback, generation=1)
-    with w._lock:
-        w._generation = 2
-    w._on_stall.__self__  # no-op
-    # 先置旧代际（新任务 start 已把 _generation 推到 2），旧回调代际=1 → 应放弃
-    fired.clear()
-    w._on_stall("old", "old", 600.0, w._stall_callback, generation=1)
-    check("旧代际回调被放弃", fired == [], fired)
-    # 当前代际回调正常执行
-    cb = lambda k, l: fired.append(("cur", k))
-    w._on_stall("new", "new", 600.0, cb, generation=2)
-    check("当前代际回调正常击发", fired and fired[0][0] == "cur")
+    # 裸 mkdtemp() 无前缀且无人回收；Git Bash TEMP=/tmp 下 tempfile 回退 cwd，
+    # 每轮全量就在项目根漏一个 tmp*/dump.log（2026-11-16 实锤 17 个）。
+    with tempfile.TemporaryDirectory() as td:
+        w = TaskHeartbeatWatchdog(_log.getLogger("GameAutomation"), Path(td) / "dump.log")
+        fired = []
+        w._task_key, w._task_label = "old", "old"
+        w._stall_callback = lambda k, l: fired.append(("old", k))
+        w._generation = 1
+        # 模拟：dump 完成前 stop()+新任务 start()（代际前进到 2）
+        w._on_stall("old", "old", 600.0, w._stall_callback, generation=1)
+        with w._lock:
+            w._generation = 2
+        w._on_stall.__self__  # no-op
+        # 先置旧代际（新任务 start 已把 _generation 推到 2），旧回调代际=1 → 应放弃
+        fired.clear()
+        w._on_stall("old", "old", 600.0, w._stall_callback, generation=1)
+        check("旧代际回调被放弃", fired == [], fired)
+        # 当前代际回调正常执行
+        cb = lambda k, l: fired.append(("cur", k))
+        w._on_stall("new", "new", 600.0, cb, generation=2)
+        check("当前代际回调正常击发", fired and fired[0][0] == "cur")
 
 
 def test_rag_build_atomic():

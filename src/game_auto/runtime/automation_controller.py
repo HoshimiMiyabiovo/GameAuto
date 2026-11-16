@@ -50,6 +50,35 @@ WRAPPER_PROCESS_NAMES = {
 # 不等超时直接结束本轮。task_batch_runner 认这个字符串记为 skipped（不失败、不重试）。
 GAME_UPDATING_SKIP = "游戏更新中，跳过"
 
+
+def clear_motw_marker(path: str) -> bool:
+    """清除单个文件的 MOTW（Mark of the Web）Zone.Identifier 备用数据流。
+
+    Windows 给从网络下载的文件打上 Zone.Identifier ADS；ShellExecuteW 拉起这类
+    可执行文件时弹「打开文件 - 安全警告」，必须有人点「运行」才继续。无人值守
+    的一条龙里没人点，ShellExecuteW 会一直阻塞——2026-11-16 鸣潮实测挂 2351 秒
+    后返回 SE_ERR_ACCESS_DENIED(5)，整批被拖垮。gameauto 本身是管理员进程，
+    删这个 ADS 不需要额外提权，启动前顺手清掉即可。
+
+    只处理传入的目标文件：pyappify 壳内部再拉起的 pythonw 不经过 ShellExecuteW、
+    不会弹这个窗，没必要递归改整个第三方脚本目录（避免动到用户数据）。
+
+    Args:
+        path: 待启动文件（exe/bat/cmd/py）的完整路径。
+
+    Returns:
+        bool: 确实删掉了一个 Zone.Identifier 返回 True；本来就没有、路径不存在、
+        或非 Windows 返回 False。异常一律吞掉——这是兜底加固，失败必须继续走
+        原启动链路，绝不能因为清标记失败就阻断任务。
+    """
+    if not path or os.name != "nt":
+        return False
+    try:
+        return bool(ctypes.windll.kernel32.DeleteFileW(f"{path}:Zone.Identifier"))
+    except Exception:
+        # 清 MOTW 基础设施失败不能写日志（可能正是日志通道出问题），静默降级
+        return False
+
 # 日志队列化：GameAutomation logger 只挂 QueueHandler，写盘/转发由
 # QueueListener 消费线程执行。E 盘/USB 盘 IO 卡住时仅消费线程阻塞，
 # 任务线程的 logger.* 调用只是内存入队，永不钉死在坏盘上
@@ -966,17 +995,44 @@ class AutomationController:
                 params = config.get("launcher_params", [])
            
             self.logger.debug(f"启动程序: {launcher} {params} (类型: {script_type})")
-           
-            param_str = ' '.join(f'"{p}"' if ' ' in p else p for p in params) if params else ''
+
+            # 启动前摘掉 MOTW：带 Zone.Identifier 的可执行文件经 ShellExecuteW
+            # 拉起时会弹「打开文件 - 安全警告」，无人值守没人点「运行」就一直
+            # 阻塞（11-16 鸣潮挂 39 分钟后返回 5 的根因）。管理员进程删 ADS
+            # 无需提权；失败不阻断启动，原链路照走。
+            if clear_motw_marker(launcher):
+                self.logger.info(f"[启动] 已清除 launcher 的 MOTW 标记: {launcher}")
+
             exe_dir = os.path.dirname(launcher)
             self.logger.debug(f"启动工作目录: {exe_dir}")
-            result = ctypes.windll.shell32.ShellExecuteW(
-                None, "open", launcher, param_str, exe_dir, 1
-            )
-            if result <= 32:
-                self.logger.error(f"ShellExecuteW 失败 (错误码: {result})")
-                return False, None
-            self.logger.info(f"程序通过 ShellExecuteW 启动成功 (工作目录: {exe_dir})")
+
+            # 可执行文件走 CreateProcess 而非 ShellExecuteW：ShellExecute 会经过
+            # Windows 附件管理器，对带/曾被标记来源的文件弹「打开文件 - 安全警告」，
+            # 无人值守没人点「运行」就一直阻塞（11-16 鸣潮 09:28 挂 39 分钟返回 5、
+            # 22:05 再次卡死且弹窗提权后成了关不掉的僵尸窗）。CreateProcess 直接
+            # 建进程、不经过附件管理器，从根上没有这个对话框。
+            # 脚本文件（.bat/.cmd）仍走 ShellExecuteW——它需要 shell 关联才能执行，
+            # 且这类文件不触发该弹窗；保留原行为避免破坏其余游戏的启动链。
+            if launcher.lower().endswith(".exe"):
+                try:
+                    proc = subprocess.Popen(
+                        [launcher, *params], cwd=exe_dir, close_fds=True
+                    )
+                except OSError as exc:
+                    self.logger.error(f"CreateProcess 启动失败: {exc}")
+                    return False, None
+                self.logger.info(
+                    f"程序通过 CreateProcess 启动成功 (PID={proc.pid}, 工作目录: {exe_dir})"
+                )
+            else:
+                param_str = ' '.join(f'"{p}"' if ' ' in p else p for p in params) if params else ''
+                result = ctypes.windll.shell32.ShellExecuteW(
+                    None, "open", launcher, param_str, exe_dir, 1
+                )
+                if result <= 32:
+                    self.logger.error(f"ShellExecuteW 失败 (错误码: {result})")
+                    return False, None
+                self.logger.info(f"程序通过 ShellExecuteW 启动成功 (工作目录: {exe_dir})")
            
             launcher_name = os.path.basename(launcher)
             launcher_stem = os.path.splitext(launcher_name)[0]
@@ -1231,6 +1287,24 @@ class AutomationController:
             session.stop()
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("[鸣潮] 停止 ok-ww 模块 runner 失败: %s", exc)
+
+    def shutdown_module_runtime(self) -> None:
+        """退出时显式回收 ok-ww 常驻 module runner（2026-11-16 退出漏杀实锤）。
+
+        runner 设计为常驻等待重连，控制端（GUI）退出后它不会自杀——退出钩子
+        只置 stop_current_task 的话，空闲 runner 会变成无窗口的后台 python
+        一直挂着（内存百 MB 级），被中断会话的启动器也可能一起残留。
+        这里显式：①停当前会话（shutdown 请求 + 进程树回收）；②扫杀历史
+        异常退出留下的孤儿 runner。quit 路径，任何异常都只记日志不抛。
+        """
+        try:
+            self._stop_module_session()
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("[鸣潮] 退出回收 module 会话异常: %s", exc)
+        try:
+            self._cleanup_stale_module_runners()
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("[鸣潮] 退出清理残留 runner 异常: %s", exc)
 
     def _monitor_module_task(
         self,
@@ -1857,6 +1931,19 @@ class AutomationController:
                 self.logger.info(f"[{game_display}] 启动前收到停止请求，直接退出")
                 return False, "用户终止", 0
             _clear_parked_failsafe_cursor(self.logger)
+
+            # 启动前清掉挡路的第三方弹窗（如 MiniMax Code 更新提示）：这类
+            # Electron 模态窗会抢前台、让前置流程的 OCR/点击落空（11-16 鸣潮
+            # 卡死）。开关+规则全在 app_config.popup_dismiss，默认启用；
+            # 工具内部任何异常都吞掉，绝不影响主流程。
+            try:
+                from ..services.popup_dismisser import dismiss_blocking_popups
+                from ..settings.manager import get_popup_dismiss_config
+                n = dismiss_blocking_popups(get_popup_dismiss_config(), self.logger)
+                if n:
+                    self.logger.info(f"[{game_display}] 启动前清理挡路弹窗 {n} 个")
+            except Exception as exc:
+                self.logger.debug(f"[{game_display}] 弹窗清理环节跳过: {exc}")
 
             # 终止已有游戏进程
             configured_game_process = self._configured_game_process_name(config)

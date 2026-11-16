@@ -183,6 +183,12 @@ def _default_config() -> Dict:
         "script_tools": copy.deepcopy(DEFAULT_SCRIPT_TOOLS),
         "game_shot": copy.deepcopy(DEFAULT_GAME_SHOT),
         "log": {"dir": "data/logs", "file": "auto_runner.log", "backup_count": 0},
+        "popup_dismiss": {
+            "enabled": True,
+            "rules": [
+                {"title_contains": ["MiniMax"], "action": "minimize"},
+            ],
+        },
         "global": {"min_run_time": 300, "check_interval": 10, "debug_mode": False},
         "baijing": {"cat_exchange": copy.deepcopy(DEFAULT_BAIJING_CAT_EXCHANGE)},
         "nikki": {
@@ -460,6 +466,11 @@ def get_log_config() -> Dict:
         "file": cfg.get("file", "auto_runner.log"),
         "backup_count": cfg.get("backup_count", 0),
     }
+
+
+def get_popup_dismiss_config() -> Dict:
+    cfg = load().get("popup_dismiss", {})
+    return cfg if isinstance(cfg, dict) else {}
 
 
 def get_global() -> Dict:

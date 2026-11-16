@@ -59,11 +59,16 @@
 --------------------------------------------------------------------------------
 ## 工程化基线（2026-10-29 起）
 
-- **测试目录**：纯逻辑回归套件统一在 `tests/suite_*.py`（26 个，从 `artifacts/test_*.py`
+- **测试目录**：纯逻辑回归套件统一在 `tests/suite_*.py`（从 `artifacts/test_*.py`
   迁入，文件名日期后缀不变；本文旧段里出现的 `artifacts/test_xxx_日期.py` 按此映射到
-  `tests/suite_xxx_日期.py`）。一键执行：
-  `.venv\Scripts\python.exe -m pytest tests -q`（`tests/test_suites.py` 逐个子进程跑，
-  隔离各套件的 monkeypatch；新增套件按 `suite_*.py` 命名即自动纳入）。
+  `tests/suite_xxx_日期.py`）。`tests/test_suites.py` 逐个子进程跑，隔离各套件的
+  monkeypatch；新增套件按 `suite_*.py` 命名即自动纳入，并必须登记 `tests/ci_suites.txt`。
+  - **默认快回归（2026-11-16 起）**：`.venv\Scripts\python.exe -m pytest tests -q`
+    跑 `GAMEAUTO_TEST_TIER=fast`，即 ci 清单减去 `LOCAL_HEAVY_SUITES`（真机 OCR /
+    >30s / 依赖会被改写的本机文件），约 2 分钟；结尾打印最慢 10 个套件耗时。
+  - 需要完整验证时显式 `GAMEAUTO_TEST_TIER=full ...`（含真机套件，可能十几分钟）；
+    CI 用 `GAMEAUTO_TEST_TIER=ci ...`（跑清单全部 include）。被跳过的套件在 pytest
+    结果里以 skip + 原因呈现，不计为通过。
 - **测试禁锁实现写法**（2026-11-13 起）：套件里禁止「读源码文本断言某段代码存在」
   的写法锁——注释、日志文案、类型注解、精确调用格式（含参数排版）、「旧代码已
   删除」墓碑都不许锁；改一处措辞就红、重构必误报，且基本都有行为等价物。允许的
