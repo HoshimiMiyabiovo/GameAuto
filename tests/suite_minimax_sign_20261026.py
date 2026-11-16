@@ -67,6 +67,8 @@ def test_config():
 def _log_file(with_claim: bool) -> Path:
     # 固定路径：Windows 上临时文件句柄释放慢，测试内删除会 PermissionError
     p = Path(__file__).resolve().parent.parent / "data" / "artifacts" / "_minimax_fake_api.log"
+    # CI 全新 checkout 没有 data/artifacts，写日志先建父目录
+    p.parent.mkdir(parents=True, exist_ok=True)
     body = ""
     if with_claim:
         body = (
