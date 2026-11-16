@@ -148,7 +148,11 @@ def test_evidence_files():
     # 这些是本机一次性取证，清掉后不该让套件挂掉
     present = [p for p in (menu, shop, signal) if p.exists()]
     print(f"  (本机取证图 {len(present)}/3 张存在)")
-    check("单步调试入口脚本存在", (out / "zzz_step.py").exists())
+    # zzz_step.py 同为本机取证脚本（data/artifacts 不入库），缺失跳过不挂（CI 口径）
+    if (out / "zzz_step.py").exists():
+        check("单步调试入口脚本存在", True)
+    else:
+        print("  SKIP 单步调试入口脚本不在（CI 口径）")
 
 
 def main():

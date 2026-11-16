@@ -129,6 +129,11 @@ def test_probes_route_through_scaling():
     base = PROJECT_ROOT / "data" / "artifacts"
     check("共享换算模块入库（不放被 gitignore 的 data/）",
           (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "ui_coords.py").exists())
+    probes = [base / n for n in ("zzz_stage1.py", "nte_stage1.py", "nikki_stage2.py")]
+    if not all(p.is_file() for p in probes):
+        # 探针脚本属本机一次性取证（data/artifacts 不入库），CI 没有 → 跳过整组
+        print("  SKIP 实机探针脚本不在（CI 口径），跳过 [5] 源码断言")
+        return
     zzz = (base / "zzz_stage1.py").read_text(encoding="utf-8")
     nte = (base / "nte_stage1.py").read_text(encoding="utf-8")
     nikki = (base / "nikki_stage2.py").read_text(encoding="utf-8")

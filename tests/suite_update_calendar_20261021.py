@@ -286,6 +286,16 @@ def test_unfired_includes_retry(tmp_dir: Path):
     retry_file = tmp_dir / "update_retries.json"
     retry_file.write_text("[]", encoding="utf-8")
     b = make_bridge(retry_file)
+    # main 顺序里 test_fallback_window 先跑且把 get_update_info 桩改成 None 不还原；
+    # 继承 None 桩时走"无公告→维护窗口兜底"分支，CI 时钟下不建条目 → 这里重打固定公告桩，
+    # 本组变纯逻辑测试，不依赖网络/缓存/前序组状态（2026-11-16 CI 实锤）。
+    open_dt = datetime.now(cal.CN_TZ) + timedelta(minutes=10)
+    bridge_mod.get_update_info = lambda app_key, now=None: {
+        "version": "3.3", "title": "3.3版本更新通知",
+        "maintenance_start_dt": open_dt - timedelta(hours=5),
+        "open_at_dt": open_dt,
+        "open_at": open_dt.isoformat(timespec="seconds"),
+    }
     b._unfired_scheduled_today = lambda: []
     skip_result = SimpleNamespace(
         app_key="ZenlessZoneZero", script_choice=None,

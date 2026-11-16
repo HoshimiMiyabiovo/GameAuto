@@ -348,8 +348,13 @@ def install_tool(tool_key: str,
 
     install_dir = resolve_tool_install_dir(tool_key)
     current_path = str(tool.get("path") or "")
-    if current_path and install_dir not in Path(current_path).resolve().parents \
-            and Path(current_path).resolve() != install_dir:
+    # 两边都 resolve 再比：install_dir 原样比较时，Windows 8.3 短路径
+    # （如 C:\Users\RUNNER~1\...）经 resolve 展开成长名后永远对不上，
+    # 托管目录内的安装会被误判成"托管目录之外"（2026-11-16 CI 实锤）。
+    install_dir_resolved = Path(install_dir).resolve()
+    current_resolved = Path(current_path).resolve() if current_path else None
+    if current_resolved is not None and install_dir_resolved not in current_resolved.parents \
+            and current_resolved != install_dir_resolved:
         raise RuntimeError(
             f"当前 {spec.label} 安装在托管目录之外（{current_path}），"
             "自动安装只管理 data/script_tools（或自定义）目录；请先用工具自带更新，"

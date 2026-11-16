@@ -72,5 +72,10 @@ jobs:
           pip install --no-deps -r requirements.lock
           pip install pytest
 
+      # flow_configs.json 是 gitignore 的本机实例，CI 只有 example——
+      # example 即开箱合法配置，拷贝后 ~14 个读实例配置的套件直接可跑。
+      - name: Provision flow_configs.json from example
+        run: Copy-Item flow_configs.example.json flow_configs.json
+
       - name: Run regression (shard ${{ matrix.shard }}/3)
         run: python -m pytest tests/test_suites.py -q

@@ -33,6 +33,7 @@ suite_wuwa_launcher_cleanup_20261115.py
 suite_baijing_update_prompt_20261105.py
 suite_bridge_batch_email_20261021.py
 suite_cj_script_update_20261107.py
+suite_codearts_wool_20261116.py
 suite_config_lock_robustness_20261109.py
 suite_confirm_button_guard_20261107.py
 suite_confirm_disappear_poll_20261021.py
@@ -58,11 +59,11 @@ suite_monthly_auto_schedule_20261101.py
 suite_monthly_scroll_find_20261102.py
 suite_monthly_shop_buy_20261103.py
 suite_monthly_shop_observability_20261104.py
+suite_motw_clear_20261116.py
 suite_nikki_calendar_20261101.py
 suite_nikki_calendar_retry_20261102.py
 suite_nikki_instance_exit_20261109.py
 suite_nikki_launcher_20261022.py
-suite_nikki_page_matrix_20261104.py
 suite_nikki_shop_scancode_20261105.py
 suite_nikki_tab_fingerprint_20261106.py
 suite_nikki_verify_pending_20261113.py
@@ -120,5 +121,6 @@ suite_zzz_scene_gate_20261108.py
 suite_zzz_shop_entry_20261105.py
 
 !suite_monthly_exchange_20261025.py  # 硬依赖本机 app_config.json 的 exe_from_game 解析（2026-11-14 仿真 CI 探针：隐藏本地配置即失败）
+!suite_nikki_page_matrix_20261104.py  # 硬依赖 data/artifacts 未入库的 17 张实机截图矩阵（2026-11-16 CI 首轮实锤：全新 checkout 无此文件）
 !suite_zzz_monthly_main_screen_20261021.py  # 硬依赖本机 app_config.json 的 exe_from_app 解析（同上探针实锤）
 !suite_zzz_shop_templates_20261021.py  # 模板质量对比读用户个人目录 C:/Users/admin/Pictures/Screenshots 的真实截图（真机专用）

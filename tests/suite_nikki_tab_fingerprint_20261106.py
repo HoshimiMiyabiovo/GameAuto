@@ -112,7 +112,8 @@ def test_probe_reuses_constants():
     print("[4] 一次性探针复用正式常量，不另写一份清单")
     probe = PROJECT_ROOT / "data" / "artifacts" / "nikki_stage6.py"
     if not probe.exists():
-        check("探针存在", False, str(probe))
+        # 一次性探针属本机取证（data/artifacts 不入库），CI 全新 checkout 没有 → 跳过
+        print(f"  SKIP 探针不在（CI 口径），跳过 [4]：{probe.name}")
         return
     p = probe.read_text(encoding="utf-8")
     check("探针导入 nikki_calendar 并取 SERENE/SURGE_MARKERS",

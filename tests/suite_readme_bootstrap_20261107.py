@@ -85,8 +85,11 @@ def test_first_step():
     check("启动挪到第 4 步", "# 4. 启动" in r)
     check("说明所有入口需管理员 + 会弹 UAC",
           "*_ADMIN.bat" in r and "弹 UAC" in r and "UIPI" in r)
-    check("自检用的解释器路径真实存在",
-          (PROJECT_ROOT / ".venv" / "Scripts" / "python.exe").exists())
+    if (PROJECT_ROOT / ".venv" / "Scripts" / "python.exe").exists():
+        check("自检用的解释器路径真实存在", True)
+    else:
+        # CI 用系统 Python（无 .venv），README 自检路径核对只在本机口径跑
+        print("  SKIP 本机无 .venv（CI 口径），跳过解释器路径核对")
 
 
 def test_setup_deps():

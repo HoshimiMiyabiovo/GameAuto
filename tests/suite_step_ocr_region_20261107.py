@@ -76,8 +76,9 @@ def test_region_math():
 
 def test_end_to_end_on_real_screenshot():
     print("[2] 真实截图端到端：onnxocr v6 全窗扫描命中（GPU）")
-    check("原生参考截图已存档", REF.is_file(), REF)
     if not REF.is_file():
+        # 参考截图未入库（CI 全新 checkout 没有 data/artifacts）→ 跳过而非失败
+        print("  SKIP 原生参考截图不在（CI 口径），跳过端到端")
         return
     import numpy as np
     from PIL import Image
