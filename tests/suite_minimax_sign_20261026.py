@@ -21,7 +21,8 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, r"E:\GithubProject\game_auto\src")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from game_auto.runtime import wool_claim_logs as wcl  # noqa: E402
 
@@ -39,7 +40,7 @@ def check(name, cond, detail=""):
 
 def test_config():
     print("[1] flow_configs.json MINIMAX 配置")
-    cfg = json.loads(Path(r"E:\GithubProject\game_auto\flow_configs.json").read_text(encoding="utf-8"))
+    cfg = json.loads((PROJECT_ROOT / "flow_configs.json").read_text(encoding="utf-8"))
     flow = cfg.get("MINIMAX") or {}
     steps = flow.get("steps") or []
     by_name = {s.get("name"): s for s in steps}

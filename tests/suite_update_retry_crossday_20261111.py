@@ -25,11 +25,17 @@ FAILURES = []
 # 创建日/应执行日随**真实当天**推导——[1] 里 `_has_unfired_scheduled_today()` 走真时钟
 # 不注入 now，日期写死 11-11 的版本到 11-12 就必挂（due_at==真今天 恰好是"今天有
 # 未触发补跑"，is False 断言翻车）。动态推导后语义不变：创建日=今天、应执行日=明天。
-from datetime import datetime as _dt, timedelta as _td  # noqa: E402
+# 时区必须钉死 +08:00（业务 _pending_update_retries 用 CN_TZ 判"今天"）：用
+# astimezone() 本地时区时，CI 的 UTC 钟在 16:00-24:00 窗口里本地"今天"比 CN"今天"
+# 落后一天，应执行日（本地明天）恰好 == CN 今天 → 误判"今天有补跑" → [1] 翻车
+# （2026-11-17 CI 实锤）。
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz  # noqa: E402
 
-DAY1 = _dt.now().astimezone().strftime("%Y-%m-%d")                              # 创建日
-DAY2 = (_dt.now().astimezone() + _td(days=1)).strftime("%Y-%m-%d")              # 应执行日
-DAY3 = (_dt.now().astimezone() + _td(days=2)).strftime("%Y-%m-%d")              # 过期清理日
+_CN = _tz(_td(hours=8))
+
+DAY1 = _dt.now(_CN).strftime("%Y-%m-%d")                                        # 创建日
+DAY2 = (_dt.now(_CN) + _td(days=1)).strftime("%Y-%m-%d")                        # 应执行日
+DAY3 = (_dt.now(_CN) + _td(days=2)).strftime("%Y-%m-%d")                        # 过期清理日
 OLD_ENTRY = {
     "app_key": "WutheringWaves",
     "script_choice": None,
