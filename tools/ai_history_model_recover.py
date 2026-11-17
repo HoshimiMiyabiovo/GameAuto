@@ -53,7 +53,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SOURCE_JSON = Path(r"F:\data\AI对话汇总\data.json")
+# 数据源：默认 F: 汇总目录的 data.json；build.py 串链时用 AI_ORGANIZE_SOURCE
+# 传**本轮暂存**的 data.json——否则 recover 读到上一轮拷回的旧库，模型恢复
+# 永远落后一轮（2026-11-18 实锤：本轮 579 会话只恢复出 562）
+SOURCE_JSON = Path(os.environ.get("AI_ORGANIZE_SOURCE") or r"F:\data\AI对话汇总\data.json")
 RAG_SESSIONS = PROJECT_ROOT / "data" / "ai_history" / "sessions.jsonl"
 OUT_DIR = PROJECT_ROOT / "data" / "ai_history" / "model"
 SESSION_OUT = OUT_DIR / "session_models.jsonl"
@@ -70,6 +73,17 @@ OC_OLD_DB = Path(r"C:\Users\admin\opencode_backup_20260903_212346\data\opencode.
 CLAUDE_LOCAL = Path(r"C:\Users\admin\.claude")
 MM_ROOT = Path(r"C:\Users\admin\.minimax\v2\sessions")
 HERMES_DB = Path(r"F:\Program Files\Hermes Agent CN Desktop\data\hermes-home\state.db")
+CATPAW_ROOT = Path(os.environ.get("APPDATA", os.path.expanduser("~"))) / "catpaw-moon"
+CATPAW_LOG_ROOT = Path(os.path.expanduser("~")) / ".meituan-catpaw"
+TRAE_JSON = PROJECT_ROOT / "data" / "trae_capture" / "export" / "trae.json"
+KILO_RAW = PROJECT_ROOT / "data" / "kilo_capture" / "raw"
+# 来源固定模型（2026-11-17 用户拍板）：Trae 分享接口不带模型字段、本地正文加密，
+# 但用户明确该来源跑的就是 deepseek-v4.1-flash——整源记账。只适用于**没有**
+# 模型字段的来源；有字段的（如 Kilo 的逐条 modelID）一律用真实字段。
+TRAE_FIXED_MODEL = "deepseek-v4.1-flash"
+CATPAW_LOG_RE = re.compile(
+    r"conversationId=([0-9a-f-]{36}).*?turn=(\d+).*?model=(\d+).*?\[LLM\] start")
+CATPAW_TS_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+)")
 CURSOR_DB = ASUS / "Cursor" / "User" / "globalStorage" / "state.vscdb"
 DEEP_INDEX = Path(r"F:\data\deepseek-all-chats\sessions_index.json")
 DEEP_MD = Path(r"F:\data\deepseek-all-chats\markdown")
@@ -86,6 +100,9 @@ MODEL_ALIASES = {
     "dfmodel": "deepseek-v4.1-flash-1017",
     "qfmodel": "qwen3.8-flash",
     "lmodel": "qwen4-max-preview (qoduck)",   # qoduck = qwen4-max-preview 匿名内测版
+    # 注意：Kilo 的 modelID（particle-ai/particle-1:free）**不在映射表**——它有
+    # 真实逐条字段，按原值记（2026-11-17 用户纠正：手工指定模型只给没有字段的
+    # 来源，如 Trae；有字段的来源用真实字段，不许臆测映射）。
 }
 
 # 展示大小写归一（2026-11-14）：各客户端对同一模型的写法大小写不一
@@ -97,7 +114,14 @@ MODEL_CASE = {
     "glm-5.3": "GLM-5.3",
     "ling-3.2-flash": "Ling-3.2-flash",
     "minimax-m3.1-flash": "MiniMax-M3.1-Flash",
+    "longcat-2.5": "LongCat-2.5",
+    "auto": "Auto",
 }
+
+# 妙手（CatPaw）客户端在 sessions.extra.persistedModelId 只存数字 ID。
+# 107 已用 /api/agent/maas/model-types 验证为 LongCat-2.5（2026-11-17）；
+# 10002544 是 Auto 自动选择（用户确认，客户端落库为内部路由 ID）。
+CATPAW_MODEL_NAMES = {"107": "LongCat-2.5", "10002544": "Auto"}
 
 
 def canonical_model(name: str) -> str:
@@ -172,6 +196,8 @@ def _put(store: Dict[str, dict], key: str, rec: dict) -> None:
         # 保留会话级兜底模型，但主记录换成逐条的
         fallback = old.get("fallback_model", "")
         rec["fallback_model"] = fallback
+        if old.get("model_id") and not rec.get("model_id"):
+            rec["model_id"] = old["model_id"]
         store[key] = rec
     else:
         # 逐条来源已经足够，会话级兜底只记 fallback，不并入 models——否则会把
@@ -435,8 +461,17 @@ def recover_hermes() -> Dict[str, dict]:
         for sid, cnt in usage.items():
             key = "hermes:" + str(sid)[:16]
             if key in out:
-                out[key]["usage_models"] = dict(cnt)
-                out[key]["usage_requests"] = sum(cnt.values())
+                rec = out[key]
+                rec["usage_models"] = dict(cnt)
+                rec["usage_requests"] = sum(cnt.values())
+                # 会话级模型不能只写 1 次：session_model_usage 的 api_call_count
+                # 才是真实请求数；没有逐轮时间戳，但不该把 262/504 次压成 1。
+                rec["models"] = dict(cnt)
+                rec["models_raw"] = dict(cnt)
+                rec["primary_model"] = cnt.most_common(1)[0][0]
+                rec["n_records"] = sum(cnt.values())
+                rec["level"] = "usage"
+                rec["source"] = "hermes:session_model_usage"
             else:
                 _put(out, key, _rec("usage", "hermes:session_model_usage", [], sum(cnt.values()),
                                    {"models": dict(cnt), "primary_model": cnt.most_common(1)[0][0]}))
@@ -504,16 +539,19 @@ def recover_copilot() -> Dict[str, dict]:
 
 
 def recover_cursor() -> Dict[str, dict]:
-    """Cursor：composerData.modelConfig 与 bubble.modelInfo.modelName。
+    """Cursor：bubbleId 的 modelInfo + createdAt 恢复逐条模型，composerData 兜底。
 
     约 1/4 会话只记 ``modelName=default``——那是「用默认模型」的档位标记，不是
     模型 ID。单独记为 tier，既不丢线索，也不混进具体模型名的分布里。
+    2026-11-17：除会话级计数外，bubble 还带 createdAt；有具名模型的 bubble
+    直接按时间还原逐条，别再把 150 个会话压成一条 session 记录。
     """
     out: Dict[str, dict] = {}
     if not CURSOR_DB.exists():
         return out
     c = _ro(CURSOR_DB)
     by_sess = collections.defaultdict(collections.Counter)
+    turns_by_sess = collections.defaultdict(list)
     tiers = collections.Counter()
     for key, value in c.execute(
             "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' "
@@ -528,6 +566,7 @@ def recover_cursor() -> Dict[str, dict]:
         cid = parts[1] if len(parts) > 1 else ""
         if not cid:
             continue
+        is_bubble = str(key).startswith("bubbleId:")
         for field in ("modelConfig", "modelInfo"):
             v = o.get(field)
             if not isinstance(v, dict):
@@ -539,11 +578,20 @@ def recover_cursor() -> Dict[str, dict]:
                 m = _clean_model(raw)
                 if m:
                     by_sess[cid][m] += 1
+                    if is_bubble and o.get("createdAt"):
+                        turns_by_sess[cid].append((str(o["createdAt"]), m))
     c.close()
     for cid, cnt in by_sess.items():
-        _put(out, "cursor:" + cid,
-             _rec("session", "cursor:cursorDiskKV.modelInfo", [], sum(cnt.values()),
-                  {"models": dict(cnt), "primary_model": cnt.most_common(1)[0][0]}))
+        turns = sorted(turns_by_sess.get(cid, []), key=lambda p: p[0])
+        if turns:
+            _put(out, "cursor:" + cid,
+                 _rec("per_message", "cursor:bubble.modelInfo+createdAt", turns,
+                      len(turns), {"usage_requests": len(turns)}))
+        else:
+            _put(out, "cursor:" + cid,
+                 _rec("session", "cursor:cursorDiskKV.modelInfo", [], sum(cnt.values()),
+                      {"models": dict(cnt), "primary_model": cnt.most_common(1)[0][0],
+                       "usage_requests": sum(cnt.values())}))
     for cid, n in tiers.items():
         if cid not in by_sess:
             _put(out, "cursor:" + cid,
@@ -574,7 +622,7 @@ def recover_codex() -> Dict[str, dict]:
                 turns.append((str(o.get("timestamp") or ""), model))
         if turns:
             _put(out, "codex:" + uid[:8],
-                 _rec("session", "codex:session_meta.payload.model", turns, n_lines))
+                 _rec("per_message", "codex:session_meta.payload.model", turns, n_lines))
     return out
 
 
@@ -663,6 +711,143 @@ def recover_grok() -> Dict[str, dict]:
     return out
 
 
+def recover_catpaw() -> Dict[str, dict]:
+    """妙手（CatPaw）：会话级 persistedModelId + CLI 日志逐轮模型。
+
+    SQLite 的 ui_sdk_messages 没有逐条模型字段，只有 sessions.extra.persistedModelId
+    （会话级）。真正的逐轮证据在 `~/.meituan-catpaw/<uid>/logs/app*.log`：
+    每个 `[LLM] start` 行带 conversationId/turn/model。先用日志恢复逐轮模型，
+    再以会话级记录兜底；两者都归一成 `catpaw:<conversationId>`。
+    107=LongCat-2.5（官方列表实查）；10002544=Auto（用户确认的自动选择）。
+    """
+    out: Dict[str, dict] = {}
+    if not CATPAW_ROOT.exists():
+        return out
+    for db in sorted(CATPAW_ROOT.glob("catpaw-memory-*.db")):
+        if db.name.lower().endswith("-anon.db"):
+            continue
+        try:
+            c = _ro(db)
+            c.row_factory = sqlite3.Row
+            for r in c.execute("select id, extra from sessions"):
+                try:
+                    extra = json.loads(r["extra"] or "{}")
+                except (TypeError, ValueError):
+                    continue
+                mid = str(extra.get("persistedModelId") or "").strip()
+                if not mid or mid == "0":
+                    continue
+                name = CATPAW_MODEL_NAMES.get(mid) or f"自定义模型（{mid}）"
+                ts = str(extra.get("timestamp") or "")
+                _put(out, "catpaw:" + str(r["id"]),
+                     _rec("session", "catpaw:sessions.persistedModelId",
+                          [(ts, name)], 1, {"model_id": mid}))
+            c.close()
+        except sqlite3.Error:
+            continue
+
+    # 逐轮模型：同一 conversation 的每个 [LLM] start 是一次真实请求，不能只记 1 条。
+    per_turn: Dict[str, List[Tuple[str, str]]] = collections.defaultdict(list)
+    seen = set()
+    for log in sorted(CATPAW_LOG_ROOT.glob("*/logs/app*.log")):
+        try:
+            with log.open(encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if "[LLM] start" not in line:
+                        continue
+                    mm = CATPAW_LOG_RE.search(line)
+                    tm = CATPAW_TS_RE.match(line)
+                    if not mm or not tm:
+                        continue
+                    cid, turn, mid = mm.group(1), mm.group(2), mm.group(3)
+                    try:
+                        ts = int(datetime.strptime(
+                            tm.group(1), "%Y-%m-%d %H:%M:%S.%f").timestamp())
+                    except ValueError:
+                        ts = 0
+                    # 同一 user turn 里会多次调模型（每次工具回填一轮）；按
+                    # 时间戳逐次保留，不能用 (cid, turn, model) 去重，否则 341
+                    # 次请求会被压成 93 个 turn。
+                    dedup = (cid, ts, turn, mid)
+                    if dedup in seen:
+                        continue
+                    seen.add(dedup)
+                    per_turn[cid].append((
+                        str(ts), CATPAW_MODEL_NAMES.get(mid) or f"自定义模型（{mid}）"))
+        except OSError:
+            continue
+    for cid, turns in per_turn.items():
+        turns.sort(key=lambda p: int(p[0] or 0))
+        _put(out, "catpaw:" + cid,
+             _rec("per_message", "catpaw:app.log:llm-caller", turns, len(turns)))
+    return out
+
+
+def recover_kilo() -> Dict[str, dict]:
+    """Kilo Desktop：内核 API 原始响应 info.modelID 逐条（data/kilo_capture/raw/）。
+
+    上游 id 是 kilo:<ses_id>，kilo_fetch 的 raw 目录名就是 ses_id。Kilo 有真实
+    逐条模型字段（modelID，本机实测 particle-ai/particle-1:free），按原值记录
+    ——不进 MODEL_ALIASES（2026-11-17 用户纠正：手工指定只给没有字段的来源）。
+    ts 用内核 time.created（epoch 毫秒，turn_models 口径）。raw 被清理时靠
+    load_existing 记忆沿用。
+    """
+    out: Dict[str, dict] = {}
+    if not KILO_RAW.exists():
+        return out
+    for ses_dir in sorted(KILO_RAW.iterdir()):
+        fp = ses_dir / "messages.json"
+        if not fp.is_file():
+            continue
+        try:
+            with fp.open(encoding="utf-8") as f:
+                msgs = json.load(f)
+        except (ValueError, OSError):
+            continue
+        turns: List[Tuple[str, str]] = []
+        for msg in msgs or []:
+            info = msg.get("info") or {}
+            if info.get("role") != "assistant":
+                continue
+            created = (info.get("time") or {}).get("created") or 0
+            turns.append((str(created or 0), _clean_model(info)))
+        if turns:
+            _put(out, "kilo:" + ses_dir.name,
+                 _rec("per_message", "kilo:message.modelID", turns, len(msgs or [])))
+    return out
+
+
+def recover_trae() -> Dict[str, dict]:
+    """Trae：分享接口不带模型字段、本地正文加密，无逐条证据可恢复——
+    按 TRAE_FIXED_MODEL（用户拍板 2026-11-17）整源记会话级模型。
+
+    会话清单取 trae.json（trae_fetch 的聚合，id = trae:<share_id>）；
+    会话级记录只落一条 turn（取末条消息时间，秒→毫秒对齐 turn_models 口径），
+    不逐条伪造（没有逐条证据就不装作有）。
+    """
+    out: Dict[str, dict] = {}
+    if not TRAE_JSON.exists():
+        return out
+    try:
+        with TRAE_JSON.open(encoding="utf-8") as f:
+            sessions = json.load(f) or []
+    except (ValueError, OSError):
+        return out
+    for s in sessions:
+        sid = str(s.get("id") or "")
+        if not sid.startswith("trae:"):
+            continue
+        msgs = s.get("msgs") or []
+        last_k = max((_epoch_key(m.get("k")) for m in msgs), default=0)
+        _put(out, sid,
+             _rec("session", "trae:user-pinned",
+                  [(str(last_k * 1000), TRAE_FIXED_MODEL)] if last_k else [],
+                  len(msgs),
+                  {"models": {TRAE_FIXED_MODEL: len(msgs) or 1},
+                   "primary_model": TRAE_FIXED_MODEL}))
+    return out
+
+
 RECOVERERS = (
     ("Grok", recover_grok),
     ("ZCode", recover_zcode),
@@ -676,6 +861,9 @@ RECOVERERS = (
     ("Cursor", recover_cursor),
     ("Codex", recover_codex),
     ("DeepSeek", recover_deepseek),
+    ("妙手", recover_catpaw),
+    ("Kilo", recover_kilo),
+    ("Trae", recover_trae),
 )
 
 
@@ -692,7 +880,69 @@ def note_model(note: str) -> str:
     return m.group(1) if m else ""
 
 
-def cmd_scan(_args) -> int:
+def load_existing(session_path: Path = None, turn_path: Path = None):
+    """读现有产物当作「记忆」，返回 ({id: row}, {id: [(ts, model_raw)]})。
+
+    路径可传（单测用临时文件，避免动真实产物）。
+
+    背景：2026-11-17 用户反馈「每次新导入都不加模型字段？没有记忆吗？」——根因是
+    上游 build.py 重跑后没人触发本工具，新会话自然没模型。串链（build.py 自动调
+    scan）解决"跑不跑"，这里的合并解决"别丢"：某次单个恢复器失败/原始日志被清
+    时，仍沿用上次已还原的结果，而不是把会话降级成 level=none。
+    """
+    session_path = session_path or SESSION_OUT
+    turn_path = turn_path or TURN_OUT
+    rows = {}
+    if session_path.exists():
+        with session_path.open(encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                r = json.loads(line)
+                rows[str(r.get("id"))] = r
+    turns = collections.defaultdict(list)
+    if turn_path.exists():
+        with turn_path.open(encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                r = json.loads(line)
+                turns[str(r.get("id"))].append(
+                    (r.get("ts", 0), r.get("model_raw") or r.get("model") or ""))
+    return rows, turns
+
+
+def _rec_from_row(row: dict, turns: list) -> dict:
+    """把记忆里的历史行折回恢复器记录结构（与 _rec 的字段口径一致）。"""
+    return {
+        "level": row.get("level") or "none",
+        "source": row.get("source") or "",
+        "models": dict(row.get("models_raw") or {}),
+        "turns": list(turns),
+        "n_records": row.get("n_records", 0),
+        "n_modeled": row.get("n_modeled", 0),
+        "usage_requests": row.get("usage_requests", 0),
+        "fallback_model": row.get("fallback_model") or "",
+    }
+
+
+def _pick_rec(merged: dict, existing: dict, existing_turns: dict, sid: str,
+              no_merge: bool = False):
+    """取某个会话的记录：本次扫描优先；没扫到且允许合并时沿用历史记忆。
+
+    返回 (rec, reused)。只沿用真恢复过的（level != none），否则等于把「本来就没
+    模型」再抄一遍。抽成纯函数是为了能单测（合并分支在真实 scan 里要制造恢复器
+    失败才触发得到）。
+    """
+    rec = merged.get(sid)
+    if rec is None and not no_merge and sid in existing:
+        prev = existing[sid]
+        if (prev.get("level") or "none") != "none":
+            return _rec_from_row(prev, existing_turns.get(sid, [])), True
+    return rec, False
+
+
+def cmd_scan(args) -> int:
     upstream = load_upstream()
     rag_ids = set()
     if RAG_SESSIONS.exists():
@@ -716,13 +966,21 @@ def cmd_scan(_args) -> int:
 
     by_id = {str(s.get("id")): s for s in upstream}
     matched = [k for k in merged if k in by_id]
+    # 记忆：本次没扫到、但上次已还原过的会话沿用旧结果（--no-merge 可关）。
+    # 只沿用真恢复过的（level != none），否则等于把「本来就没模型」再抄一遍。
+    existing, existing_turns = ({}, {})
+    if not getattr(args, "no_merge", False):
+        existing, existing_turns = load_existing()
+    reused = 0
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     rows: List[dict] = []
     turns_rows = 0
     with SESSION_OUT.open("w", encoding="utf-8") as fs, TURN_OUT.open("w", encoding="utf-8") as ft:
         for s in upstream:
             sid = str(s.get("id"))
-            rec = merged.get(sid)
+            rec, reused_here = _pick_rec(merged, existing, existing_turns, sid,
+                                         no_merge=getattr(args, "no_merge", False))
+            reused += 1 if reused_here else 0
             models_raw = rec.get("models", {}) if rec else {}
             # 输出统一写真实模型名；两个原始别名若映射到同一真名要合并计数。
             counter = collections.Counter()
@@ -763,6 +1021,8 @@ def cmd_scan(_args) -> int:
                     turns_rows += 1
     print(f"已写 {SESSION_OUT}（{len(rows)} 会话）")
     print(f"已写 {TURN_OUT}（{turns_rows} 条逐条模型记录）")
+    if reused:
+        print(f"其中沿用历史记忆 {reused} 个会话（本次未扫到、上次已还原）")
     print(f"恢复器产出 {len(merged)} 个会话 key，精确匹配上游 {len(matched)} 个"
           f"（未匹配 {len(merged) - len(matched)} 个，多为未入选/只标题会话）")
     unmatched = [k for k in merged if k not in by_id]
@@ -869,7 +1129,10 @@ def main(argv=None) -> int:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="AI 对话史模型名还原（只读原始日志，产出覆盖率报告）")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("scan", help="全量恢复并写 JSONL + 报告").set_defaults(func=cmd_scan)
+    p_scan = sub.add_parser("scan", help="全量恢复并写 JSONL + 报告")
+    p_scan.add_argument("--no-merge", action="store_true",
+                        help="不沿用历史产物（默认合并：本次没扫到的会话沿用上次结果）")
+    p_scan.set_defaults(func=cmd_scan)
     sub.add_parser("verify", help="校验产物").set_defaults(func=cmd_verify)
     args = parser.parse_args(argv)
     return args.func(args)

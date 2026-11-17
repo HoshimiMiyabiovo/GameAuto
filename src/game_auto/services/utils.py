@@ -61,7 +61,7 @@ def get_user_selection() -> List[Tuple[str, str]]:
     print(f"\n请选择要执行的任务（输入{code_len}位数字代码，1表示执行，0表示不执行）：")
     print("顺序：" + ", ".join(get_app_display_name(app) for app in APP_ORDER))
     print("示例：" + "1" * code_len + " - 全部执行")
-   
+
     while True:
         code = input(f"请输入{code_len}位数字代码：").strip()
         if len(code) == code_len and code.isdigit() and all(c in ('0', '1') for c in code):

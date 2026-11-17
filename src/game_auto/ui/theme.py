@@ -1,28 +1,32 @@
-"""Theme tokens derived from the original Flet PALETTE.
+"""Theme tokens — Codex-style neutral palette (2026-11-17 restyle).
 
-Maps the warm paper-like palette to HusTheme-compatible token names.
+QML 侧唯一真值是 components/Theme.qml（单例）与 Main.qml 的 HusTheme.install*
+基色引导；本文件保留同名 token 作为 Python 侧文档与 PaperTheme 兼容层
+（apply_tokens_to_engine 当前未接线，留作 WebUI/Flet 回退侧参考）。
+两侧改主题必须同步。
+
 Reference: https://pyhuskarui.deepwiki.com
 """
 
 PALETTE = {
-    "page": "#f6f1e8",
-    "panel": "#fffaf2",
-    "panelAlt": "#f4ecdf",
-    "card": "#fffdf9",
-    "cardActive": "#eef8f1",
-    "line": "#dbcdbd",
-    "accent": "#18a05f",
-    "accentSoft": "#dff1e4",
-    "text": "#2c241d",
-    "muted": "#6d6257",
-    "warning": "#b66f1f",
-    "warningSoft": "#faebd7",
-    "danger": "#b04b44",
-    "dangerSoft": "#f7dfdd",
-    "info": "#295d86",
-    "infoSoft": "#e9f3fb",
-    "logBg": "#1f1d1a",
-    "logFg": "#f5efe6",
+    "page": "#f7f8fa",
+    "panel": "#ffffff",
+    "panelAlt": "#f6f6f7",
+    "card": "#ffffff",
+    "cardActive": "#ecfdf5",
+    "line": "#e4e4e7",
+    "accent": "#059669",
+    "accentSoft": "#ecfdf5",
+    "text": "#18181b",
+    "muted": "#71717a",
+    "warning": "#d97706",
+    "warningSoft": "#fffbeb",
+    "danger": "#dc2626",
+    "dangerSoft": "#fef2f2",
+    "info": "#2563eb",
+    "infoSoft": "#eff6ff",
+    "logBg": "#18181b",
+    "logFg": "#f4f4f5",
 }
 
 # HusTheme-style colour tokens
@@ -42,7 +46,7 @@ THEME_TOKENS = {
     "colorErrorBg": PALETTE["dangerSoft"],
     "colorInfo": PALETTE["info"],
     "colorInfoBg": PALETTE["infoSoft"],
-    "borderRadius": 16,
+    "borderRadius": 8,
     "fontFamily": "Microsoft YaHei UI",
 }
 

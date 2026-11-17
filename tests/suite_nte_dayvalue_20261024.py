@@ -15,7 +15,7 @@
   2. check_tajiduo_daily：产出 活跃度/本性像素/都市活力/游戏签到；活跃度永不判完成
   3. 活跃度行带 stale 标记；is_daily_completed 不再由 dayvalue 驱动
   4. completion_state：stale 活跃度不计入百分比（历史无 stale 行保持旧口径）；
-     有 日常领取 时状态优先
+     日常领取 success 仅在活跃度数值 ≥100 或缺数值时判完成，<100 不得假完成
   5. 事后复核：日常领取 success → 不改判（即使 ok-nte 边角失败）；无该证据 → 保持改判
   6. 暖暖：Pearpal 函数已删除，whimbox 落库仍在
 
@@ -139,8 +139,10 @@ def test_completion_state():
           mk(None, (100, 100), stale=True).completion_state() == "unknown")
     check("无日常领取+活跃度60(stale) → unknown",
           mk(None, (60, 100), stale=True).completion_state() == "unknown")
-    check("日常领取成功 → completed（KEY_STATUS 优先，stale 不影响）",
-          mk("success", (70, 100), stale=True).completion_state() == "completed")
+    check("日常领取成功+活跃度70(stale) → pending（不再假完成）",
+          mk("success", (70, 100), stale=True).completion_state() == "pending")
+    check("日常领取成功+活跃度100(stale) → completed",
+          mk("success", (100, 100), stale=True).completion_state() == "completed")
     check("日常领取失败+活跃度100(stale) → failed（stale 不救）",
           mk("failed", (100, 100), stale=True).completion_state() == "failed")
     # 历史行（无 stale 标记）保持旧口径，历史统计不受影响

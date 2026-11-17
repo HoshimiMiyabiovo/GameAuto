@@ -364,18 +364,18 @@ def print_analysis(file_path: str):
     print("  明日方舟：终末地 - 抽卡数据分析")
     print_divider()
 
-    print(f"\n[总体概况]")
+    print("\n[总体概况]")
     print(f"  抽卡总数: {overview['total_records']} 条")
     print(f"  六星: {overview['six_star_count']} 个  |  五星: {overview['five_star_count']} 个  |  四星: {overview['four_star_count']} 个")
     print(f"  时间范围: {overview['earliest_time']}  ~  {overview['latest_time']}")
     if overview["top_six_star"] != ("-", 0):
         print(f"  最多六星: {overview['top_six_star'][0]} ×{overview['top_six_star'][1]}")
-    print(f"\n  各卡池分布:")
+    print("\n  各卡池分布:")
     for pool_name, count in overview["pool_counts"].items():
         print(f"    - {pool_name}: {count} 抽")
 
     print(f"\n{'='*60}")
-    print(f"[各卡池详细分析]")
+    print("[各卡池详细分析]")
     print_divider()
 
     for pool_display in ["限定角色池", "常驻角色池", "新手池", "限定武器池", "常驻武器池"]:
@@ -390,12 +390,12 @@ def print_analysis(file_path: str):
         print(f"    六星: {p['six_star_count']} 个 ({p['six_star_pct']}%)  |  五星: {p['five_star_count']} 个  |  四星: {p['four_star_count']} 个")
         print(f"    时间: {p['earliest_time']}  ~  {p['latest_time']}")
         if len(p["sub_pools"]) > 1:
-            print(f"    子池分布:")
+            print("    子池分布:")
             for sub_name, sub_count in p["sub_pools"].items():
                 print(f"      - {sub_name}: {sub_count} 抽")
 
         if p["six_star_list"]:
-            print(f"    六星出货记录:")
+            print("    六星出货记录:")
             for s in p["six_star_list"]:
                 new_tag = " [NEW!]" if s["is_new"] else ""
                 print(f"      {s['time']}  {s['name']}{new_tag}  池: {s['pool_name']}")
@@ -410,7 +410,7 @@ def print_analysis(file_path: str):
                     print(f"      最近每抽出六星: {', '.join(str(x) for x in pt['pities'][-10:])}")
 
     print(f"\n{'='*60}")
-    print(f"[六星出货记录 (最近 30 条)]")
+    print("[六星出货记录 (最近 30 条)]")
     print_divider()
     displayed = 0
     for h in six_star_history[:30]:
@@ -420,7 +420,7 @@ def print_analysis(file_path: str):
         print("  (无六星出货记录)")
 
     print(f"\n{'='*60}")
-    print(f"[角色统计 (按稀有度/持有数排序)]")
+    print("[角色统计 (按稀有度/持有数排序)]")
     print_divider()
     current_rarity = None
     for c in char_stats:
@@ -430,7 +430,7 @@ def print_analysis(file_path: str):
         print(f"    {c['name']}: {c['copies']} 只  ({c['first_time']} ~ {c['last_time']})")
 
     print(f"\n{'='*60}")
-    print(f"[武器统计 (按稀有度/持有数排序)]")
+    print("[武器统计 (按稀有度/持有数排序)]")
     print_divider()
     current_rarity = None
     for w in weapon_stats:
@@ -440,7 +440,7 @@ def print_analysis(file_path: str):
         print(f"    {w['name']}: {w['copies']} 把  ({w['first_time']} ~ {w['last_time']})")
 
     print(f"\n{'='*60}")
-    print(f"[所有卡池保底分布]")
+    print("[所有卡池保底分布]")
     print_divider()
     for pool_display, pt in pity_analysis.items():
         if pt["count"] == 0:

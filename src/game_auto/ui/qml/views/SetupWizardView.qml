@@ -63,6 +63,7 @@ Item {
             case "update":        return { text: "有更新",       state: HusTag.State_Warning }
             case "latest":        return { text: "已是最新",     state: HusTag.State_Success }
             case "local_unknown": return { text: "本地版本未知", state: HusTag.State_Default }
+            case "date_unknown":  return { text: "远端日期未知", state: HusTag.State_Default }
             case "no_release":    return { text: "无发布版",     state: HusTag.State_Default }
             case "no_repo":       return { text: "仅本地版本",   state: HusTag.State_Default }
             case "no_path":       return { text: "未配置路径",   state: HusTag.State_Default }
@@ -137,7 +138,7 @@ Item {
                     HusText {
                         text: "配置各游戏工具的启动器路径，以及各独立/每月流程的程序路径。\n选择对应的 .exe 或 .bat 文件即可，可选项目可留空；随时可回到本页修改。\n★ = 必填，未标注 = 可选。白荆回廊游戏程序路径通常已自动带上。"
                         font.pixelSize: Math.round(13 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -151,7 +152,7 @@ Item {
                         HusText {
                             text: "带路径的输入框表示已配置；空白则尚未配置"
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#8a7a68"
+                            color: "#a1a1aa"
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -195,7 +196,7 @@ Item {
                                 }
                                 font.pixelSize: Math.round(14 * root.fs)
                                 font.bold: true
-                                color: "#5a4d3f"
+                                color: "#52525b"
                                 Layout.topMargin: index === 0 ? 0 : 10
                             }
 
@@ -218,7 +219,7 @@ Item {
                                 HusText {
                                     text: modelData.required ? "★" : ""
                                     font.pixelSize: Math.round(13 * root.fs)
-                                    color: "#b04b44"
+                                    color: "#dc2626"
                                     Layout.preferredWidth: 14
                                 }
                                 HusInput {
@@ -241,7 +242,7 @@ Item {
                                 HusText {
                                     text: pathItem.fileValid ? "✓" : (pathItem.pathValue !== "" ? "✗" : "")
                                     font.pixelSize: Math.round(16 * root.fs)
-                                    color: pathItem.fileValid ? "#3b7d3b" : "#b04b44"
+                                    color: pathItem.fileValid ? "#16a34a" : "#dc2626"
                                     Layout.preferredWidth: 24
                                 }
                             }
@@ -267,7 +268,7 @@ Item {
                         HusText {
                             text: "对照 GitHub 最新 Release 检测第三方脚本是否落后，建议有更新时先升级再跑日常。每 24 小时联网一次，也可手动刷新。"
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#8a7a68"
+                            color: "#a1a1aa"
                             wrapMode: Text.Wrap
                             Layout.fillWidth: true
                         }
@@ -283,7 +284,7 @@ Item {
                         visible: root.scriptVersions.length === 0
                         text: bridge.scriptCheckRunning ? "正在检查..." : "未获取到脚本信息"
                         font.pixelSize: Math.round(13 * root.fs)
-                        color: "#8a7a68"
+                        color: "#a1a1aa"
                     }
 
                     Repeater {
@@ -309,14 +310,14 @@ Item {
                             HusText {
                                 text: modelData.local ? ("本地 v" + modelData.local) : "本地版本未知"
                                 font.pixelSize: Math.round(13 * root.fs)
-                                color: modelData.local ? "#5a4d3f" : "#8a7a68"
+                                color: modelData.local ? "#52525b" : "#a1a1aa"
                                 Layout.preferredWidth: Math.round(150 * root.fs)
                                 elide: Text.ElideRight
                             }
                             HusText {
                                 text: modelData.latest ? ("最新 " + modelData.latest) : "—"
                                 font.pixelSize: Math.round(13 * root.fs)
-                                color: modelData.has_update ? "#b66f1f" : "#5a4d3f"
+                                color: modelData.has_update ? "#d97706" : "#52525b"
                                 Layout.preferredWidth: Math.round(110 * root.fs)
                                 elide: Text.ElideRight
                             }
@@ -340,7 +341,7 @@ Item {
                                 visible: false
                                 text: "安装任务已开始，进度见侧边栏「脚本管理」页"
                                 font.pixelSize: Math.round(12 * root.fs)
-                                color: "#8a7a68"
+                                color: "#a1a1aa"
                             }
                             HusButton {
                                 visible: (modelData.repo_url || "") !== ""

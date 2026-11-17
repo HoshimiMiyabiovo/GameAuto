@@ -158,7 +158,7 @@ Item {
                         text: (root.tokenConfigured ? "Token: 已加密保存" : "Token: 未配置")
                               + "  |  " + (root.didConfigured ? "DID: 已加密保存" : "DID: 未配置")
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: (root.tokenConfigured && root.didConfigured) ? "#2f7d4a" : "#b04b44"
+                        color: (root.tokenConfigured && root.didConfigured) ? "#16a34a" : "#dc2626"
                     }
                 }
             }
@@ -186,7 +186,7 @@ Item {
                             }
                             font.pixelSize: Math.round(14 * root.fs)
                             font.bold: true
-                            color: "#2c241d"
+                            color: "#18181b"
                             Layout.fillWidth: true
                         }
 
@@ -212,7 +212,7 @@ Item {
                             return "📦 更新于 " + p(d.getHours()) + ":" + p(d.getMinutes()) + " · 过期后自动刷新"
                         }
                         font.pixelSize: Math.round(11 * root.fs)
-                        color: "#8a7f73"
+                        color: "#a1a1aa"
                     }
 
                     // 签到状态
@@ -223,7 +223,7 @@ Item {
                             return "签到：" + (d.has_signed ? (d.sign_text || "已签到") : (d.sign_text || "未签到"))
                         }
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: (root.dailyData || {}).has_signed ? "#2f7d4a" : "#b04b44"
+                        color: (root.dailyData || {}).has_signed ? "#16a34a" : "#dc2626"
                     }
 
                     // 空态 / 失败提示
@@ -234,7 +234,7 @@ Item {
                             return d.message ? ("获取失败：" + d.message) : "暂无数据，点击「刷新」获取"
                         }
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#8a7a68"
+                        color: "#a1a1aa"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -254,7 +254,7 @@ Item {
                                 HusText {
                                     text: modelData.name || ""
                                     font.pixelSize: Math.round(13 * root.fs)
-                                    color: "#2c241d"
+                                    color: "#18181b"
                                     Layout.fillWidth: true
                                 }
 
@@ -270,7 +270,7 @@ Item {
                                     }
                                     font.pixelSize: Math.round(12 * root.fs)
                                     color: (modelData.total > 0 && modelData.cur >= modelData.total)
-                                           ? "#2f7d4a" : "#6d6257"
+                                           ? "#16a34a" : "#71717a"
                                 }
                             }
 
@@ -280,7 +280,7 @@ Item {
                                          && modelData.total > 0
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 4
-                                color: "#e8ddd0"
+                                color: "#ececee"
                                 radius: 2
 
                                 Rectangle {
@@ -295,7 +295,7 @@ Item {
                                     color: {
                                         var cur = modelData.cur || 0
                                         var tot = modelData.total || 0
-                                        return (tot > 0 && cur >= tot) ? "#2f7d4a" : "#c98a2e"
+                                        return (tot > 0 && cur >= tot) ? "#16a34a" : "#d97706"
                                     }
                                 }
                             }
@@ -307,7 +307,7 @@ Item {
                         visible: !!(root.dailyData || {}).ok
                         text: (root.dailyData || {}).stale_hint || ""
                         font.pixelSize: Math.round(11 * root.fs)
-                        color: "#8a7a68"
+                        color: "#a1a1aa"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -335,7 +335,7 @@ Item {
                               ? "暂无鸣潮抽卡记录。"
                               : "UID: " + (root.gachaData.uid || "") + " | 已加载 " + root.pools.length + " 个卡池"
                         font.pixelSize: Math.round(13 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -377,17 +377,17 @@ Item {
                                     HusText {
                                         Layout.alignment: Qt.AlignLeft
                                         text: "总抽数: " + (modelData.total_pulls || 0)
-                                        font.pixelSize: Math.round(13 * root.fs); color: "#2f4f4f"
+                                        font.pixelSize: Math.round(13 * root.fs); color: "#27272a"
                                     }
                                     HusText {
                                         Layout.alignment: Qt.AlignLeft
                                         text: "5★: " + (modelData.five_star_count || 0)
-                                        font.pixelSize: Math.round(13 * root.fs); color: "#a8351f"
+                                        font.pixelSize: Math.round(13 * root.fs); color: "#dc2626"
                                     }
                                     HusText {
                                         Layout.alignment: Qt.AlignLeft
                                         text: "出货率: " + (modelData.five_star_rate || "0%")
-                                        font.pixelSize: Math.round(13 * root.fs); color: "#2f7d4a"
+                                        font.pixelSize: Math.round(13 * root.fs); color: "#16a34a"
                                     }
                                 }
 
@@ -395,7 +395,7 @@ Item {
                                     text: "5★ 出货历史 (最新在前，共 " + (modelData.high_rarity_history || []).length + " 条)"
                                     font.pixelSize: Math.round(13 * root.fs)
                                     font.bold: true
-                                    color: "#2f4f4f"
+                                    color: "#27272a"
                                     Layout.topMargin: 6
                                 }
 
@@ -420,9 +420,9 @@ Item {
                                         width: wuwaHistoryList.width
                                         height: 38
                                         required property var modelData
-                                        color: "#faf6f0"
+                                        color: "#fafafa"
                                         radius: 6
-                                        border.color: "#e0d6c8"
+                                        border.color: "#e4e4e7"
                                         border.width: 1
 
                                         RowLayout {
@@ -463,7 +463,7 @@ Item {
                                             // 第几抽 (绿色, 固定宽度, 确保优先显示)
                                             HusText {
                                                 text: modelData.pity ? ("第 " + modelData.pity + " 抽") : ""
-                                                font.pixelSize: Math.round(13 * root.fs); color: "#2f7d4a"; font.bold: true
+                                                font.pixelSize: Math.round(13 * root.fs); color: "#16a34a"; font.bold: true
                                                 Layout.minimumWidth: 70
                                                 Layout.preferredWidth: 80
                                                 horizontalAlignment: Text.AlignRight

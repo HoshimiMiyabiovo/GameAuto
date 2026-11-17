@@ -2198,5 +2198,13 @@
         "_comment": "best-effort 观察步（非判据）：OCR 认出「DuMate」字样就留一条渲染证据日志；认不出（英文拆字/深色皮肤/遮挡）optional_if_missing 直接跳过，流程照常成功。5s 保底等待由 startup_wait_sec 结构性保证，本步只多给渲染一点时间（合计约 5-10s 后收尾关进程，符合「启动五秒后退出即可」）。"
       }
     ]
+  },
+  "MEOO": {
+    "enabled": true,
+    "runner": "meoo",
+    "_comment": "2026-11-18 用户需求：秒悟（Meoo）每日登录赠送积分（FREE 档 2,000/天）接入薅羊毛。CLI 型子流程（runner=meoo，无窗口无进程）：`meoo whoami` 触发当日登录 + `meoo account --json` 读 points.totalGranted 做证据门控（到账则 +2,000；daily_login.used 是配额消耗口径不代表领取，实测 2026-11-18）。⚠️ 触发方式未实锤——注册当天无法判别 whoami 是否算登录（注册即首次登录，当日赠送可能已随注册入账 7000=5000 默认+2000），fail-closed 门控会自动暴露：连续多日「未见到账」即触发方式不对，改查 meoo.com 积分明细校准。cli_path 指向便携 Node 的 meoo.cmd（meoo.cmd 依赖同目录 node.exe，子进程 PATH 会前置该目录——GUI 进程早于 PATH 变更启动，裸 meoo 找不到）。close 全 false：无进程可关。",
+    "cli_path": "C:\\Users\\admin\\AppData\\Local\\Programs\\nodejs\\meoo.cmd",
+    "close_process_on_finish": false,
+    "close_process_on_fail": false
   }
 }

@@ -697,3 +697,53 @@ class DailyView:
             tasks = list(game.get("tasks") or [])
             tasks.insert(0, sign_task)
             game["tasks"] = tasks
+
+    # ── AI 对话史全链刷新（用户拍板：不做定时，GUI 手动开关触发）──────
+
+    @Slot(result=str)
+    def getAiHistoryStatus(self) -> str:
+        """同步返回最近一次刷新状态（只读缓存态，无 IO，QML 初始化用）。"""
+        try:
+            from ...services.ai_history_refresh import status_json
+            return status_json()
+        except Exception as exc:  # noqa: BLE001 - 状态不可用不崩 QML
+            logger.debug("[Bridge] 读取 AI 对话史状态失败: %s", exc)
+            return '{"running": false, "last_ok": null, "last_ts": 0, "last_msg": ""}'
+
+    @Slot()
+    def refreshAiHistory(self):
+        """手动触发 AI 对话史全链刷新（daemon 线程跑 5-8 分钟，槽立即返回）。
+
+        链路见 services/ai_history_refresh 模块注释；进度/结果经
+        aiHistoryChanged 推给 QML。运行中重复触发在服务层被单飞锁拒绝。
+        """
+        from ...services.ai_history_refresh import run_refresh, status_json
+
+        # status_json 返回 JSON 字符串（QML 用），这里要 dict 就地解析
+        snap = json.loads(status_json())
+        if snap.get("running"):
+            self.emit_event("toast", message="AI 对话史刷新已在运行中", color=TONE_WARNING)
+            return
+        logger.info("[Bridge] 手动触发 AI 对话史全链刷新")
+
+        def _run() -> None:
+            def _emit(payload: str) -> None:
+                try:
+                    self.aiHistoryChanged.emit(payload)
+                except Exception as exc:  # noqa: BLE001 - 信号推送失败不影响链路
+                    logger.debug("[Bridge] 推送 AI 对话史事件异常: %s", exc)
+
+            try:
+                snap = run_refresh(logger, _emit)
+            except Exception as exc:  # noqa: BLE001 - 服务层已收口，这里兜底
+                logger.exception("[Bridge] AI 对话史刷新异常")
+                snap = {"running": False, "last_ok": False,
+                        "last_ts": time.time(), "last_msg": f"刷新异常: {exc}"}
+            if snap.get("last_ok"):
+                self.emit_event("toast", message=f"AI 对话史已更新：{snap.get('last_msg', '')}",
+                                color=TONE_SUCCESS)
+            else:
+                self.emit_event("toast", message=f"AI 对话史刷新失败：{snap.get('last_msg', '')}",
+                                color=TONE_DANGER)
+
+        threading.Thread(target=_run, daemon=True).start()

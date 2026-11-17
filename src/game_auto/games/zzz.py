@@ -17,11 +17,18 @@ PROFILE = GameProfile(
     progress_hint="game_auto.games.base:build_maintenance_hint",
     supports_stamina=True,
     script_tools=(
+        # 2026-11-17：版本行改绑 OneDragonDirect——本机实际在用的是这个选项
+        # （launcher 已填 D:\down\ZZZ\ZenlessZoneZero-OneDragon），旧的 OneDragonBat
+        # 选项 launcher 一直为空，脚本管理页只能报"未安装"、永远不报更新。
+        # 安装器装完也写 OneDragonDirect.launcher，与启动路径一致；
+        # 安装在托管目录外时按 2026-11-03 口径拒绝自动换血，提示用工具自带更新。
+        # 本地版本走 git HEAD 快照日期（OneDragon 无版本号真值，见 ScriptToolSpec）。
         ScriptToolSpec(
-            label="OneDragon Bat",
+            label="OneDragon 一条龙",
             repo="OneDragon-Anything/ZenlessZoneZero-OneDragon",
-            option_name="OneDragonBat",
+            option_name="OneDragonDirect",
             tool_key="zzz-one-dragon",
+            git_commit_date=True,
         ),
         # ScriptChainer 上游仓库不明：只查本地版本；按版本号命名 zip 分发、
         # 无自更新，目录名可信

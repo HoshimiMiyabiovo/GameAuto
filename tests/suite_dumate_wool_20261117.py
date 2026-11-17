@@ -85,8 +85,12 @@ def test_flow_configs():
 def test_wiring():
     print("[2] 接线锁：WOOL_FLOW_KEYS / 显示名 meta / friendly_note / 路径映射")
     check("WOOL_FLOW_KEYS 含 DUMATE", "DUMATE" in btr.WOOL_FLOW_KEYS, btr.WOOL_FLOW_KEYS)
-    check("DUMATE 排在集合末尾（后接入的不打断既有顺序）",
-          btr.WOOL_FLOW_KEYS[-1] == "DUMATE", btr.WOOL_FLOW_KEYS)
+    # 2026-11-18 MEOO 追加后不再锁末位：每个后接入的羊毛都会打破前一个的
+    # 末位断言，改锁相对顺序（DUMATE 先于 MEOO）
+    check("DUMATE 在集合内且先于 MEOO",
+          "DUMATE" in btr.WOOL_FLOW_KEYS
+          and btr.WOOL_FLOW_KEYS.index("DUMATE") < btr.WOOL_FLOW_KEYS.index("MEOO"),
+          btr.WOOL_FLOW_KEYS)
     # 显示名 meta 结构化导入（AutomationView 是纯 mixin，不依赖 Qt 实例化）
     from game_auto.ui.bridge_views.automation import AutomationView
     check("GUI _WOOL_FLOW_META 含 DUMATE",

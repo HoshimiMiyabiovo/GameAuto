@@ -61,10 +61,10 @@ Item {
                     if (dev.deviceModel) parts.push(dev.deviceModel)
                     if (dev.registered) parts.push("已注册设备")
                     mihoyoDeviceStatus.text = parts.join(" · ")
-                    mihoyoDeviceStatus.color = "#2f7d4a"
+                    mihoyoDeviceStatus.color = "#16a34a"
                 } else {
                     mihoyoDeviceStatus.text = "未绑定"
-                    mihoyoDeviceStatus.color = "#6d6257"
+                    mihoyoDeviceStatus.color = "#71717a"
                 }
             } catch(e) { /* ignore */ }
         }
@@ -170,7 +170,7 @@ Item {
                         HusText {
                             text: "已有 HoYo.Gacha？直接读它的数据库，三端（原神/星铁/绝区零）一次全进："
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                             Layout.fillWidth: true
                             wrapMode: Text.Wrap
                         }
@@ -225,7 +225,7 @@ Item {
                               ? "暂无已导入的抽卡记录，请选择 UIGF JSON 文件导入。"
                               : "已加载 " + root.accounts.length + " 个账号，选择 UID 查看分析。"
                         font.pixelSize: Math.round(13 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -270,9 +270,9 @@ Item {
                                 Rectangle {
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
-                                    color: "#faf6f0"
+                                    color: "#fafafa"
                                     radius: 8
-                                    border.color: "#e0d6c8"
+                                    border.color: "#e4e4e7"
                                     border.width: 1
 
                                 ListView {
@@ -292,10 +292,10 @@ Item {
                                         height: 60
                                         required property var modelData
                                         required property int index
-                                        color: hoyoPoolListView.selectedPool === index ? "#fff1d6" : (poolHover.containsMouse ? "#faf3e8" : "transparent")
+                                        color: hoyoPoolListView.selectedPool === index ? "#ecfdf5" : (poolHover.containsMouse ? "#fafafa" : "transparent")
                                         radius: 6
                                         border.width: hoyoPoolListView.selectedPool === index ? 2 : 0
-                                        border.color: "#ffaa44"
+                                        border.color: "#10b981"
 
                                         MouseArea {
                                             id: poolHover
@@ -314,7 +314,7 @@ Item {
                                                 text: modelData.pool_name || "?"
                                                 font.pixelSize: Math.round(14 * root.fs)
                                                 font.bold: hoyoPoolListView.selectedPool === index
-                                                color: "#2f4f4f"
+                                                color: "#27272a"
                                                 Layout.fillWidth: true
                                                 elide: Text.ElideRight
                                                 ToolTip.text: modelData.pool_name || ""
@@ -324,7 +324,13 @@ Item {
                                                     id: poolNameHover
                                                     anchors.fill: parent
                                                     hoverEnabled: true
-                                                    cursorShape: Qt.IBeamCursor
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    // 2026-11-17 修复：这个 MouseArea 只为 tooltip 悬停服务，
+                                                    // 默认 acceptedButtons 会吞掉点击，导致点池名（卡片上半截）
+                                                    // 无法切换卡池、只有点下半截抽数行才生效（用户实测）。
+                                                    // NoButton = 不接任何按键事件，点击穿透到底层 poolHover，
+                                                    // containsMouse 悬停跟踪不受影响。
+                                                    acceptedButtons: Qt.NoButton
                                                 }
                                             }
                                             RowLayout {
@@ -332,12 +338,12 @@ Item {
                                                 HusText {
                                                     text: (modelData.total_pulls || 0) + " 抽"
                                                     font.pixelSize: Math.round(12 * root.fs)
-                                                    color: "#6d6257"
+                                                    color: "#71717a"
                                                 }
                                                 HusText {
                                                     text: "· 5★: " + (modelData.high_rarity_count || 0)
                                                     font.pixelSize: Math.round(12 * root.fs)
-                                                    color: "#a8351f"
+                                                    color: "#dc2626"
                                                 }
                                             }
                                         }
@@ -351,7 +357,7 @@ Item {
                                         return n > 0 ? ("共 " + n + " 个卡池，点击查看详情") : "暂无卡池数据"
                                     }
                                     font.pixelSize: Math.round(11 * root.fs)
-                                    color: "#8a7a68"
+                                    color: "#a1a1aa"
                                     wrapMode: Text.Wrap
                                     Layout.fillWidth: true
                                 }
@@ -372,7 +378,7 @@ Item {
                                         text: hoyoPoolListView.currentPool.pool_name || "—"
                                         font.pixelSize: Math.round(22 * root.fs)
                                         font.bold: true
-                                        color: "#2f4f4f"
+                                        color: "#27272a"
                                         Layout.fillWidth: true
                                         elide: Text.ElideRight
                                         ToolTip.text: hoyoPoolListView.currentPool.pool_name || ""
@@ -389,12 +395,12 @@ Item {
                                         text: (hoyoPoolListView.currentPool.total_pulls || 0)
                                         font.pixelSize: Math.round(36 * root.fs)
                                         font.bold: true
-                                        color: "#2f7d4a"
+                                        color: "#16a34a"
                                     }
                                     HusText {
                                         text: "抽"
                                         font.pixelSize: Math.round(14 * root.fs)
-                                        color: "#6d6257"
+                                        color: "#71717a"
                                         Layout.alignment: Qt.AlignBottom
                                         Layout.bottomMargin: 6
                                     }
@@ -404,9 +410,9 @@ Item {
                                 Rectangle {
                                     Layout.fillWidth: true
                                     height: 70
-                                    color: "#fffaf2"
+                                    color: "#ffffff"
                                     radius: 8
-                                    border.color: "#dbcdbd"
+                                    border.color: "#e4e4e7"
                                     border.width: 1
 
                                     RowLayout {
@@ -417,34 +423,34 @@ Item {
                                         ColumnLayout {
                                             Layout.fillWidth: true
                                             spacing: 2
-                                            HusText { text: "5★ 数"; font.pixelSize: Math.round(12 * root.fs); color: "#6d6257"; Layout.alignment: Qt.AlignHCenter }
+                                            HusText { text: "5★ 数"; font.pixelSize: Math.round(12 * root.fs); color: "#71717a"; Layout.alignment: Qt.AlignHCenter }
                                             HusText {
                                                 text: (hoyoPoolListView.currentPool.high_rarity_count || 0)
-                                                font.pixelSize: Math.round(22 * root.fs); font.bold: true; color: "#a8351f"
+                                                font.pixelSize: Math.round(22 * root.fs); font.bold: true; color: "#dc2626"
                                                 Layout.alignment: Qt.AlignHCenter
                                             }
                                         }
-                                        Rectangle { width: 1; height: 40; color: "#dbcdbd" }
+                                        Rectangle { width: 1; height: 40; color: "#e4e4e7" }
 
                                         ColumnLayout {
                                             Layout.fillWidth: true
                                             spacing: 2
-                                            HusText { text: "出货率"; font.pixelSize: Math.round(12 * root.fs); color: "#6d6257"; Layout.alignment: Qt.AlignHCenter }
+                                            HusText { text: "出货率"; font.pixelSize: Math.round(12 * root.fs); color: "#71717a"; Layout.alignment: Qt.AlignHCenter }
                                             HusText {
                                                 text: (hoyoPoolListView.currentPool.high_rarity_rate || "0%")
-                                                font.pixelSize: Math.round(20 * root.fs); font.bold: true; color: "#2f7d4a"
+                                                font.pixelSize: Math.round(20 * root.fs); font.bold: true; color: "#16a34a"
                                                 Layout.alignment: Qt.AlignHCenter
                                             }
                                         }
-                                        Rectangle { width: 1; height: 40; color: "#dbcdbd" }
+                                        Rectangle { width: 1; height: 40; color: "#e4e4e7" }
 
                                         ColumnLayout {
                                             Layout.fillWidth: true
                                             spacing: 2
-                                            HusText { text: "当前保底"; font.pixelSize: Math.round(12 * root.fs); color: "#6d6257"; Layout.alignment: Qt.AlignHCenter }
+                                            HusText { text: "当前保底"; font.pixelSize: Math.round(12 * root.fs); color: "#71717a"; Layout.alignment: Qt.AlignHCenter }
                                             HusText {
                                                 text: (hoyoPoolListView.currentPool.current_pity || 0) + " / 90"
-                                                font.pixelSize: Math.round(18 * root.fs); font.bold: true; color: "#b66f1f"
+                                                font.pixelSize: Math.round(18 * root.fs); font.bold: true; color: "#d97706"
                                                 Layout.alignment: Qt.AlignHCenter
                                             }
                                         }
@@ -456,7 +462,7 @@ Item {
                                     text: "5★ 出货历史 (最新在前，共 " + (hoyoPoolListView.currentPool.high_rarity_history || []).length + " 条)"
                                     font.pixelSize: Math.round(15 * root.fs)
                                     font.bold: true
-                                    color: "#2f4f4f"
+                                    color: "#27272a"
                                     Layout.topMargin: 6
                                 }
 
@@ -481,9 +487,9 @@ Item {
                                         width: hoyoFiveStarList.width
                                         height: 38
                                         required property var modelData
-                                        color: "#faf6f0"
+                                        color: "#fafafa"
                                         radius: 6
-                                        border.color: "#e0d6c8"
+                                        border.color: "#e4e4e7"
                                         border.width: 1
 
                                         RowLayout {
@@ -523,7 +529,7 @@ Item {
                                             // 第几抽 (绿色, 固定宽度, 确保优先显示)
                                             HusText {
                                                 text: modelData.pity ? ("第 " + modelData.pity + " 抽") : ""
-                                                font.pixelSize: Math.round(13 * root.fs); color: "#2f7d4a"; font.bold: true
+                                                font.pixelSize: Math.round(13 * root.fs); color: "#16a34a"; font.bold: true
                                                 Layout.minimumWidth: 70
                                                 Layout.preferredWidth: 80
                                                 horizontalAlignment: Text.AlignRight
@@ -632,7 +638,7 @@ Item {
                     HusText {
                         text: "粘贴 copy-device-info APK 复制的字段集合（或抓包得到的 {\"fp\":…,\"device_id\":…}），程序自动识别字段并绑定，降低米游社便笺查询触发风控 (1034) 的概率。"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -646,9 +652,9 @@ Item {
                             wrapMode: TextArea.Wrap
                             font.family: "Consolas"
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#2c241d"
+                            color: "#18181b"
                             placeholderText: "{\"deviceModel\":\"…\",\"androidVersion\":\"…\",\"deviceFingerprint\":\"…\",\"oaid\":\"…\"}"
-                            background: Rectangle { color: "#fffdf9"; border.color: "#dbcdbd"; radius: 6 }
+                            background: Rectangle { color: "#ffffff"; border.color: "#e4e4e7"; radius: 6 }
                         }
                     }
                     RowLayout {
@@ -671,7 +677,7 @@ Item {
                             id: mihoyoDeviceStatus
                             text: "未绑定"
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                             Layout.fillWidth: true
                         }
                     }
@@ -679,7 +685,7 @@ Item {
                     HusText {
                         text: "签到状态: 等待操作"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                     }
                 }
             }

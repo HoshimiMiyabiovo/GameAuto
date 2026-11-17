@@ -295,7 +295,7 @@ def print_analysis(file_path: str, top_item_ids: int = 8):
     print_divider()
     print("  无限暖暖 - 共鸣记录摘要")
     print_divider()
-    print(f"\n[整体概况]")
+    print("\n[整体概况]")
     print(f"  文件: {file_path}")
     print(f"  格式: {document['source_label']}")
     if document.get("profile_label"):
@@ -321,7 +321,7 @@ def print_analysis(file_path: str, top_item_ids: int = 8):
         print("  说明: 这个摘要模式可以估算每池总抽数、4/5 星事件次数和当前保底进度；")
         print("       但因为缺少逐抽时间与低星记录，无法完全还原网页的完整统计。")
 
-    print(f"\n[卡池摘要]")
+    print("\n[卡池摘要]")
     print_divider()
     if overview is not None:
         for pool_id in GACHA_POOLS:

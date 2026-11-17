@@ -18,7 +18,10 @@ PROFILE = GameProfile(
     default_app={
         "display_name": "白荆回廊",
         "type": "normal",
-        "launcher": "D:\\Program Files\\Game\\Seed_OB_Prod\\1.1.1.7\\Seed_OB_Prod.exe",
+        # launcher 留空与其他 7 个游戏模板一致：启动器路径含版本号目录
+        # （1.1.1.7），游戏更新即失效，不该进代码模板。本机真实路径已迁移到
+        # app_config.apps.BaiJing.launcher（2026-11-18），GUI 路径配置页可改。
+        "launcher": "",
         "launcher_params": [],
         "game": {"process_name": "GateMK-Win64-Shipping.exe"},
         "timeouts": {"launch": 300, "monitor": 1800},

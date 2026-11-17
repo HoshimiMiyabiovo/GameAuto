@@ -114,3 +114,22 @@ storage/cache/
 # Trae 分享会话抓取产物（含聊天正文，按 2026-11-17 changelog 约定落 data/ 不入库）
 /data/trae_capture/
 /tools/trae_capture/share_links.txt
+
+# 妙手（CatPaw）本地会话导出（含聊天正文，不入库）
+/data/catpaw_capture/
+
+# Kilo Desktop 本地会话导出（含聊天正文与内核 API 密码，不入库）
+/data/kilo_capture/
+
+# TeleAgent 本地会话导出（含聊天正文，不入库）
+/data/teleagent_capture/
+
+# 码道（CodeArts Agent）内核会话导出（含聊天正文，不入库）
+/data/codearts_capture/
+# 工作区根 _tmp_* 取证/探针脚本与缓存快照（2026-11-17 Kilo 排查产物，防误提交）
+/_tmp_*
+
+# 一次性任务临时区与会件临时目录兜底（2026-11-17 用户拍板：根目录禁止堆临时产物，
+# 用完即删；.temp 允许存在但永不入库，套件临时目录前缀 ga_* 同样不入库）
+/.temp/
+/ga_*/

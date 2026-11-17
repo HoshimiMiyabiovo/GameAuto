@@ -7,17 +7,17 @@ Rectangle {
     id: root
     width: parent ? parent.width : 200
     height: rowLayout.height + 16
-    color: "#fffdf9"
-    radius: 12
-    border.color: "#dbcdbd"
+    color: "#fafafa"
+    radius: 10
+    border.color: "#ececee"
     border.width: 1
 
     property int indexNumber: 1
     property string taskName: ""
     property string scriptLabel: ""
     property string stateText: "待执行"
-    property string stateColor: "#6d6257"
-    property string stateBg: "#f4ecdf"
+    property string stateColor: "#71717a"
+    property string stateBg: "#f6f6f7"
 
     RowLayout {
         id: rowLayout
@@ -49,7 +49,7 @@ Rectangle {
             HusText {
                 text: root.scriptLabel
                 font.pixelSize: 12
-                color: "#6d6257"
+                color: "#71717a"
                 Layout.fillWidth: true
                 elide: Text.ElideRight
             }

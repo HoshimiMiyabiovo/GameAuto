@@ -35,7 +35,7 @@
 ## 环境要求
 
 - Windows 10/11 操作系统（大量使用 Win32 API）
-- Python 3.10+
+- Python 3.13+（实测环境 3.13.4，`requirements.lock` 冻结于 3.13；旧文档曾写 3.10+ 但从未在 3.10 上验证过，2026-11-18 口径对齐）
 - 主 OCR：**onnxocr PP-OCRv6**（vendored `src/onnxocr` + `onnxruntime-gpu`）；所有按文字定位点击都走它，建议 NVIDIA 显卡 / CUDA，无 CUDA 会退回 CPU 且明显变慢
 - Tesseract：**Python 包 `pytesseract` 由 `setup_deps.bat` 自动安装（必装）**；`tesseract.exe` + `chi_sim` 中文包**可选**，仓库不含二进制（见下节）。仅当 onnxocr v6 返回空或异常时才尝试它；GUI 的「XM Seer 测试」独立工具是唯一硬依赖 `tesseract.exe` 的入口。
 

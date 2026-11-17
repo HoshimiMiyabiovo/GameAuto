@@ -42,7 +42,7 @@ Item {
                     HusText {
                         text: "按顺序自动执行勾选的签到/领取流程：启动程序 → 匹配点击 → 确认结果 → 关闭程序。\n在下方勾选要参与的流程；取消勾选的流程在一条龙里运行时也会自动跳过。"
                         font.pixelSize: Math.round(13 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -57,7 +57,7 @@ Item {
                         HusText {
                             text: bridge.isRunning ? "有任务正在运行…" : "空闲"
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: bridge.isRunning ? "#b66f1f" : "#6d6257"
+                            color: bridge.isRunning ? "#d97706" : "#71717a"
                         }
                     }
                 }
@@ -85,8 +85,8 @@ Item {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 76
                             radius: 10
-                            color: modelData.enabled ? "#fffdf9" : "#f4ecdf"
-                            border.color: modelData.enabled ? "#dbcdbd" : "#e5dccb"
+                            color: modelData.enabled ? "#ffffff" : "#f6f6f7"
+                            border.color: modelData.enabled ? "#e4e4e7" : "#e4e4e7"
                             border.width: 1
 
                             RowLayout {
@@ -108,13 +108,13 @@ Item {
                                         text: modelData.name
                                         font.pixelSize: Math.round(14 * root.fs)
                                         font.bold: true
-                                        color: "#2c241d"
+                                        color: "#18181b"
                                     }
                                     HusText {
                                         text: modelData.key + " · " + (modelData.close_on_finish ? "完成后关闭" : "完成后保留") + " · " + (modelData.exe_path || "程序路径未配置")
                                         font.pixelSize: Math.round(11 * root.fs)
                                         font.family: "Consolas"
-                                        color: "#6d6257"
+                                        color: "#71717a"
                                         elide: Text.ElideMiddle
                                         Layout.fillWidth: true
                                     }
@@ -141,7 +141,7 @@ Item {
                     HusText {
                         text: "未配置路径的流程请到「路径配置」页填写程序位置，运行时会被跳过并报错。"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }

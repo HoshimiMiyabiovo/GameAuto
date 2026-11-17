@@ -20,7 +20,7 @@ HusCard {
         HusText {
             text: root.title
             font.pixelSize: Math.round(12 * root.fs)
-            color: "#6d6257"
+            color: "#71717a"
         }
         HusText {
             text: root.value
@@ -30,7 +30,7 @@ HusCard {
         HusText {
             text: root.note
             font.pixelSize: Math.round(11 * root.fs)
-            color: "#6d6257"
+            color: "#71717a"
             wrapMode: Text.Wrap
             Layout.fillWidth: true
         }

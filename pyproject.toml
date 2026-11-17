@@ -13,13 +13,21 @@ cache_dir = "data/cache/pytest"
 
 [tool.ruff]
 line-length = 140
-target-version = "py310"
+# 与实测环境对齐（2026-11-18）：.venv 3.13.4、requirements.lock 冻结于 3.13，
+# 旧值 py310 是「声明 3.10 兼容但从未在 3.10 上验证过」的口径漂移
+target-version = "py313"
 cache-dir = "data/cache/ruff"
 # flet/ 内嵌第三方框架、data/reference/ 为参考项目副本、artifacts/ 为本地证据与真机脚本、
 # src/onnxocr 为 vendored 第三方 OCR（OneDragon fork），不参与本项目静态检查
 exclude = [".venv", "data/reference", "artifacts", "tools/flet", "src/game_auto/ui/flet", "src/game_auto/ui/flet_app.py", "tests/suite_*.py", "src/onnxocr"]
 
 [tool.ruff.lint]
-# 先只开能兜住 AGENTS.md 硬规则的窄集合：语法错误、未定义名、裸 except。
-# 宽捕获（BLE001）噪音太大，暂不启用；静默 pass 由评审规则约束。
-select = ["E9", "F821", "F822", "F823", "E722"]
+# 窄集合起步（2026-10-29），2026-11-18 扩入零噪音类：文件尾换行（W292）、
+# 行尾空白（W293）、无占位 f-string（F541）——均已 --fix 清零。
+# 已知未启用及原因（分批路线图，别一次性全开）：
+#   F401 未用导入（206 处）——大量动态导入/side-effect 导入，必须逐个人工核，
+#       盲 fix 会断功能；E501/E741/E731/E701/F841/E402 属风格大扫除，改动面大；
+#   BLE001 宽捕获噪音太大维持不开，静默 pass 由评审规则约束；
+#   mypy/pyright/bandit 需要全库注解与告警分诊，单独立项（当前注解 75%，
+#       且不参与校验，直接开会全库飘红）。
+select = ["E9", "F821", "F822", "F823", "E722", "W292", "W293", "F541"]

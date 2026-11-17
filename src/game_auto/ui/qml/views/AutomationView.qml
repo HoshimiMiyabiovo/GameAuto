@@ -21,7 +21,7 @@ Item {
     property bool emailDialogOpen: false
     property var emailDraft: ({})
     property string emailDialogStatus: ""        // 表单底部提示
-    property color emailDialogStatusColor: "#6d6257"
+    property color emailDialogStatusColor: "#71717a"
 
     function openEmailConfigDialog() {
         try {
@@ -41,7 +41,7 @@ Item {
         root.emailDialogStatus = cfg.has_password
             ? "已保存授权码（加密）；如需更换请在下方重新输入"
             : "首次配置：QQ/163/Gmail 等需在邮箱后台开启 SMTP 并使用授权码"
-        root.emailDialogStatusColor = "#6d6257"
+        root.emailDialogStatusColor = "#71717a"
         root.emailDialogOpen = true
         passwordField.clear()
     }
@@ -59,12 +59,12 @@ Item {
 
         if (!smtpHost || !sender || recipients.length === 0) {
             root.emailDialogStatus = "SMTP 主机、发件人、收件人不能为空"
-            root.emailDialogStatusColor = "#b04b44"
+            root.emailDialogStatusColor = "#dc2626"
             return
         }
         if (!root.emailDraft.has_password && !password) {
             root.emailDialogStatus = "请填写 SMTP 授权码（或关闭弹窗保持现有配置）"
-            root.emailDialogStatusColor = "#b04b44"
+            root.emailDialogStatusColor = "#dc2626"
             return
         }
         var payload = {
@@ -229,7 +229,7 @@ Item {
                         HusText {
                             text: "勾选需要运行的任务，可在下方调整顺序和启动方式。"
                             font.pixelSize: Math.round(13 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                             Layout.fillWidth: true
                         }
 
@@ -249,8 +249,8 @@ Item {
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 36
-                        color: "#f4ecdf"
-                        radius: 10
+                        color: Theme.bgSubtle
+                        radius: 8
 
                         RowLayout {
                             anchors.fill: parent
@@ -258,12 +258,12 @@ Item {
                             anchors.rightMargin: 10
                             spacing: 4
 
-                            HusText { text: "顺序"; Layout.preferredWidth: 96; font.pixelSize: Math.round(12 * root.fs); color: "#6d6257" }
-                            HusText { text: "启用"; Layout.preferredWidth: 40; font.pixelSize: Math.round(12 * root.fs); color: "#6d6257" }
-                            HusText { text: "任务"; Layout.preferredWidth: 140; font.pixelSize: Math.round(12 * root.fs); color: "#6d6257" }
-                            HusText { text: "启动方式"; Layout.preferredWidth: 180; font.pixelSize: Math.round(12 * root.fs); color: "#6d6257" }
-                            HusText { text: "类型"; Layout.preferredWidth: 100; font.pixelSize: Math.round(12 * root.fs); color: "#6d6257" }
-                            HusText { text: "说明 / 当前设置"; Layout.fillWidth: true; font.pixelSize: Math.round(12 * root.fs); color: "#6d6257" }
+                            HusText { text: "顺序"; Layout.preferredWidth: 96; font.pixelSize: Math.round(12 * root.fs); color: "#71717a" }
+                            HusText { text: "启用"; Layout.preferredWidth: 40; font.pixelSize: Math.round(12 * root.fs); color: "#71717a" }
+                            HusText { text: "任务"; Layout.preferredWidth: 140; font.pixelSize: Math.round(12 * root.fs); color: "#71717a" }
+                            HusText { text: "启动方式"; Layout.preferredWidth: 180; font.pixelSize: Math.round(12 * root.fs); color: "#71717a" }
+                            HusText { text: "类型"; Layout.preferredWidth: 100; font.pixelSize: Math.round(12 * root.fs); color: "#71717a" }
+                            HusText { text: "说明 / 当前设置"; Layout.fillWidth: true; font.pixelSize: Math.round(12 * root.fs); color: "#71717a" }
                         }
                     }
 
@@ -279,11 +279,10 @@ Item {
                         delegate: Rectangle {
                             id: delegateRect
                             width: taskListView.width
-                            height: 52
-                            color: index % 2 === 0 ? "#fffdf9" : "#fffaf2"
+                            height: 56
+                            // 2026-11-17 现代化：去隔行变色与逐行描边，改悬停高亮 + 发丝分隔线
+                            color: rowHover.hovered ? Theme.bgSubtle : "transparent"
                             radius: 8
-                            border.color: "#dbcdbd"
-                            border.width: 1
 
                             // 捕获 delegate 数据，避免被 HusSelect.model 遮蔽
                             property string appKey: model.app_key || ""
@@ -292,10 +291,25 @@ Item {
                             property string launcherLabelsJson: model.launcherLabelsJson || "[]"
                             property string launcherValuesJson: model.launcherValuesJson || "[]"
 
+                            // HoverHandler 不拦截子控件（复选/下拉/按钮）的鼠标事件
+                            HoverHandler { id: rowHover }
+
+                            // 行底分隔线（最后一行不画）
+                            Rectangle {
+                                anchors.bottom: parent.bottom
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.leftMargin: 12
+                                anchors.rightMargin: 12
+                                height: 1
+                                color: Theme.hairline
+                                visible: index < taskListModel.count - 1
+                            }
+
                             RowLayout {
                                 anchors.fill: parent
-                                anchors.leftMargin: 10
-                                anchors.rightMargin: 10
+                                anchors.leftMargin: 12
+                                anchors.rightMargin: 12
                                 spacing: 4
 
                                 // Order number + move buttons（自绘，避免 HusButton Type_Text 在委托内透明不可见）
@@ -307,17 +321,15 @@ Item {
                                         Layout.preferredWidth: 26
                                         text: model.orderNum || (index + 1)
                                         font.pixelSize: Math.round(13 * root.fs)
-                                        color: "#6d6257"
+                                        color: "#71717a"
                                     }
 
                                     Rectangle {
                                         id: upBtn
                                         Layout.preferredWidth: 30
                                         Layout.preferredHeight: 28
-                                        radius: 6
-                                        color: upArea.containsMouse ? "#e7dccb" : "#f1e8d8"
-                                        border.color: "#d8c9b4"
-                                        border.width: 1
+                                        radius: 8
+                                        color: upArea.containsMouse ? "#e4e4e7" : "#f4f4f5"
                                         enabled: index > 0 && !bridge.isRunning
                                         MouseArea {
                                             id: upArea
@@ -330,7 +342,7 @@ Item {
                                             anchors.centerIn: parent
                                             text: "↑"
                                             font.pixelSize: Math.round(14 * root.fs)
-                                            color: (index > 0 && !bridge.isRunning) ? "#5b5147" : "#bcae9c"
+                                            color: (index > 0 && !bridge.isRunning) ? "#52525b" : "#c4c4c8"
                                         }
                                     }
 
@@ -338,10 +350,8 @@ Item {
                                         id: downBtn
                                         Layout.preferredWidth: 30
                                         Layout.preferredHeight: 28
-                                        radius: 6
-                                        color: downArea.containsMouse ? "#e7dccb" : "#f1e8d8"
-                                        border.color: "#d8c9b4"
-                                        border.width: 1
+                                        radius: 8
+                                        color: downArea.containsMouse ? "#e4e4e7" : "#f4f4f5"
                                         enabled: index < taskListModel.count - 1 && !bridge.isRunning
                                         MouseArea {
                                             id: downArea
@@ -354,7 +364,7 @@ Item {
                                             anchors.centerIn: parent
                                             text: "↓"
                                             font.pixelSize: Math.round(14 * root.fs)
-                                            color: (index < taskListModel.count - 1 && !bridge.isRunning) ? "#5b5147" : "#bcae9c"
+                                            color: (index < taskListModel.count - 1 && !bridge.isRunning) ? "#52525b" : "#c4c4c8"
                                         }
                                     }
                                 }
@@ -418,7 +428,7 @@ Item {
                                     Layout.fillWidth: true
                                     text: model.description || ""
                                     font.pixelSize: Math.round(12 * root.fs)
-                                    color: "#6d6257"
+                                    color: "#71717a"
                                     elide: Text.ElideRight
                                 }
                             }
@@ -494,7 +504,7 @@ Item {
                             ? "邮件配置已就绪（如需修改授权码，点配置邮件覆盖）"
                             : "邮件未配置：请点击下方配置邮件填写 SMTP 账号"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: bridge.emailConfigured ? "#2f7d4a" : "#b66f1f"
+                        color: bridge.emailConfigured ? "#16a34a" : "#d97706"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -509,9 +519,9 @@ Item {
 
                     HusText {
                         visible: !bridge.dpapiAvailable
-                        text: "⚠ 当前环境无 win32crypt（DPAPI），无法安全保存密码；请安装 pywin32 后重启 UI。"
+                        text: "当前环境无 win32crypt（DPAPI），无法安全保存密码；请安装 pywin32 后重启 UI。"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#b04b44"
+                        color: Theme.danger
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -537,7 +547,7 @@ Item {
                     HusText {
                         text: "勾选邮件后，任务结束时会尝试发送本轮报告 + 今日进度；勾选关机后无论邮件是否发送成功，60 秒后都会自动关机。运行中无法修改这两项。"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -547,7 +557,7 @@ Item {
             // ── 定时启动 ─────────────────────────────────────────
             HusCard {
                 Layout.fillWidth: true
-                title: "⏰ 定时启动"
+                title: "定时启动"
                 padding: 14
 
                 contentItem: ColumnLayout {
@@ -556,7 +566,7 @@ Item {
                     HusText {
                         text: "每天到设定时间自动启动所选任务（GUI 需保持运行）。邮件 / 自动关机跟随上方「完成后操作」的勾选。"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -631,13 +641,13 @@ Item {
                                 text: modelData.time
                                 font.pixelSize: Math.round(15 * root.fs)
                                 font.bold: true
-                                color: modelData.enabled ? "#2c241d" : "#b0a898"
+                                color: modelData.enabled ? "#18181b" : "#a1a1aa"
                                 Layout.preferredWidth: Math.round(64 * root.fs)
                             }
                             HusText {
                                 text: modelData.name || ""
                                 font.pixelSize: Math.round(13 * root.fs)
-                                color: modelData.enabled ? "#2c241d" : "#8a7a68"
+                                color: modelData.enabled ? "#18181b" : "#a1a1aa"
                                 Layout.fillWidth: true
                                 elide: Text.ElideRight
                             }
@@ -645,13 +655,13 @@ Item {
                                 visible: modelData.skip_if_done_today === true
                                 text: "仅补跑"
                                 font.pixelSize: Math.round(11 * root.fs)
-                                color: "#2f7d4a"
+                                color: "#16a34a"
                             }
                             HusText {
                                 visible: modelData.last_fired_date === Qt.formatDate(new Date(), "yyyy-MM-dd")
                                 text: "今日已触发"
                                 font.pixelSize: Math.round(11 * root.fs)
-                                color: "#2f7d4a"
+                                color: "#16a34a"
                             }
                             HusCheckBox {
                                 text: "启用"
@@ -670,7 +680,7 @@ Item {
                         visible: root.schedTasks.length === 0
                         text: "暂无定时任务"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#8a7a68"
+                        color: "#a1a1aa"
                     }
 
                     HusText {
@@ -678,7 +688,7 @@ Item {
                         text: ""
                         visible: text !== ""
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#b04b44"
+                        color: "#dc2626"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -707,20 +717,20 @@ Item {
                         stateText: model.state || "待执行"
                         stateColor: {
                             switch (model.state) {
-                                case "运行中": return "#295d86"
-                                case "已完成": return "#2f7d4a"
-                                case "失败":   return "#b04b44"
-                                case "已停止": return "#b66f1f"
-                                default:      return "#6d6257"
+                                case "运行中": return "#2563eb"
+                                case "已完成": return "#16a34a"
+                                case "失败":   return "#dc2626"
+                                case "已停止": return "#d97706"
+                                default:      return "#71717a"
                             }
                         }
                         stateBg: {
                             switch (model.state) {
-                                case "运行中": return "#e9f3fb"
-                                case "已完成": return "#dff1e4"
-                                case "失败":   return "#f7dfdd"
-                                case "已停止": return "#faebd7"
-                                default:      return "#f4ecdf"
+                                case "运行中": return "#eff6ff"
+                                case "已完成": return "#ecfdf5"
+                                case "失败":   return "#fef2f2"
+                                case "已停止": return "#fffbeb"
+                                default:      return "#f6f6f7"
                             }
                         }
                     }
@@ -755,8 +765,8 @@ Item {
                         wrapMode: TextArea.Wrap
                         font.family: "Consolas"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#2c241d"
-                        background: Rectangle { color: "#fffdf9" }
+                        color: "#18181b"
+                        background: Rectangle { color: "#ffffff" }
                         text: bridge.logText
                     }
                 }
@@ -784,9 +794,9 @@ Item {
             anchors.centerIn: parent
             width: Math.min(parent.width - 48, 540)
             implicitHeight: emailDialogCol.implicitHeight + 32
-            color: "#fffdf9"
+            color: "#ffffff"
             radius: 12
-            border.color: "#dbcdbd"
+            border.color: "#e4e4e7"
             border.width: 1
 
             ColumnLayout {
@@ -804,7 +814,7 @@ Item {
                 HusText {
                     text: "密码经 Windows DPAPI 加密后落盘到 app_config.json，跨用户/跨机器不可读。"
                     font.pixelSize: Math.round(11 * root.fs)
-                    color: "#6d6257"
+                    color: "#71717a"
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                 }

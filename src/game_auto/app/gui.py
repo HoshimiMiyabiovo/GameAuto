@@ -223,6 +223,20 @@ def _launch_qml_ui(dep_report=None) -> None:
                 ui_logger.info("[退出] 后台任务已收尾")
         except Exception as exc:
             ui_logger.debug("[退出] 等待后台任务收尾失败: %s", exc)
+        # 等日报线程发完（有界）：日报线程先做≤120s 的实时进度刷新再 SMTP，
+        # os._exit 会直接杀掉 daemon 线程——2026-11-03 12:41 关机赶在发信之前，
+        # 全天日报丢失（日志里连"准备发送"都没有）。已发完/没在发时 join 立即返回。
+        try:
+            email_thread = getattr(bridge, "_active_email_thread", None)
+            if email_thread is not None and email_thread.is_alive():
+                ui_logger.info("[退出] 等待日报发送完成（最长 150s，发信前含进度刷新）...")
+                email_thread.join(timeout=150.0)
+                if email_thread.is_alive():
+                    ui_logger.warning("[退出] 日报线程 150s 未结束，放弃等待（日报可能丢失）")
+                else:
+                    ui_logger.info("[退出] 日报线程已结束")
+        except Exception as exc:
+            ui_logger.debug("[退出] 等待日报线程失败: %s", exc)
         # 显式回收 ok-ww 常驻 module runner（2026-11-16 退出漏杀实锤）：runner
         # 设计为常驻等待重连，只置停止标志的话它会以无窗口后台 python 的形态
         # 一直挂着；被中断会话的启动器同理。此处连孤儿一起扫杀。

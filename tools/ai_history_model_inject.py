@@ -93,6 +93,7 @@ def load_index() -> Tuple[Dict[str, dict], dict, Dict[str, str]]:
                 "lv": r.get("level", "none"),
                 "src": r.get("source", ""),
                 "n": r.get("n_modeled", 0),
+                "u": r.get("usage_requests", 0),
                 "tl": [],
             }
     turns = 0

@@ -77,9 +77,16 @@ def test_flow_configs():
               "codearts-agent.exe" in (flow.get("window_process_names") or []))
         check(f"{name}: 已在跑就复用窗口（用户日常在用，不重拉进程）",
               flow.get("reuse_existing_window") is True)
-        check(f"{name}: close 默认 false（收尾不感知复用窗口，误杀用户会话；同 QODER）",
-              flow.get("close_process_on_finish") is False
-              and flow.get("close_process_on_fail") is False)
+        if required:
+            # example 锁默认值：close 默认 false（收尾不感知复用窗口，误杀用户
+            # 会话；同 QODER）。本地 flow_configs.json 是 GUI 可改的用户偏好
+            # （2026-11-18 用户已勾选「完成后关闭」），不锁。
+            check(f"{name}: close 默认 false（example；收尾不感知复用窗口，同 QODER）",
+                  flow.get("close_process_on_finish") is False
+                  and flow.get("close_process_on_fail") is False)
+        else:
+            check(f"{name}: close 标志存在（本地为用户 GUI 偏好，不锁值）",
+                  "close_process_on_finish" in flow)
         steps = flow.get("steps") or []
         check(f"{name}: 两步且顺序锁定", [s.get("name") for s in steps] == STEP_NAMES,
               [s.get("name") for s in steps])

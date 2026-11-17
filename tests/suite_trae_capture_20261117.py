@@ -55,6 +55,9 @@ def test_extract_share_id():
     check("完整分享链接",
           tf.extract_share_id("https://share.traecontent.cn/share/4FVARBSY2JNPZY?enter_from=pc")
           == "4FVARBSY2JNPZY")
+    check("带连字符的 ID（2026-11-17 实锤形态，字符类必须含 -）",
+          tf.extract_share_id("https://share.traecontent.cn/share/A1H-90LCUV-ZCE?enter_from=pc")
+          == "A1H-90LCUV-ZCE")
     check("裸 ID", tf.extract_share_id("4FVARBSY2JNPZY") == "4FVARBSY2JNPZY")
     try:
         tf.extract_share_id("不是链接")

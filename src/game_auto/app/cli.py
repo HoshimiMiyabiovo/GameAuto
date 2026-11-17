@@ -136,13 +136,13 @@ def main():
         controller.logger.info("\n" + "="*40 + "\n任务执行报告:")
         for line in report:
             controller.logger.info(line)
-       
+
         try:
             for handler in controller.logger.handlers:
                 handler.flush()
         except PermissionError:
             print("警告: 日志刷新失败，已忽略 (权限问题)")
-       
+
         ctypes.windll.user32.MessageBoxW(
             0,
             "自动化任务执行结果:\n\n" + "\n".join(report),

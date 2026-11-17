@@ -194,7 +194,7 @@ Item {
                         HusText {
                             text: "序列名称"
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                         }
                         HusInput {
                             id: seqNameInput
@@ -206,7 +206,7 @@ Item {
                             visible: ["白荆回廊-日常","白荆回廊-验证","白荆回廊-每周商店购买"].indexOf(seqNameInput.text.trim()) !== -1
                             text: "⚠ 该名称为一条龙内置序列，录制完成将覆盖原文件；删除已被防误删保护"
                             font.pixelSize: Math.round(11 * root.fs)
-                            color: "#b66f1f"
+                            color: "#d97706"
                             wrapMode: Text.Wrap
                             Layout.fillWidth: true
                         }
@@ -214,7 +214,7 @@ Item {
                         HusText {
                             text: "目标窗口"
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                         }
                         RowLayout {
                             Layout.fillWidth: true
@@ -244,8 +244,8 @@ Item {
                             Layout.fillWidth: true
                             Layout.preferredHeight: root.selHwnd === 0 ? 26 : 62
                             radius: 6
-                            color: root.selHwnd === 0 ? "#f7f2ea" : "#eef4fb"
-                            border.color: "#dbcdbd"
+                            color: root.selHwnd === 0 ? "#f6f6f7" : "#eff6ff"
+                            border.color: "#e4e4e7"
                             border.width: 1
 
                             HusText {
@@ -253,7 +253,7 @@ Item {
                                 anchors.margins: 8
                                 text: root.windowStatusText()
                                 font.pixelSize: Math.round(12 * root.fs)
-                                color: root.selHwnd === 0 ? "#6d6257" : "#295d86"
+                                color: root.selHwnd === 0 ? "#71717a" : "#2563eb"
                                 verticalAlignment: Text.AlignVCenter
                                 wrapMode: Text.Wrap
                             }
@@ -316,37 +316,37 @@ Item {
                                 width: 9
                                 height: 9
                                 radius: 5
-                                color: bridge.clickSeqRecording ? "#b04b44" : "#c9bfb2"
+                                color: bridge.clickSeqRecording ? "#dc2626" : "#d4d4d8"
                             }
                             HusText {
                                 text: bridge.clickSeqRecording ? "录制中" : "空闲"
                                 font.pixelSize: Math.round(13 * root.fs)
-                                color: bridge.clickSeqRecording ? "#b04b44" : "#6d6257"
+                                color: bridge.clickSeqRecording ? "#dc2626" : "#71717a"
                             }
                             HusText {
                                 Layout.alignment: Qt.AlignRight
                                 text: "已记录 " + bridge.clickSeqCount + " 次"
                                 font.pixelSize: Math.round(13 * root.fs)
-                                color: "#2c241d"
+                                color: "#18181b"
                             }
                         }
 
                         Rectangle {
                             Layout.fillWidth: true
                             height: 1
-                            color: "#dbcdbd"
+                            color: "#e4e4e7"
                         }
 
                         HusText {
                             text: "最近一次点击"
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                         }
                         HusText {
                             Layout.fillWidth: true
                             text: root.lastClickText()
                             font.pixelSize: Math.round(13 * root.fs)
-                            color: root.lastClick === "" ? "#999999" : "#2c241d"
+                            color: root.lastClick === "" ? "#999999" : "#18181b"
                             wrapMode: Text.Wrap
                             lineHeight: 1.4
                         }
@@ -356,14 +356,14 @@ Item {
                             HusText {
                                 text: "热键：小键盘0 停止 · 小键盘+ 打标记"
                                 font.pixelSize: Math.round(12 * root.fs)
-                                color: "#6d6257"
+                                color: "#71717a"
                                 wrapMode: Text.Wrap
                                 Layout.fillWidth: true
                             }
                             HusText {
                                 text: "鼠标甩至屏幕角落可紧急停止回放；最小化后仍可用小键盘0 恢复窗口"
                                 font.pixelSize: Math.round(11 * root.fs)
-                                color: "#8a7a68"
+                                color: "#a1a1aa"
                                 wrapMode: Text.Wrap
                                 Layout.fillWidth: true
                             }
@@ -393,7 +393,7 @@ Item {
                             width: parent.width
                             height: visible ? 42 : 0
                             radius: 8
-                            color: "#fef3e2"
+                            color: "#fffbeb"
                             border.color: "#e6a23c"
                             border.width: 1
 
@@ -404,7 +404,7 @@ Item {
                                 HusText {
                                     text: "⚠ 检测到内置一条龙序列缺失"
                                     font.pixelSize: Math.round(12 * root.fs)
-                                    color: "#b66f1f"
+                                    color: "#d97706"
                                     Layout.fillWidth: true
                                 }
                                 HusButton {
@@ -426,8 +426,8 @@ Item {
                                     radius: 8
                                     required property var modelData
                                     required property int index
-                                    color: modelData.protected ? "#f0f4ff" : (root.selectedName === modelData.name ? "#eef8f1" : "#fffdf9")
-                                    border.color: modelData.protected ? "#5b8fd4" : (root.selectedName === modelData.name ? "#2f7d4a" : "#dbcdbd")
+                                    color: modelData.protected ? "#eff6ff" : (root.selectedName === modelData.name ? "#ecfdf5" : "#ffffff")
+                                    border.color: modelData.protected ? "#5b8fd4" : (root.selectedName === modelData.name ? "#16a34a" : "#e4e4e7")
                                     border.width: modelData.protected ? 1.5 : 1
 
                                     RowLayout {
@@ -448,7 +448,7 @@ Item {
                                                         text: modelData.name || "未命名"
                                                         font.pixelSize: Math.round(14 * root.fs)
                                                         font.bold: true
-                                                        color: "#2c241d"
+                                                        color: "#18181b"
                                                         elide: Text.ElideRight
                                                         Layout.fillWidth: true
                                                     }
@@ -467,7 +467,7 @@ Item {
                                                           + (modelData.window ? (" · 窗口 " + modelData.window) : "")
                                                           + (modelData.protected ? " · 防误删" : "")
                                                     font.pixelSize: Math.round(12 * root.fs)
-                                                    color: "#6d6257"
+                                                    color: "#71717a"
                                                     elide: Text.ElideRight
                                                     Layout.fillWidth: true
                                                 }
@@ -524,7 +524,7 @@ Item {
                         HusText {
                             text: "连线长度 ∝ 等待时长；长连线 = 加载 / 过场"
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                         }
 
                         RowLayout {
@@ -532,7 +532,7 @@ Item {
                             HusText {
                                 text: "循环"
                                 font.pixelSize: Math.round(13 * root.fs)
-                                color: "#2c241d"
+                                color: "#18181b"
                             }
                             Repeater {
                                 model: [1, 3, 5]
@@ -594,7 +594,7 @@ Item {
                                                       : ""
                                                 font.pixelSize: Math.round(11 * root.fs)
                                                 color: (index > 0 && Number(root.events[index - 1].gap_after || 0) >= 2)
-                                                       ? "#b66f1f" : "#6d6257"
+                                                       ? "#d97706" : "#71717a"
                                             }
                                             Rectangle {
                                                 anchors.bottom: parent.bottom
@@ -602,7 +602,7 @@ Item {
                                                 width: parent.width
                                                 height: 1
                                                 color: (index > 0 && Number(root.events[index - 1].gap_after || 0) >= 2)
-                                                       ? "#b66f1f" : "#dbcdbd"
+                                                       ? "#d97706" : "#e4e4e7"
                                             }
                                         }
 
@@ -616,15 +616,15 @@ Item {
                                                 height: 30
                                                 radius: 15
                                                 anchors.centerIn: parent
-                                                color: root.selectedStep === index ? "#2f7d4a" : "#fffaf2"
-                                                border.color: Number(modelData.gap_after || 0) >= 2 ? "#b66f1f" : "#2f7d4a"
+                                                color: root.selectedStep === index ? "#16a34a" : "#ffffff"
+                                                border.color: Number(modelData.gap_after || 0) >= 2 ? "#d97706" : "#16a34a"
                                                 border.width: 1
 
                                                 HusText {
                                                     anchors.centerIn: parent
                                                     text: String(index + 1)
                                                     font.pixelSize: Math.round(13 * root.fs)
-                                                    color: root.selectedStep === index ? "#fffaf2" : "#2f7d4a"
+                                                    color: root.selectedStep === index ? "#ffffff" : "#16a34a"
                                                 }
                                             }
 
@@ -643,8 +643,8 @@ Item {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 56
                             radius: 8
-                            color: "#f4ecdf"
-                            border.color: "#dbcdbd"
+                            color: "#f6f6f7"
+                            border.color: "#e4e4e7"
                             border.width: 1
 
                             HusText {
@@ -652,7 +652,7 @@ Item {
                                 anchors.margins: 10
                                 text: root.stepDetailText()
                                 font.pixelSize: Math.round(13 * root.fs)
-                                color: root.selectedStep < 0 ? "#6d6257" : "#2c241d"
+                                color: root.selectedStep < 0 ? "#71717a" : "#18181b"
                                 verticalAlignment: Text.AlignVCenter
                                 wrapMode: Text.Wrap
                             }
@@ -672,8 +672,8 @@ Item {
                                 radius: 6
                                 required property var modelData
                                 required property int index
-                                color: root.selectedStep === index ? "#eef8f1" : "#fffdf9"
-                                border.color: "#e0d6c8"
+                                color: root.selectedStep === index ? "#ecfdf5" : "#ffffff"
+                                border.color: "#e4e4e7"
                                 border.width: 1
 
                                 RowLayout {
@@ -686,36 +686,36 @@ Item {
                                         text: "#" + (index + 1)
                                         Layout.preferredWidth: 34
                                         font.pixelSize: Math.round(12 * root.fs)
-                                        color: "#6d6257"
+                                        color: "#71717a"
                                     }
                                     HusText {
                                         text: "(" + modelData.x + ", " + modelData.y + ")"
                                         Layout.preferredWidth: 100
                                         font.pixelSize: Math.round(12 * root.fs)
-                                        color: "#2c241d"
+                                        color: "#18181b"
                                     }
                                     HusText {
                                         text: "相对 " + root.relText(modelData.rel_x, modelData.rel_y)
                                         Layout.preferredWidth: 110
                                         font.pixelSize: Math.round(12 * root.fs)
-                                        color: "#6d6257"
+                                        color: "#71717a"
                                     }
                                     HusText {
                                         text: root.btnText(modelData.button)
                                         Layout.preferredWidth: 40
                                         font.pixelSize: Math.round(12 * root.fs)
-                                        color: "#2c241d"
+                                        color: "#18181b"
                                     }
                                     HusText {
                                         text: "前间隔 " + Number(modelData.gap_before || 0).toFixed(1) + "s"
                                         Layout.fillWidth: true
                                         font.pixelSize: Math.round(12 * root.fs)
-                                        color: Number(modelData.gap_before || 0) >= 2 ? "#b66f1f" : "#6d6257"
+                                        color: Number(modelData.gap_before || 0) >= 2 ? "#d97706" : "#71717a"
                                     }
                                     HusText {
                                         text: modelData.ts || ""
                                         font.pixelSize: Math.round(12 * root.fs)
-                                        color: "#6d6257"
+                                        color: "#71717a"
                                     }
                                 }
 
@@ -741,7 +741,7 @@ Item {
                             Layout.fillWidth: true
                             text: "1. 填序列名，选目标窗口"
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#2c241d"
+                            color: "#18181b"
                             font.bold: true
                             wrapMode: Text.Wrap
                         }
@@ -750,7 +750,7 @@ Item {
                             leftPadding: 14
                             text: "· 选具体窗口：只录该窗口内点击（记录相对坐标，窗口移动也能回放）\n· 选“无”：记录全屏所有点击"
                             font.pixelSize: Math.round(11 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                             wrapMode: Text.Wrap
                             lineHeight: 1.35
                         }
@@ -758,7 +758,7 @@ Item {
                             Layout.fillWidth: true
                             text: "2. 录制与窗口置顶"
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#2c241d"
+                            color: "#18181b"
                             font.bold: true
                             wrapMode: Text.Wrap
                         }
@@ -767,7 +767,7 @@ Item {
                             leftPadding: 14
                             text: "· 点“开始录制”才会置前目标窗口（默认最小化本窗口让出空间）\n· 需常置顶再勾选“录制时置顶目标窗口”\n· 点击/按键（含 ESC）均会记录；小键盘0 停止，小键盘+ 打标记（回放跳过）\n· 停止后自动取消置顶、保存并恢复本窗口"
                             font.pixelSize: Math.round(11 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                             wrapMode: Text.Wrap
                             lineHeight: 1.35
                         }
@@ -775,7 +775,7 @@ Item {
                             Layout.fillWidth: true
                             text: "3. 回放"
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#2c241d"
+                            color: "#18181b"
                             font.bold: true
                             wrapMode: Text.Wrap
                         }
@@ -784,7 +784,7 @@ Item {
                             leftPadding: 14
                             text: "· 会还原点击间隔；先用“试跑”确认坐标再真跑"
                             font.pixelSize: Math.round(11 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                             wrapMode: Text.Wrap
                         }
                     }
@@ -816,19 +816,19 @@ Item {
                     text: "确认删除？"
                     font.pixelSize: Math.round(16 * root.fs)
                     font.bold: true
-                    color: "#2c241d"
+                    color: "#18181b"
                 }
                 HusText {
                     text: "将删除序列「" + root.pendingDeleteName + "」，此操作不可恢复。"
                     font.pixelSize: Math.round(13 * root.fs)
-                    color: "#6d6257"
+                    color: "#71717a"
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                 }
                 HusText {
                     text: "一条龙内置序列已做防误删保护，不会出现在此确认框中。"
                     font.pixelSize: Math.round(11 * root.fs)
-                    color: "#8a7a68"
+                    color: "#a1a1aa"
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                     visible: root.pendingDeleteName !== ""

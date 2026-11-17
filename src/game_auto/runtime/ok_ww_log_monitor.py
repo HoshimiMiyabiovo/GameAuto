@@ -230,7 +230,7 @@ def _run_nte_ocr_click(
                 hwnd, _ = fallback
                 logger.info(f"[NTE启动] 通过标题关键词匹配到 ok-nte 窗口 (HWND: {hwnd})")
                 break
-            logger.info(f"[NTE启动] 等待 ok-nte 窗口出现...")
+            logger.info("[NTE启动] 等待 ok-nte 窗口出现...")
             time.sleep(2.0)
 
         if hwnd is None:

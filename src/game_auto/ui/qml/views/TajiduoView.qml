@@ -159,7 +159,7 @@ Item {
                     HusText {
                         text: "状态: 等待操作"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                     }
                 }
             }
@@ -176,7 +176,7 @@ Item {
                     HusText {
                         text: "复用签到的 Token + Device ID 查询社区每日任务进度，无需额外凭据。"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -197,9 +197,9 @@ Item {
                         Layout.fillWidth: true
                         visible: root.dailyData.ok === false
                         height: errColumn.height + 20
-                        color: "#f7dfdd"
+                        color: "#fef2f2"
                         radius: 6
-                        border.color: "#b04b44"
+                        border.color: "#dc2626"
                         border.width: 1
                         ColumnLayout {
                             id: errColumn
@@ -210,12 +210,12 @@ Item {
                                 text: "✗ 查询失败"
                                 font.pixelSize: Math.round(13 * root.fs)
                                 font.bold: true
-                                color: "#b04b44"
+                                color: "#dc2626"
                             }
                             HusText {
                                 text: root.dailyData.message || ""
                                 font.pixelSize: Math.round(12 * root.fs)
-                                color: "#2f4f4f"
+                                color: "#27272a"
                                 wrapMode: Text.Wrap
                                 Layout.fillWidth: true
                             }
@@ -236,14 +236,14 @@ Item {
                                 HusText {
                                     text: (modelData.done ? "✓ " : "○ ") + modelData.name
                                     font.pixelSize: Math.round(13 * root.fs)
-                                    color: modelData.done ? "#2f7d4a" : "#2f4f4f"
+                                    color: modelData.done ? "#16a34a" : "#27272a"
                                     Layout.fillWidth: true
                                 }
                                 HusText {
                                     text: modelData.current + "/" + modelData.total
                                     font.pixelSize: Math.round(13 * root.fs)
                                     font.bold: true
-                                    color: modelData.done ? "#2f7d4a" : "#b66f1f"
+                                    color: modelData.done ? "#16a34a" : "#d97706"
                                 }
                             }
 
@@ -251,14 +251,14 @@ Item {
                                 Layout.fillWidth: true
                                 height: 6
                                 radius: 3
-                                color: "#ece5da"
+                                color: "#ececee"
                                 Rectangle {
                                     width: modelData.total > 0
                                            ? parent.width * modelData.current / modelData.total
                                            : 0
                                     height: parent.height
                                     radius: 3
-                                    color: modelData.done ? "#2f7d4a" : "#e0a33e"
+                                    color: modelData.done ? "#16a34a" : "#d97706"
                                 }
                             }
                         }
@@ -269,7 +269,7 @@ Item {
                                  && (root.dailyData.items || []).length === 0
                         text: "未获取到每日任务（可能未配置或接口无数据）"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#8a7f72"
+                        color: "#a1a1aa"
                     }
 
                     HusText {
@@ -277,7 +277,7 @@ Item {
                         text: "每日任务已全部完成"
                         font.pixelSize: Math.round(13 * root.fs)
                         font.bold: true
-                        color: "#2f7d4a"
+                        color: "#16a34a"
                     }
                 }
             }

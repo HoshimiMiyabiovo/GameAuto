@@ -81,6 +81,24 @@ Item {
             }
             root.failuresLoading = false
         }
+        function onAiHistoryChanged(jsonStr) {
+            try {
+                var d = JSON.parse(jsonStr || "{}")
+                root.aiHistRunning = !!d.running
+                if (d.last_ts) {
+                    var dt = new Date(d.last_ts * 1000)
+                    var pad = function(n) { return (n < 10 ? "0" : "") + n }
+                    var stamp = pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()) + " " +
+                                pad(dt.getHours()) + ":" + pad(dt.getMinutes())
+                    root.aiHistStatus = (d.running ? ("更新中: " + (d.step || ""))
+                                        : ((d.last_ok ? "✔ " : "✘ ") + stamp + " " + (d.last_msg || "")))
+                } else if (!d.running) {
+                    root.aiHistStatus = "未刷新过"
+                }
+            } catch(e) {
+                console.log("aiHistory 解析失败:", e)
+            }
+        }
         function onStatusTitleChanged() {
             if (bridge.statusTone === "running") {
                 root.isLoading = true
@@ -158,6 +176,11 @@ Item {
     property bool failuresLoading: false
     property double _lastFailuresTs: 0
 
+    // ── AI 对话史（手动全链刷新：抓取→重导→RAG→模型注入，服务见
+    // services/ai_history_refresh；进度经 bridge.aiHistoryChanged 推送）──
+    property bool aiHistRunning: false
+    property string aiHistStatus: "未刷新过"
+
     // 2026-11-09 审计 P1-5：改纯异步——槽立即返回（不再同步等 3s 冻结主线程），
     // 数据经 bridge.flowFailuresChanged 事件推送（下方 Connections 接收）。
     function loadFailures() {
@@ -173,6 +196,9 @@ Item {
         bridge.loadDailyDates()
         bridge.loadDailyStats(root.statsDays)
         loadFailures()
+        var initAi = JSON.parse(bridge.getAiHistoryStatus() || '{}')
+        aiHistRunning = !!initAi.running
+        if (initAi.last_ts) aiHistStatus = (initAi.last_ok ? '上次成功' : '上次失败') + ' · ' + (initAi.last_msg || '')
     }
     onVisibleChanged: {
         if (visible) {
@@ -207,7 +233,7 @@ Item {
                     HusText {
                         text: "统一查询原神 / 星铁 / 绝区零 / 鸣潮 / 暖暖 / 终末地 / 异环 / 白荆回廊的每日完成度（含白荆验证截图）。\n请先在下方勾选需要查询的游戏，然后点击刷新按钮。"
                         font.pixelSize: Math.round(13 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -263,7 +289,7 @@ Item {
                     id: dailyStatusText
                     text: "点击刷新按钮开始查询..."
                     font.pixelSize: Math.round(13 * root.fs)
-                    color: root.isLoading ? "#295d86" : "#6d6257"
+                    color: root.isLoading ? "#2563eb" : "#71717a"
                 }
             }
 
@@ -298,14 +324,14 @@ Item {
                             // 字段缺失的老数据才回退旧逻辑。
                             color: {
                                 var st = modelData.completion_state
-                                if (st === "completed") return "#dff1e4"
-                                if (st === "failed") return "#f7dfdd"
-                                if (st === "pending") return "#fffaf2"
-                                if (st === "unknown") return "#fffaf2"
-                                return modelData.is_all_success ? "#dff1e4" : (modelData.has_failed ? "#f7dfdd" : "#fffaf2")
+                                if (st === "completed") return "#ecfdf5"
+                                if (st === "failed") return "#fef2f2"
+                                if (st === "pending") return "#ffffff"
+                                if (st === "unknown") return "#ffffff"
+                                return modelData.is_all_success ? "#ecfdf5" : (modelData.has_failed ? "#fef2f2" : "#ffffff")
                             }
                             radius: 10
-                            border.color: "#dbcdbd"
+                            border.color: "#e4e4e7"
                             border.width: 1
 
                             ColumnLayout {
@@ -389,9 +415,9 @@ Item {
                                             // 只有"失败"结论才染红；未完成卡片的失败计数
                                             // 只是明细提示，不抢结论的颜色
                                             var st = modelData.completion_state
-                                            if (st === "failed") return "#b04b44"
-                                            if (st === undefined && root.failedTaskCount(modelData) > 0) return "#b04b44"
-                                            return "#6d6257"
+                                            if (st === "failed") return "#dc2626"
+                                            if (st === undefined && root.failedTaskCount(modelData) > 0) return "#dc2626"
+                                            return "#71717a"
                                         }
                                     }
                                 }
@@ -409,7 +435,7 @@ Item {
                                             Layout.fillWidth: true
                                             Layout.leftMargin: 4
                                             Layout.preferredHeight: 1
-                                            color: "#dbcdbd"
+                                            color: "#e4e4e7"
                                         }
 
                                         RowLayout {
@@ -445,7 +471,7 @@ Item {
                                             HusText {
                                                 text: (modelData.is_sign_task === true ? "签到" : (modelData.task_name || modelData.task_key)) + (modelData.is_sign_task === true ? "（附属项，不计入完成度）" : "")
                                                 font.pixelSize: Math.round(13 * root.fs)
-                                                color: modelData.is_sign_task === true ? "#8a7a68" : "#2c241d"
+                                                color: modelData.is_sign_task === true ? "#a1a1aa" : "#18181b"
                                                 font.italic: modelData.is_sign_task === true
                                                 Layout.fillWidth: true
                                             }
@@ -474,7 +500,7 @@ Item {
                                                     return msg
                                                 }
                                                 font.pixelSize: Math.round(12 * root.fs)
-                                                color: modelData.status === "failed" ? "#b04b44" : "#6d6257"
+                                                color: modelData.status === "failed" ? "#dc2626" : "#71717a"
                                             }
                                         }
 
@@ -489,7 +515,7 @@ Item {
                                             }
                                             Layout.fillWidth: true
                                             Layout.preferredHeight: 4
-                                            color: "#e8ddd0"
+                                            color: "#ececee"
                                             radius: 2
 
                                             Rectangle {
@@ -500,8 +526,8 @@ Item {
                                                 }
                                                 width: parent.width * ratio
                                                 height: parent.height
-                                                color: modelData.status === "success" ? "#2f7d4a" :
-                                                       (modelData.status === "failed" ? "#b04b44" : "#b66f1f")
+                                                color: modelData.status === "success" ? "#16a34a" :
+                                                       (modelData.status === "failed" ? "#dc2626" : "#d97706")
                                                 radius: 2
                                             }
                                         }
@@ -515,7 +541,7 @@ Item {
                                     HusText {
                                         text: "⚠ " + modelData
                                         font.pixelSize: Math.round(12 * root.fs)
-                                        color: "#b04b44"
+                                        color: "#dc2626"
                                         Layout.fillWidth: true
                                         wrapMode: Text.Wrap
                                     }
@@ -527,9 +553,9 @@ Item {
                                     visible: !!root.findVerifyImage(modelData.tasks || [])
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: visible ? 170 : 0
-                                    color: "#f4ece0"
+                                    color: "#f4f4f5"
                                     radius: 8
-                                    border.color: "#dbcdbd"
+                                    border.color: "#e4e4e7"
                                     border.width: 1
                                     clip: true
 
@@ -625,7 +651,7 @@ Item {
                                 return s.date_from + " ~ " + s.date_to
                             }
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -634,7 +660,7 @@ Item {
                         visible: !root.statsData.ok || (root.statsData.stats || []).length === 0
                         text: "暂无统计数据"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#8a7a68"
+                        color: "#a1a1aa"
                     }
 
                     Repeater {
@@ -656,7 +682,7 @@ Item {
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: 8
                                     radius: 4
-                                    color: "#e8ddd0"
+                                    color: "#ececee"
                                     Rectangle {
                                         anchors.left: parent.left
                                         anchors.top: parent.top
@@ -665,9 +691,9 @@ Item {
                                         radius: 4
                                         color: {
                                             var r = modelData.completion_rate || 0
-                                            if (r >= 90) return "#2f7d4a"
-                                            if (r >= 60) return "#b66f1f"
-                                            return "#b04b44"
+                                            if (r >= 90) return "#16a34a"
+                                            if (r >= 60) return "#d97706"
+                                            return "#dc2626"
                                         }
                                     }
                                 }
@@ -679,7 +705,7 @@ Item {
                                         return r + "%"
                                     }
                                     font.pixelSize: Math.round(12 * root.fs)
-                                    color: "#6d6257"
+                                    color: "#71717a"
                                     Layout.preferredWidth: Math.round(70 * root.fs)
                                 }
                             }
@@ -694,7 +720,7 @@ Item {
                                     return base
                                 }
                                 font.pixelSize: Math.round(11 * root.fs)
-                                color: "#8a7a68"
+                                color: "#a1a1aa"
                                 Layout.leftMargin: Math.round(120 * root.fs)
                             }
                         }
@@ -738,7 +764,7 @@ Item {
                         visible: root.historyData.message !== undefined && root.historyData.message !== ""
                         text: root.historyData.message || ""
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#8a7a68"
+                        color: "#a1a1aa"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -776,7 +802,7 @@ Item {
                                 HusText {
                                     text: (modelData.progress_percent || 0) + "%"
                                     font.pixelSize: Math.round(12 * root.fs)
-                                    color: "#6d6257"
+                                    color: "#71717a"
                                 }
                             }
                             // 关键任务明细（只列带数值的，避免刷屏）
@@ -792,7 +818,7 @@ Item {
                                 HusText {
                                     text: "  · " + modelData.task_name + " " + (modelData.message || "")
                                     font.pixelSize: Math.round(11 * root.fs)
-                                    color: "#6d6257"
+                                    color: "#71717a"
                                     Layout.fillWidth: true
                                 }
                             }
@@ -847,7 +873,7 @@ Item {
                                 return n > 0 ? ("共 " + n + " 条") : "最近无失败记录 ✅"
                             }
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                         }
                     }
 
@@ -858,8 +884,8 @@ Item {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 26
                             radius: 6
-                            color: "#fdf1ef"
-                            border.color: "#e6c9c4"
+                            color: "#fef2f2"
+                            border.color: "#fecaca"
                             border.width: 1
 
                             RowLayout {
@@ -878,7 +904,7 @@ Item {
                                 HusText {
                                     text: modelData.has_image ? "有截图" : "无截图"
                                     font.pixelSize: Math.round(11 * root.fs)
-                                    color: "#8a7a68"
+                                    color: "#a1a1aa"
                                 }
                             }
                         }
@@ -897,8 +923,8 @@ Item {
                             Layout.fillWidth: true
                             Layout.preferredHeight: failCol.implicitHeight + 16
                             radius: 8
-                            color: "#fffaf2"
-                            border.color: "#dbcdbd"
+                            color: "#ffffff"
+                            border.color: "#e4e4e7"
                             border.width: 1
 
                             ColumnLayout {
@@ -913,7 +939,7 @@ Item {
                                     HusText {
                                         text: modelData.time_text || ""
                                         font.pixelSize: Math.round(11 * root.fs)
-                                        color: "#8a7a68"
+                                        color: "#a1a1aa"
                                     }
                                     HusText {
                                         text: (modelData.flow_key || "?") + " / " + (modelData.step || "?")
@@ -928,7 +954,7 @@ Item {
                                 HusText {
                                     text: modelData.error || ""
                                     font.pixelSize: Math.round(12 * root.fs)
-                                    color: "#b04b44"
+                                    color: "#dc2626"
                                     Layout.fillWidth: true
                                     wrapMode: Text.Wrap
                                 }
@@ -937,7 +963,7 @@ Item {
                                     visible: (modelData.ocr_texts || []).length > 0
                                     text: "当帧文字: " + (modelData.ocr_texts || []).join(" ｜ ")
                                     font.pixelSize: Math.round(11 * root.fs)
-                                    color: "#6d6257"
+                                    color: "#71717a"
                                     Layout.fillWidth: true
                                     wrapMode: Text.Wrap
                                     maximumLineCount: 2
@@ -948,9 +974,9 @@ Item {
                                     visible: !!modelData.image_url
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: visible ? 150 : 0
-                                    color: "#f4ece0"
+                                    color: "#f4f4f5"
                                     radius: 8
-                                    border.color: "#dbcdbd"
+                                    border.color: "#e4e4e7"
                                     border.width: 1
                                     clip: true
 
@@ -995,6 +1021,41 @@ Item {
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // ── AI 对话史（手动全链刷新：妙手/Kilo 抓取 → 重导总库 → 拷回 F: → RAG 重建，模型链在 build.py 串链内）──
+            HusCard {
+                Layout.fillWidth: true
+                title: "AI 对话史"
+                padding: 14
+
+                contentItem: ColumnLayout {
+                    spacing: 8
+                    Layout.fillWidth: true
+
+                    RowLayout {
+                        spacing: 10
+
+                        HusButton {
+                            text: root.aiHistRunning ? "更新中..." : "更新对话史"
+                            enabled: !root.aiHistRunning
+                            onClicked: bridge.refreshAiHistory()
+                        }
+                        Item { Layout.fillWidth: true }
+                        HusText {
+                            text: root.aiHistStatus
+                            color: "#71717a"
+                            font.pixelSize: Math.round(12 * root.fs)
+                            Layout.fillWidth: true
+                        }
+                    }
+                    HusText {
+                        text: "全链：妙手/Kilo 抓取 → 重导总库 → 拷回汇总目录 → RAG 重建（约 5-8 分钟，后台运行不阻塞界面）"
+                        color: "#a1a1aa"
+                        font.pixelSize: Math.round(11 * root.fs)
+                        Layout.fillWidth: true
                     }
                 }
             }

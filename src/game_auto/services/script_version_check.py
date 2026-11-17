@@ -22,17 +22,23 @@
   ok 系读 pyappify app.json，March7th 读 version.txt，BetterGI 读 exe 元数据，
   ScriptChainer 用目录名，其余老实报未知。目录名默认不可信——原地自更新后
   目录名停留在旧版（2026-11-03 实盘查证：4 个"有更新"里 3 个是目录名误报）。
-- 本地版本未知时只展示远端版本，不判"有更新"（无法比较就别误报）。
+- OneDragon 系（git_commit_date=True）是 git 源码快照：本地版本=HEAD 提交日期
+  （UTC，2026.11.14 点分展示），远端=最新 release 发布日期；本地比发布日旧才报
+  "有更新"。tag 版本号对它们无真值（version.py 占位 v0.0.0、exe 无版本资源、
+  本地多半没拉过 tag，2026-11-17 实测），官方自己也按 commit 判更新。
+- 本地版本未知时只展示远端版本，不判"有更新"（无法比较就别误报）；
+  快照行缺远端发布日期同理报 date_unknown，不冒充"已是最新"。
 """
 
 import json
 import logging
 import os
 import re
+import subprocess
 import tempfile
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -131,12 +137,46 @@ def _exe_file_version(path: str) -> str:
     return ""
 
 
+def _git_head_date(path: str) -> str:
+    """launcher 路径向上找 .git（≤4 层），读 HEAD 提交时间转 UTC 点分日期。
+
+    OneDragon 系安装是源码快照，唯一可核的本地版本口径是 HEAD 提交日期。
+    用 %ct（unix 时间戳）+ UTC 转换，避开本地时区与日期格式本地化差异。
+    git 不可用 / 无 .git / 命令失败返回 ""（诚实报未知，不猜）。
+    """
+    p = Path(path)
+    if p.is_file():
+        p = p.parent
+    root = None
+    for _ in range(4):
+        if (p / ".git").exists():
+            root = p
+            break
+        parent = p.parent
+        if parent == p:
+            break
+        p = parent
+    if root is None:
+        return ""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "log", "-1", "--format=%ct"],
+            capture_output=True, text=True, timeout=10, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("[脚本版本] git 读 HEAD 失败: %s", root)
+        return ""
+    if not out.isdigit():
+        return ""
+    return datetime.fromtimestamp(int(out), tz=timezone.utc).strftime("%Y.%m.%d")
+
+
 def detect_local_version(path: str, spec: Any = None) -> str:
     """按 spec 的版本源策略提取本地版本号，取不到返回 ""（诚实报未知）。
 
     优先级（spec 为 ScriptToolSpec 时）：
-    pyappify 清单 → version_file → exe 元数据（trust_exe_version）→
-    目录名正则（trust_dir_version）→ ""。
+    pyappify 清单 → version_file → git HEAD 日期（git_commit_date）→
+    exe 元数据（trust_exe_version）→ 目录名正则（trust_dir_version）→ ""。
     spec 为 None 时维持旧行为（目录正则 → exe），供纯函数测试与兜底。
 
     为什么目录名默认不可信：March7th/ok 系都支持原地自更新，更新后目录名
@@ -152,6 +192,8 @@ def detect_local_version(path: str, spec: Any = None) -> str:
         version_file = str(getattr(spec, "version_file", "") or "")
         if version_file:
             return _extract_version(_read_text_head(p.parent / version_file))
+        if getattr(spec, "git_commit_date", False):
+            return _git_head_date(str(p))
         if getattr(spec, "trust_exe_version", False):
             v = _extract_version(_exe_file_version(str(p)))
             if v:
@@ -202,10 +244,12 @@ def collect_specs() -> List[Dict[str, Any]]:
 
 
 def fetch_release_with_assets(repo: str) -> Optional[Dict[str, Any]]:
-    """查询 repo 最新 release 的 tag 与资产列表（script_tool_installer 也用）。
+    """查询 repo 最新 release 的 tag、发布时间与资产列表（script_tool_installer 也用）。
 
-    返回 {"tag": str, "assets": [{"name","size","url"}]}；"" tag = 无 release
-    （含 404）；None = 查询失败（网络/限速），调用方自行兜底。
+    返回 {"tag": str, "published_at": str, "assets": [{"name","size","url"}]}；
+    "" tag = 无 release（含 404）；None = 查询失败（网络/限速），调用方自行兜底。
+    published_at 是 ISO8601 UTC（如 "2026-11-08T19:59:44Z"），OneDragon 系
+    快照口径用它当远端日期；老响应缺字段时为 ""。
     """
     url = f"https://api.github.com/repos/{repo}/releases/latest"
     req = urllib.request.Request(url, headers=_GITHUB_HEADERS)
@@ -230,19 +274,9 @@ def fetch_release_with_assets(repo: str) -> Optional[Dict[str, Any]]:
         for item in (data.get("assets") or [])
         if item.get("browser_download_url")
     ]
-    return {"tag": str(data.get("tag_name") or ""), "assets": assets}
-
-
-def fetch_latest_release(repo: str) -> Optional[str]:
-    """查询 repo 的最新 Release tag（fetch_release_with_assets 的薄封装）。
-
-    返回 tag（如 "v1.4.82"）；"" = 无 release（含 404，当作没有更新源）；
-    None = 查询失败（网络/限速），调用方应沿用旧缓存。
-    """
-    info = fetch_release_with_assets(repo)
-    if info is None:
-        return None
-    return info["tag"]
+    return {"tag": str(data.get("tag_name") or ""),
+            "published_at": str(data.get("published_at") or ""),
+            "assets": assets}
 
 
 def parse_tag_version(tag: str) -> Optional[Tuple[int, ...]]:
@@ -254,7 +288,11 @@ def parse_tag_version(tag: str) -> Optional[Tuple[int, ...]]:
 
 
 def is_newer(latest: str, local: str) -> bool:
-    """远端是否比本地新（两边都能解析成数字版本才比较，位数不足补零）。"""
+    """远端是否比本地新（两边都能解析成数字版本才比较，位数不足补零）。
+
+    OneDragon 快照口径传进来的是点分日期（"2026.11.08" vs "2026.11.14"），
+    数字元组比较天然成立：发布日比 HEAD 日期新 = 有更新。
+    """
     a, b = parse_tag_version(latest), parse_tag_version(local)
     if a is None or b is None:
         return False
@@ -310,6 +348,18 @@ def _cache_fresh(entry: Dict[str, Any]) -> bool:
 # ── 汇总入口 ─────────────────────────────────────────────────────
 
 
+def _published_date(entry: Dict[str, Any]) -> str:
+    """缓存条目里的 release 发布时间 → 点分日期（"2026-11-08T...Z" → "2026.11.08"）。
+
+    旧 schema 缓存没有 published_at 时返回 ""，快照行按 date_unknown 处理，
+    不冒充"已是最新"。
+    """
+    raw = str(entry.get("published_at") or "")
+    if not re.match(r"^\d{4}-\d{2}-\d{2}", raw):
+        return ""
+    return raw[:10].replace("-", ".")
+
+
 def check_all(force: bool = False,
               allow_network: bool = True) -> Tuple[List[Dict[str, Any]], List[str]]:
     """检查全部第三方脚本版本。
@@ -335,17 +385,20 @@ def check_all(force: bool = False,
             entry = dict(repos.get(repo) or {})
             if not force and _cache_fresh(entry):
                 continue
-            tag = fetch_latest_release(repo)
-            if tag is None:
+            info = fetch_release_with_assets(repo)
+            if info is None:
                 # 查询失败：沿用旧值并标 stale，UI 显示"网络失败"
                 entry["stale"] = True
                 entry["checked_at"] = now_iso
                 repos[repo] = entry
                 continue
+            tag = info["tag"]
             if tag != entry.get("tag"):
                 logger.info("[脚本版本] %s 最新 %s（上次 %s）",
                             repo, tag or "无 release", entry.get("tag") or "未查过")
-            repos[repo] = {"tag": tag, "checked_at": now_iso, "stale": False}
+            repos[repo] = {"tag": tag,
+                           "published_at": str(info.get("published_at") or ""),
+                           "checked_at": now_iso, "stale": False}
             dirty = True
     else:
         logger.info("[脚本版本] 读取脚本版本缓存（不联网）")
@@ -357,7 +410,16 @@ def check_all(force: bool = False,
         latest = str(entry.get("tag") or "")
         local = detect_local_version(s["path"], s.get("spec"))
         stale = bool(entry.get("stale"))
-        update = is_newer(latest, local) if (latest and local) else False
+        spec = s.get("spec")
+        git_snapshot = bool(getattr(spec, "git_commit_date", False))
+        remote_date = _published_date(entry) if git_snapshot else ""
+        update = False
+        if latest and local:
+            if git_snapshot:
+                # 快照口径：本地 HEAD 比最新 release 发布日旧才算落后（版本号无真值）
+                update = bool(remote_date) and is_newer(remote_date, local)
+            else:
+                update = is_newer(latest, local)
         if not s["path"]:
             status = "no_path"
         elif not repo:
@@ -366,11 +428,13 @@ def check_all(force: bool = False,
             status = "no_release"
         elif not local:
             status = "local_unknown"
+        elif git_snapshot and not remote_date:
+            # 旧 schema 缓存缺发布日期：不比较也不冒充"已是最新"
+            status = "date_unknown"
         elif update:
             status = "update"
         else:
             status = "latest"
-        spec = s.get("spec")
         rows.append({
             "app_key": s["app_key"],
             "display_name": s["display_name"],
@@ -392,7 +456,12 @@ def check_all(force: bool = False,
         if allow_network and update and repo and notified.get(repo) != latest:
             notified[repo] = latest
             dirty = True
-            local_txt = f"本地 {local}" if local else "本地版本未知"
+            if git_snapshot:
+                local_txt = f"本地 {local} 快照"
+            elif local:
+                local_txt = f"本地 {local}"
+            else:
+                local_txt = "本地版本未知"
             toasts.append(
                 f"{s['label']} 有新版本 {latest}（{local_txt}），建议更新后再跑日常")
 

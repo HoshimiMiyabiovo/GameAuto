@@ -87,6 +87,9 @@ def test_click_window_local_dispatch():
         mock.patch.object(ff, "_release_modifier_keys", lambda: None),
         mock.patch.object(ff, "_focus_window", lambda *a, **k: None),
         mock.patch.object(ff, "_post_click_window", return_value=True),
+        # 2026-11-17 新增的前台点击硬闸（suite_click_guard_20261117 有专属覆盖）：
+        # 本套件只测 hold_sec 透传与坐标换算，假 hwnd 过不了真实前台校验，需放行
+        mock.patch.object(ff, "_foreground_click_block_reason", lambda *a, **k: ""),
         mock.patch.object(ff, "_pyautogui_click_guarded",
                           lambda *a, **k: calls.append((a, k))),
     )

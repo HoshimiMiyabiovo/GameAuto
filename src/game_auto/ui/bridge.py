@@ -106,6 +106,7 @@ class UiBridge(
     toolInstallChanged = Signal(str)
     diskScanChanged = Signal(str)
     flowFailuresChanged = Signal(str)
+    aiHistoryChanged = Signal(str)
 
     # ── 固定点击序列（录制 / 回放）──
     clickSeqRecordingChanged = Signal(bool)
@@ -141,6 +142,9 @@ class UiBridge(
         self._email_sent_date = ""
         self._email_report: List[str] = []
         self._email_warnings: List[str] = []
+        # 正在发日报的线程句柄：GUI 退出清理用它做有界等待，避免 os._exit 把
+        # 发了一半的日报杀掉（2026-11-03 12:41 关机丢日报事故的形态）
+        self._active_email_thread: Optional[threading.Thread] = None
         # startAutomation 同步占位锁：running 事件要等主线程处理，
         # 仅靠 _is_running 布尔值拦不住同一 30s tick 内的两次启动
         self._run_lock = threading.Lock()

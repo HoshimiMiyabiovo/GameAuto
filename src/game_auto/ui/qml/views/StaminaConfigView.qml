@@ -152,12 +152,12 @@ Item {
                     text: "脚本刷本配置"
                     font.pixelSize: Math.max(22, Math.round(20 * root.fs))
                     font.bold: true
-                    color: "#2c241d"
+                    color: "#18181b"
                 }
                 HusText {
                     text: "支持原神 / 崩铁 / 绝区零 / 鸣潮 / 终末地 / 异环 / 暖暖。保存前自动备份，脚本或游戏运行中禁止写入；绝区零 OneDragon 仅支持单账户（固定 config/01）。脚本内改过配置请点「刷新」同步。"
                     font.pixelSize: Math.max(14, Math.round(13 * root.fs))
-                    color: "#5f554b"
+                    color: "#52525b"
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                 }
@@ -175,7 +175,7 @@ Item {
             visible: !!root.statusText
             text: root.statusText
             font.pixelSize: Math.max(13, Math.round(12 * root.fs))
-            color: root.statusText.indexOf("失败") >= 0 ? "#b04b44" : "#2f7d4a"
+            color: root.statusText.indexOf("失败") >= 0 ? "#dc2626" : "#16a34a"
             wrapMode: Text.Wrap
             Layout.fillWidth: true
         }
@@ -186,7 +186,7 @@ Item {
             HusText {
                 text: "选择游戏"
                 font.pixelSize: Math.max(14, Math.round(13 * root.fs))
-                color: "#2c241d"
+                color: "#18181b"
                 Layout.alignment: Qt.AlignVCenter
             }
             Flow {
@@ -305,7 +305,7 @@ Item {
                             HusText {
                                 visible: !!(gameCard.gameData && gameCard.gameData.error)
                                 text: "读取失败: " + (gameCard.gameData ? gameCard.gameData.error : "")
-                                color: "#b04b44"
+                                color: "#dc2626"
                                 font.pixelSize: Math.max(13, Math.round(12 * root.fs))
                                 wrapMode: Text.Wrap
                                 Layout.fillWidth: true
@@ -314,7 +314,7 @@ Item {
                             HusText {
                                 visible: gameCard.locked
                                 text: "脚本/游戏正在运行，暂不允许修改。已经全部关闭的话，点右上角「刷新」重新检测；仍锁着说明有相关进程没退出。"
-                                color: "#b66f1f"
+                                color: "#d97706"
                                 font.pixelSize: Math.max(13, Math.round(12 * root.fs))
                                 wrapMode: Text.Wrap
                                 Layout.fillWidth: true
@@ -326,7 +326,7 @@ Item {
                                        ? gameCard.gameData.display_name : "当前游戏")
                                       + " 配置: "
                                       + (gameCard.gameData ? gameCard.gameData.primary_file : "")
-                                color: "#7a6d60"
+                                color: "#71717a"
                                 font.pixelSize: Math.max(12, Math.round(11 * root.fs))
                                 wrapMode: Text.Wrap
                                 Layout.fillWidth: true
@@ -335,7 +335,7 @@ Item {
                             HusText {
                                 visible: gameCard.dirtyCount > 0
                                 text: "有 " + gameCard.dirtyCount + " 项未保存（仅保存本页改过的字段）"
-                                color: "#b66f1f"
+                                color: "#d97706"
                                 font.pixelSize: Math.max(12, Math.round(11 * root.fs))
                                 wrapMode: Text.Wrap
                                 Layout.fillWidth: true
@@ -395,7 +395,7 @@ Item {
                                                 HusText {
                                                     text: model.label || ""
                                                     font.pixelSize: Math.max(14, Math.round(13 * root.fs))
-                                                    color: "#2c241d"
+                                                    color: "#18181b"
                                                     wrapMode: Text.Wrap
                                                     Layout.fillWidth: true
                                                 }
@@ -403,7 +403,7 @@ Item {
                                                     visible: !!model.help
                                                     text: model.help || ""
                                                     font.pixelSize: Math.max(12, Math.round(11 * root.fs))
-                                                    color: "#6f6358"
+                                                    color: "#71717a"
                                                     wrapMode: Text.Wrap
                                                     Layout.fillWidth: true
                                                 }
@@ -431,7 +431,7 @@ Item {
                                             HusText {
                                                 text: model.label || ""
                                                 font.pixelSize: Math.max(14, Math.round(13 * root.fs))
-                                                color: "#2c241d"
+                                                color: "#18181b"
                                                 wrapMode: Text.Wrap
                                                 Layout.fillWidth: true
                                             }
@@ -439,7 +439,7 @@ Item {
                                                 visible: !!model.help
                                                 text: model.help || ""
                                                 font.pixelSize: Math.max(12, Math.round(11 * root.fs))
-                                                color: "#6f6358"
+                                                color: "#71717a"
                                                 wrapMode: Text.Wrap
                                                 Layout.fillWidth: true
                                             }
@@ -448,7 +448,7 @@ Item {
                                                 visible: model.readonly === true
                                                 text: model.valueText || "（无）"
                                                 font.pixelSize: Math.max(13, Math.round(12 * root.fs))
-                                                color: "#2c241d"
+                                                color: "#18181b"
                                                 wrapMode: Text.Wrap
                                                 Layout.fillWidth: true
                                             }

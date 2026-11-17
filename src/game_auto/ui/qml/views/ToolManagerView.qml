@@ -45,6 +45,7 @@ Item {
             case "update":        return { text: "有更新",       state: HusTag.State_Warning }
             case "latest":        return { text: "已是最新",     state: HusTag.State_Success }
             case "local_unknown": return { text: "本地版本未知", state: HusTag.State_Default }
+            case "date_unknown":  return { text: "远端日期未知", state: HusTag.State_Default }
             case "no_release":    return { text: "无发布版",     state: HusTag.State_Default }
             case "no_repo":       return { text: "仅本地版本",   state: HusTag.State_Default }
             case "no_path":       return { text: "未安装",       state: HusTag.State_Default }
@@ -135,7 +136,7 @@ Item {
                               "其余项目请按发布页指引手动安装。安装只写托管目录，已检测到的外部安装不会被改动；" +
                               "脚本或游戏运行中时拒绝安装。"
                         font.pixelSize: Math.round(13 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -218,7 +219,7 @@ Item {
                                 text: "本地 " + (modelData.local ? "v" + modelData.local : "未知")
                                       + "   最新 " + (modelData.latest || "—")
                                 font.pixelSize: Math.round(12 * root.fs)
-                                color: modelData.has_update ? "#b66f1f" : "#5a4d3f"
+                                color: modelData.has_update ? "#d97706" : "#52525b"
                             }
                         }
 
@@ -230,7 +231,7 @@ Item {
                             HusText {
                                 text: modelData.path || "未安装"
                                 font.pixelSize: Math.round(12 * root.fs)
-                                color: modelData.path ? "#5a4d3f" : "#8a7a68"
+                                color: modelData.path ? "#52525b" : "#a1a1aa"
                                 elide: Text.ElideMiddle
                                 Layout.fillWidth: true
                             }
@@ -255,19 +256,19 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: Math.round(6 * root.fs)
                                 radius: 3
-                                color: "#e8e0d5"
+                                color: "#ececee"
 
                                 Rectangle {
                                     width: parent.width * card.progress
                                     height: parent.height
                                     radius: 3
-                                    color: "#2f7d4a"
+                                    color: "#16a34a"
                                 }
                             }
                             HusText {
                                 text: root.phaseText(root.installState)
                                 font.pixelSize: Math.round(12 * root.fs)
-                                color: "#6d6257"
+                                color: "#71717a"
                             }
                         }
 
@@ -303,7 +304,7 @@ Item {
                                 visible: !modelData.downloadable && modelData.tool_key !== ""
                                 text: "该项目暂不支持自动安装，请按发布页指引手动安装"
                                 font.pixelSize: Math.round(12 * root.fs)
-                                color: "#8a7a68"
+                                color: "#a1a1aa"
                             }
                             Item { Layout.fillWidth: true }
                         }

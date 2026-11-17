@@ -216,6 +216,7 @@ class AutomationView:
         "CODEARTS": "码道Agent Space 每日领取",
         "ASTUDIO": "AStudio 每日福利领取",
         "DUMATE": "DuMate 每日福利",
+        "MEOO": "秒悟每日登录送积分",
     }
 
     @Slot(result=str)
@@ -599,6 +600,8 @@ class AutomationView:
 
                 email_thread = threading.Thread(target=_send_email_async, daemon=True)
                 email_thread.start()
+                # GUI 退出清理按这个句柄做有界等待（os._exit 会跳过 daemon 线程）
+                self._active_email_thread = email_thread
 
         if not self._shutdown_pending:
             return False

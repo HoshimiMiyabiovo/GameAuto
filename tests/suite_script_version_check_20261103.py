@@ -10,6 +10,9 @@
 5. check_all 汇总：TTL 缓存、失败回退 stale、notified 同版本去重、
    本地未知不误报"有更新"；
 6. QML 离屏冒烟 + bridge/QML 接线（@Slot result= 约定）源码检查。
+7. OneDragon git 快照口径（2026-11-17 绝区零漏报回归）：本地 HEAD 日期 vs
+   release 发布日期、published_at 入缓存、旧缓存无发布日期报 date_unknown、
+   无 .git 报本地未知；_patch_check 旧版还原函数从不真正还原，一并修。
 
 跑法：.venv\\Scripts\\python.exe tests\\suite_script_version_check_20261103.py
 """
@@ -17,9 +20,10 @@
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -108,6 +112,18 @@ def test_detect_local_version():
     check("非 exe 路径不读元数据",
           svc.detect_local_version(r"D:\Tools\Whimbox\run_one_dragon.bat", spec_exe) == "")
 
+    # ── git 快照策略（OneDragon 系，2026-11-17 新增）──
+    ts = int(datetime(2026, 11, 14, 12, 0, 0, tzinfo=timezone.utc).timestamp())
+    spec_git = ScriptToolSpec(label="t", git_commit_date=True)
+    launcher = _make_git_repo(ts)
+    check("git HEAD 日期（UTC 点分）",
+          svc.detect_local_version(launcher, spec_git) == "2026.11.14",
+          svc.detect_local_version(launcher, spec_git))
+    check("无 .git 目录报未知",
+          svc.detect_local_version(r"Q:\no_such_place\NoGit\tool.exe", spec_git) == "")
+    check("默认不启用 git 源",
+          svc.detect_local_version(launcher, ScriptToolSpec(label="t")) == "")
+
     # ── spec=None 兜底（旧行为：目录 → exe）──
     check("无 spec 走目录正则",
           svc.detect_local_version(r"D:\Tools\ok-ww-v1.4.81\ok-ww.exe") == "1.4.81")
@@ -157,17 +173,58 @@ class _TmpCache:
 
 
 def _patch_check(specs, fetch_results):
-    """替换 collect_specs / fetch_latest_release，返回还原函数。"""
-    old = (svc.collect_specs, svc.fetch_latest_release)
+    """替换 collect_specs / fetch_release_with_assets，返回真正还原的函数。
+
+    fetch_results 项可为 {"tag","published_at",...} 字典、纯 tag 字符串
+    （自动补 published_at=""、assets=[]）或 None（查询失败）。
+    旧版还原函数只返回被覆盖前的引用、从不真正赋回去（跨用例漏液），一并修。
+    """
+    old = (svc.collect_specs, svc.fetch_release_with_assets)
     svc.collect_specs = lambda: specs
     results = list(fetch_results)
-    svc.fetch_latest_release = lambda repo: results.pop(0) if results else None
-    return lambda: old
+
+    def _fake_fetch(repo):
+        result = results.pop(0) if results else None
+        if result is None:
+            return None
+        if isinstance(result, dict):
+            return result
+        return {"tag": result, "published_at": "", "assets": []}
+
+    svc.fetch_release_with_assets = _fake_fetch
+
+    def restore():
+        svc.collect_specs, svc.fetch_release_with_assets = old
+
+    return restore
+
+
+_CACHE_PIN = str(Path(__file__).resolve().parent.parent / "data" / "cache")
+os.makedirs(_CACHE_PIN, exist_ok=True)  # TEMP 坏境（Git Bash /tmp）时 mkdtemp 会回退 cwd 污染根目录
+
+def _make_git_repo(commit_unix: int) -> str:
+    """造一个带 .git 的假 OneDragon 安装目录，HEAD 提交时间固定为 commit_unix。"""
+    tmp = tempfile.mkdtemp(prefix="ga_git_ver_", dir=_CACHE_PIN)
+    _LEAK_TMP_DIRS.append(tmp)
+    env = dict(os.environ)
+    env["GIT_AUTHOR_DATE"] = f"@{commit_unix} +0000"
+    env["GIT_COMMITTER_DATE"] = f"@{commit_unix} +0000"
+    devnull = subprocess.DEVNULL
+    subprocess.run(["git", "init", "-q", tmp], check=True, env=env,
+                   stdout=devnull, stderr=devnull)
+    (Path(tmp) / "README.md").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "-C", tmp, "add", "."], check=True, env=env,
+                   stdout=devnull, stderr=devnull)
+    subprocess.run(["git", "-C", tmp, "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-q", "-m", "init"], check=True, env=env,
+                   stdout=devnull, stderr=devnull)
+    # 启动器文件不存在不影响检测：_git_head_date 只沿父目录找 .git
+    return str(Path(tmp) / "OneDragon-Launcher.exe")
 
 
 def _make_install(version_txt: str = "") -> str:
     """造一个 March7th 式安装目录：过期目录名 + 自更新后的 version.txt。"""
-    tmp = tempfile.mkdtemp(prefix="ga_script_ver_")
+    tmp = tempfile.mkdtemp(prefix="ga_script_ver_", dir=_CACHE_PIN)
     _LEAK_TMP_DIRS.append(tmp)
     root = Path(tmp) / "March7thAssistant_v2.2.0.3_full"
     if version_txt:
@@ -297,6 +354,81 @@ def test_self_update_no_false_positive():
             check("pyappify 本地取自 app.json", rows2[0]["local"] == "3.7.13", rows2[0])
             check("已自更新到最新不误报", rows2[0]["status"] == "latest", rows2[0]["status"])
             check("不产生提醒", toasts2 == [], toasts2)
+
+
+def test_check_all_git_snapshot():
+    print("[12] OneDragon git 快照口径（2026-11-17 绝区零漏报回归）")
+    ts_new = int(datetime(2026, 11, 14, 12, 0, 0, tzinfo=timezone.utc).timestamp())
+    ts_old = int(datetime(2026, 2, 19, 12, 0, 0, tzinfo=timezone.utc).timestamp())
+    release = {"tag": "v2.6.1", "published_at": "2026-11-08T19:59:44Z", "assets": []}
+    base_spec = {
+        "app_key": "ZenlessZoneZero", "display_name": "绝区零",
+        "label": "OneDragon 一条龙",
+        "repo": "OneDragon-Anything/ZenlessZoneZero-OneDragon",
+        "spec": ScriptToolSpec(label="OneDragon 一条龙", git_commit_date=True),
+    }
+
+    # 场景一：绝区零实机复现——HEAD 2026-11-14 ≥ v2.6.1 发布 2026-11-08 → 已是最新
+    launcher = _make_git_repo(ts_new)
+    specs = [dict(base_spec, path=launcher)]
+    with _TmpCache():
+        restore = _patch_check(specs, [dict(release)])
+        try:
+            rows, toasts = svc.check_all(force=True)
+        finally:
+            restore()
+        check("本地版本=HEAD 日期", rows[0]["local"] == "2026.11.14", rows[0])
+        check("更新过后不误报",
+              rows[0]["status"] == "latest" and rows[0]["has_update"] is False,
+              rows[0]["status"])
+        check("不产生提醒", toasts == [], toasts)
+        saved = json.loads(svc.CACHE_FILE.read_text(encoding="utf-8"))
+        check("published_at 入缓存",
+              saved["repos"]["OneDragon-Anything/ZenlessZoneZero-OneDragon"]["published_at"]
+              == "2026-11-08T19:59:44Z", saved)
+
+    # 场景二：星铁实机复现——HEAD 2026-02-19 远早于发布日 → 有更新 + 快照文案
+    old_launcher = _make_git_repo(ts_old)
+    specs2 = [dict(base_spec, app_key="HonkaiStarRail",
+                   display_name="崩坏：星穹铁道", label="星铁一条龙",
+                   repo="OneDragon-Anything/StarRailOneDragon", path=old_launcher,
+                   spec=ScriptToolSpec(label="星铁一条龙", git_commit_date=True))]
+    with _TmpCache():
+        restore = _patch_check(specs2, [dict(release)])
+        try:
+            rows2, toasts2 = svc.check_all(force=True)
+        finally:
+            restore()
+        check("旧快照判有更新",
+              rows2[0]["status"] == "update" and rows2[0]["has_update"] is True, rows2[0])
+        check("提醒文案带快照", len(toasts2) == 1 and "快照" in toasts2[0], toasts2)
+
+    # 场景三：旧 schema 缓存无 published_at（离线读缓存）→ date_unknown，不冒充已最新
+    with _TmpCache():
+        svc.CACHE_FILE.write_text(json.dumps({
+            "repos": {"OneDragon-Anything/ZenlessZoneZero-OneDragon": {
+                "tag": "v2.6.1", "checked_at": datetime.now().isoformat(timespec="seconds"),
+                "stale": False}},
+            "notified": {},
+        }, ensure_ascii=False), encoding="utf-8")
+        restore = _patch_check(specs, [])
+        try:
+            rows3, _ = svc.check_all(allow_network=False)
+        finally:
+            restore()
+        check("缺发布日期报 date_unknown", rows3[0]["status"] == "date_unknown", rows3[0])
+
+    # 场景四：git 不可读（无 .git）→ 本地未知，不判更新。
+    # 注意不能用 mkdtemp：本机临时目录若落在项目根，向上 4 层会撞上仓库自己的
+    # .git（2026-11-17 实跑教训），用不存在的假路径保证祖先链无 .git。
+    specs4 = [dict(base_spec, path=r"Q:\no_such_place\NoGit\tool.exe")]
+    with _TmpCache():
+        restore = _patch_check(specs4, [dict(release)])
+        try:
+            rows4, _ = svc.check_all(force=True)
+        finally:
+            restore()
+        check("无 .git 报本地未知", rows4[0]["status"] == "local_unknown", rows4[0])
 
 
 def test_check_all_failure_fallback():
@@ -500,6 +632,11 @@ Window {
             if isinstance(stale_txt, tuple):
                 stale_txt = stale_txt[0]
             check("状态映射 latest", stale_txt == "已是最新", stale_txt)
+            du_txt = QQmlExpression(
+                ctx, root, 'statusMeta({status: "date_unknown"}).text').evaluate()
+            if isinstance(du_txt, tuple):
+                du_txt = du_txt[0]
+            check("状态映射 date_unknown", du_txt == "远端日期未知", du_txt)
         finally:
             app.quit()
 
@@ -515,6 +652,7 @@ def main():
     test_check_all_offline()
     test_check_all_update_and_dedup()
     test_self_update_no_false_positive()
+    test_check_all_git_snapshot()
     test_check_all_failure_fallback()
     test_check_all_local_unknown()
     test_bridge_and_qml_wiring()

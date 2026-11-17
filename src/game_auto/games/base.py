@@ -189,6 +189,12 @@ class ScriptToolSpec:
     trust_exe_version: bool = False
     # 目录名版本正则是否可信（仅"无自更新 + 按版本号命名 zip 分发"为 True，如 ScriptChainer）
     trust_dir_version: bool = False
+    # 本地版本取 git HEAD 提交日期（UTC，展示为 2026.11.14 点分日期；更新判定改对照
+    # release 发布日期，见 script_version_check.check_all）。OneDragon 系专用：
+    # git clone/安装器装出来的源码快照，version.py 是占位 v0.0.0、exe 无版本资源、
+    # 本地多半没拉过 tag（2026-11-17 实测绝区零 describe 直接 fatal），版本号口径
+    # 无真值可用；OneDragon 官方自己也按 commit 判更新。
+    git_commit_date: bool = False
 
     # ── 自动下载安装（services/script_tool_installer.py 消费）──
     # 稳定 key：app_config.script_tools.overrides 的键、安装目录名

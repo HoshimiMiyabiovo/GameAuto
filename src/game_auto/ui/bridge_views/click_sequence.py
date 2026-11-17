@@ -664,7 +664,7 @@ class ClickSequenceView:
             ok = player.play(seq, loop=loop, dry_run=dry_run, stop_event=stop_event)
             logger.info("[Bridge] 回放结束: name=%s ok=%s", name, ok)
             if dry_run:
-                self.emit_event("toast", message=f"试跑完成（未真实点击）", color="#295d86")
+                self.emit_event("toast", message="试跑完成（未真实点击）", color="#295d86")
             else:
                 self.emit_event(
                     "toast",

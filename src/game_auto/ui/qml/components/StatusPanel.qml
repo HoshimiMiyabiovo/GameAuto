@@ -13,8 +13,8 @@ HusCard {
     property string statusTitleText: "准备就绪"
     property string statusBodyText: "先勾选任务，再点击开始运行。"
     property string badgeLabel: "待命中"
-    property string badgeBgColor: "#dff1e4"
-    property string badgeFgColor: "#2f7d4a"
+    property string badgeBgColor: "#ecfdf5"
+    property string badgeFgColor: "#16a34a"
     property bool showSpinner: false
     property bool running: false
 
@@ -34,7 +34,7 @@ HusCard {
         HusText {
             text: "按照 app_config.json 中的顺序依次执行。"
             font.pixelSize: 13
-            color: "#6d6257"
+            color: "#71717a"
         }
 
         // Start / Stop buttons
@@ -58,7 +58,7 @@ HusCard {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: statusRow.height + 24
-            color: "#e9f3fb"
+            color: "#eff6ff"
             radius: 12
 
             RowLayout {
@@ -88,7 +88,7 @@ HusCard {
                     HusText {
                         text: root.statusBodyText
                         font.pixelSize: 13
-                        color: "#6d6257"
+                        color: "#71717a"
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                     }

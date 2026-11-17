@@ -156,7 +156,7 @@ Item {
                             visible: root.scanData.scanned_at !== ""
                             text: "上次扫描: " + root.scanData.scanned_at
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                         }
                         HusButton {
                             text: root.scanning ? "扫描中..." : "开始扫描"
@@ -176,7 +176,7 @@ Item {
                         text: "统计各游戏本体、第三方脚本与本工具数据的磁盘占用（只读统计，不删除任何文件）。" +
                               "游戏目录按 exe 自动推导，扫小了/扫大了点对应行的「改目录」。"
                         font.pixelSize: Math.round(13 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -191,20 +191,20 @@ Item {
                             Layout.fillWidth: true
                             Layout.preferredHeight: Math.round(6 * root.fs)
                             radius: 3
-                            color: "#e8e0d5"
+                            color: "#ececee"
 
                             Rectangle {
                                 width: parent.width * (root.scanProgress.total > 0
                                        ? root.scanProgress.done / root.scanProgress.total : 0)
                                 height: parent.height
                                 radius: 3
-                                color: "#2f7d4a"
+                                color: "#16a34a"
                             }
                         }
                         HusText {
                             text: "已扫描 " + root.scanProgress.done + " / " + root.scanProgress.total + " 个目标"
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                         }
                     }
 
@@ -225,7 +225,7 @@ Item {
                                 text: modelData.drive + " 剩余 " + root.fmtSize(modelData.free) +
                                       " / " + root.fmtSize(modelData.total)
                                 font.pixelSize: Math.round(12 * root.fs)
-                                color: "#5a4d3f"
+                                color: "#52525b"
                             }
                         }
                         Item { Layout.fillWidth: true }
@@ -260,7 +260,7 @@ Item {
                             HusText {
                                 text: root.fmtSize(root.groupTotal(groupCard.groupKey))
                                 font.pixelSize: Math.round(13 * root.fs)
-                                color: "#6d6257"
+                                color: "#71717a"
                             }
                             Item { Layout.fillWidth: true }
                         }
@@ -283,7 +283,7 @@ Item {
                                               (rowItem.modelData.group === "games" && !rowItem.modelData.exists
                                                ? "（路径待发现，实机运行一次后回填）" : "")
                                         font.pixelSize: Math.round(13 * root.fs)
-                                        color: rowItem.modelData.exists ? "#3d332a" : "#8a7a68"
+                                        color: rowItem.modelData.exists ? "#3f3f46" : "#a1a1aa"
                                         elide: Text.ElideRight
                                         Layout.maximumWidth: Math.round(220 * root.fs)
                                     }
@@ -291,14 +291,14 @@ Item {
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: Math.round(8 * root.fs)
                                         radius: 4
-                                        color: "#efe8dd"
+                                        color: "#f4f4f5"
 
                                         Rectangle {
                                             width: parent.width * (groupCard.groupMax > 0
                                                    ? Number(rowItem.modelData.size || 0) / groupCard.groupMax : 0)
                                             height: parent.height
                                             radius: 4
-                                            color: rowItem.modelData.exists ? "#4a7db5" : "#c4b8a8"
+                                            color: rowItem.modelData.exists ? "#4a7db5" : "#c4c4c8"
                                         }
                                     }
                                     HusText {
@@ -330,7 +330,7 @@ Item {
                                 HusText {
                                     text: rowItem.modelData.path || "（散文件，无目录）"
                                     font.pixelSize: Math.round(11 * root.fs)
-                                    color: "#8a7a68"
+                                    color: "#a1a1aa"
                                     elide: Text.ElideMiddle
                                     Layout.fillWidth: true
                                     leftPadding: Math.round(4 * root.fs)

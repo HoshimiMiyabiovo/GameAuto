@@ -25,7 +25,7 @@ try:
         print(f"状态码: {response.status}")
         print(f"响应头: {dict(response.headers)}")
         data = json.loads(response.read().decode("utf-8"))
-        print(f"\n响应数据:")
+        print("\n响应数据:")
         print(json.dumps(data, indent=2, ensure_ascii=False))
 except Exception as e:
     print(f"错误: {type(e).__name__}: {e}")

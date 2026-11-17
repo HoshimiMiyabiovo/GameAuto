@@ -200,6 +200,32 @@ class GameDailyRecord:
           千道门扉 0/6000），这些本来就不要求满，用"全部任务完成"判定会导致
           完成率永远为 0。必须以关键任务（活跃度）为准。
         """
+        # 异环补丁（2026-11-17）：历史口径把「日常领取 success」直接等同当日完成，
+        # 但 11-17 实拍日志：日常领取 success 时 roleHome 活跃度 50/100（脚本自己的
+        # AnomalyTask 还 OCR 到 daily activity 0），日常领取只代表它点过领取面板，
+        # 不代表活跃度满 100。因此 日常领取 success 时再用活跃度数值做否决：
+        # 数值存在且 <100 → 不得判 completed。roleHome 虽然带 stale（不作正向
+        # 完成依据），但作为「没满」的反证仍然有效。
+        if self.game_key == "nte":
+            claim_status = ""
+            activity_cur = None
+            for t in self.tasks:
+                name = t.task_name or t.task_key
+                if name == "日常领取" and t.status:
+                    claim_status = t.status
+                elif name == "活跃度":
+                    extra = t.extra if isinstance(t.extra, dict) else {}
+                    try:
+                        activity_cur = int(extra.get("current"))
+                    except (TypeError, ValueError):
+                        activity_cur = None
+            if claim_status == "failed":
+                return "failed"
+            if claim_status in ("success", "already"):
+                if activity_cur is not None and activity_cur < 100:
+                    return "failed" if self.has_failed else "pending"
+                return "completed"
+
         # 脚本型关键任务（异环"日常领取"）：按状态直接判定，优先级最高
         status_names = KEY_STATUS_TASKS.get(self.game_key) or ()
         for want in status_names:

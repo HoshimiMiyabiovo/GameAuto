@@ -77,12 +77,16 @@ def jdump(path: str, obj) -> None:
 
 
 def extract_share_id(token: str) -> str:
-    """从链接或裸 ID 提取 share_session_id（32 位大写字母数字）。"""
+    """从链接或裸 ID 提取 share_session_id（大写字母数字，可含连字符）。
+
+    ID 字符集实测不只 [A-Z0-9]：2026-11-17 出现过 `A1H-90LCUV-ZCE` 这种带
+    连字符的形态，字符类必须含 `-`，否则链接在第一段就被截断解析失败。
+    """
     t = token.strip()
-    m = re.search(r"/share/([A-Za-z0-9]{6,})", t)
+    m = re.search(r"/share/([A-Za-z0-9\-]{6,})", t)
     if m:
         return m.group(1)
-    if re.fullmatch(r"[A-Za-z0-9]{6,}", t):
+    if re.fullmatch(r"[A-Za-z0-9\-]{6,}", t):
         return t
     raise ValueError(f"无法从 {token!r} 提取分享 ID")
 

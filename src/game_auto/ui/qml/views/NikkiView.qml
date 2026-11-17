@@ -101,7 +101,7 @@ Item {
                               ? "暂无抽卡记录，请先在 Flet 版本或 CLI 中导入，或使用下方在线抓取。"
                               : "UID: " + (root.gachaData.uid || "") + " | 已加载 " + root.pools.length + " 个卡池" + (root.isPearpal ? " (Pearpal 摘要模式)" : "")
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -117,7 +117,7 @@ Item {
                                   + (root.overview.five_count || 0) + " 件五星）"
                             font.pixelSize: Math.round(15 * root.fs)
                             font.bold: true
-                            color: "#a8741f"
+                            color: "#d97706"
                         }
                         Repeater {
                             model: root.overview.outfit_summary || []
@@ -136,7 +136,7 @@ Item {
                                         visible: !!modelData.min_pity
                                         text: "最低 " + modelData.min_pity + " 抽出货"
                                         font.pixelSize: Math.round(11 * root.fs)
-                                        color: "#2f7d4a"
+                                        color: "#16a34a"
                                     }
                                 }
                                 HusText {
@@ -147,7 +147,7 @@ Item {
                                         return "　　" + names.join("、")
                                     }
                                     font.pixelSize: Math.round(12 * root.fs)
-                                    color: "#6d6257"
+                                    color: "#71717a"
                                     wrapMode: Text.Wrap
                                     Layout.fillWidth: true
                                     Layout.leftMargin: Math.round(14 * root.fs)
@@ -180,48 +180,48 @@ Item {
                                               ? ("估算总抽数: " + (modelData.total_pulls || 0))
                                               : ("总抽数: " + (modelData.total_records || 0))
                                         font.pixelSize: Math.round(13 * root.fs)
-                                        color: "#2f4f4f"
+                                        color: "#27272a"
                                     }
                                     HusText {
                                         Layout.alignment: Qt.AlignLeft
                                         text: "不同物品: " + (modelData.unique_item_ids || 0)
                                         font.pixelSize: Math.round(13 * root.fs)
-                                        color: "#2f4f4f"
+                                        color: "#27272a"
                                     }
                                     HusText {
                                         Layout.alignment: Qt.AlignLeft
                                         visible: root.isPearpal
                                         text: "4★: " + (modelData.four_count || 0)
                                         font.pixelSize: Math.round(13 * root.fs)
-                                        color: "#a8351f"
+                                        color: "#dc2626"
                                     }
                                     HusText {
                                         Layout.alignment: Qt.AlignLeft
                                         visible: root.isPearpal
                                         text: "5★: " + (modelData.five_count || 0)
                                         font.pixelSize: Math.round(13 * root.fs)
-                                        color: "#a8351f"
+                                        color: "#dc2626"
                                     }
                                     HusText {
                                         Layout.alignment: Qt.AlignLeft
                                         visible: root.isPearpal
                                         text: "当前 4★ 保底: " + (modelData.current_four_pity || 0)
                                         font.pixelSize: Math.round(12 * root.fs)
-                                        color: "#6d6257"
+                                        color: "#71717a"
                                     }
                                     HusText {
                                         Layout.alignment: Qt.AlignLeft
                                         visible: root.isPearpal
                                         text: "当前 5★ 保底: " + (modelData.current_five_pity || 0)
                                         font.pixelSize: Math.round(12 * root.fs)
-                                        color: "#6d6257"
+                                        color: "#71717a"
                                     }
                                     HusText {
                                         Layout.alignment: Qt.AlignLeft
                                         visible: root.isPearpal && !!(modelData.average_five_gap)
                                         text: "平均 5★ 间隔: " + (modelData.average_five_gap || 0)
                                         font.pixelSize: Math.round(12 * root.fs)
-                                        color: "#6d6257"
+                                        color: "#71717a"
                                     }
                                 }
 
@@ -229,7 +229,7 @@ Item {
                                     visible: !root.isPearpal
                                     text: "时间范围: " + (modelData.earliest_time || "?") + " ~ " + (modelData.latest_time || "?")
                                     font.pixelSize: Math.round(12 * root.fs)
-                                    color: "#6d6257"
+                                    color: "#71717a"
                                     Layout.fillWidth: true
                                     wrapMode: Text.Wrap
                                 }
@@ -243,7 +243,7 @@ Item {
                                         text: "本池 5★ 套装（" + (modelData.outfit_summary || []).length + "）"
                                         font.pixelSize: Math.round(13 * root.fs)
                                         font.bold: true
-                                        color: "#a8741f"
+                                        color: "#d97706"
                                         Layout.topMargin: 4
                                     }
                                     Repeater {
@@ -259,7 +259,7 @@ Item {
                                                 return "★ " + (modelData.outfit_name || "?") + "（" + parts.length + "件）" + pity + "：" + names.join("、")
                                             }
                                             font.pixelSize: Math.round(12 * root.fs)
-                                            color: "#6d6257"
+                                            color: "#71717a"
                                             wrapMode: Text.Wrap
                                             Layout.fillWidth: true
                                             Layout.leftMargin: Math.round(10 * root.fs)
@@ -273,7 +273,7 @@ Item {
                                     text: "5★ 出货历史 (共 " + (modelData.high_rarity_history || []).length + " 条)"
                                     font.pixelSize: Math.round(14 * root.fs)
                                     font.bold: true
-                                    color: "#2f4f4f"
+                                    color: "#27272a"
                                     Layout.topMargin: 6
                                 }
 
@@ -293,9 +293,9 @@ Item {
                                         width: nikkiFiveStarList.width
                                         height: 36
                                         required property var modelData
-                                        color: "#faf6f0"
+                                        color: "#fafafa"
                                         radius: 6
-                                        border.color: "#e0d6c8"
+                                        border.color: "#e4e4e7"
                                         border.width: 1
 
                                         RowLayout {
@@ -343,7 +343,7 @@ Item {
                                             HusText {
                                                 text: modelData.pity ? (modelData.pity + " 抽保底") : ""
                                                 font.pixelSize: Math.round(13 * root.fs)
-                                                color: "#2f7d4a"
+                                                color: "#16a34a"
                                                 font.bold: true
                                                 Layout.preferredWidth: 100
                                                 horizontalAlignment: Text.AlignRight
@@ -420,7 +420,7 @@ Item {
                     HusText {
                         text: "状态: 等待操作"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                     }
                 }
             }

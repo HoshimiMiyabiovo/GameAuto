@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import HuskarUI.Basic
+import "components"
 
 HusWindow {
     id: mainWindow
@@ -13,7 +14,7 @@ HusWindow {
     minimumHeight: 600
 
     title: "游戏自动化助手"
-    color: "#f6f1e8"
+    color: "#f7f8fa"
 
     // 全局字体缩放系数：窗口 1400px 时为 1.0，范围 [0.8, 1.25]
     property real fontScale: Math.max(0.8, Math.min(1.25, width / 1400))
@@ -79,7 +80,15 @@ HusWindow {
     Component.onCompleted: {
         // 仅安装主题色，特效默认关闭减少 GPU 合成开销；需要毛玻璃可手动开启
         // if (!setSpecialEffect(HusWindow.Win_Mica)) { setSpecialEffect(HusWindow.Win_AcrylicMaterial) }
-        HusTheme.installThemePrimaryColorBase("#18a05f")
+        // 2026-11-17 Codex 风中性主题引导：近白背景 + 近黑文字 + 翡翠强调 + 统一圆角。
+        // 全套 HuskarUI 控件的颜色都由全局基色派生（resources/theme/Index.json），
+        // 一次安装全局生效；手绘元素（行/分隔线/徽章）用 components/Theme.qml 同一套令牌。
+        HusTheme.installThemePrimaryColorBase("#059669")
+        HusTheme.installThemePrimaryRadiusBase(8)
+        HusTheme.installThemeColorTextBase("#18181b|#f4f4f5")
+        HusTheme.installThemeColorBgBase("#ffffff|#181818")
+        // 卡片边框比全局 15% 黑更轻，发丝线观感（installComponentToken 只收单值，dark 态随基色派生）
+        HusTheme.installComponentToken("HusCard", "colorBorder", "#ececee")
     }
 
     // ── Toast notification handler ────────────────────────────────
@@ -87,11 +96,11 @@ HusWindow {
         target: bridge
         function onToastRequested(message, color) {
             // 根据 color 色调选择通知类型
-            if (color === "#b04b44") {
+            if (color === "#dc2626") {
                 globalNotification.error("提示", message)
-            } else if (color === "#b66f1f") {
+            } else if (color === "#d97706") {
                 globalNotification.warning("提示", message)
-            } else if (color === "#2f7d4a") {
+            } else if (color === "#16a34a") {
                 globalNotification.success("提示", message)
             } else {
                 globalNotification.info("提示", message)
@@ -121,9 +130,9 @@ HusWindow {
         // ==== SIDEBAR ====
         Rectangle {
             Layout.fillHeight: true
-            Layout.preferredWidth: 240
-            // 半透明侧边栏，让 Mica/Acrylic 毛玻璃透过
-            color: Qt.rgba(255/255, 250/255, 242/255, 0.85)
+            Layout.preferredWidth: 232
+            // 中性浅灰侧边栏，与内容区白卡片区分（2026-11-17 去米黄）
+            color: "#fbfbfc"
 
             ColumnLayout {
                 anchors.fill: parent
@@ -143,10 +152,10 @@ HusWindow {
                         Rectangle {
                             Layout.preferredWidth: 34
                             Layout.preferredHeight: 34
-                            radius: 10
+                            radius: 9
                             gradient: Gradient {
-                                GradientStop { position: 0; color: "#22b06a" }
-                                GradientStop { position: 1; color: "#0e7a48" }
+                                GradientStop { position: 0; color: "#10b981" }
+                                GradientStop { position: 1; color: "#047857" }
                             }
                             HusText {
                                 anchors.centerIn: parent
@@ -162,12 +171,12 @@ HusWindow {
                                 text: "GameAuto"
                                 font.pixelSize: 16
                                 font.bold: true
-                                color: "#2c241d"
+                                color: "#18181b"
                             }
                             HusText {
                                 text: "游戏自动化助手"
                                 font.pixelSize: 11
-                                color: "#6d6257"
+                                color: "#71717a"
                             }
                         }
                     }
@@ -177,7 +186,7 @@ HusWindow {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 1
-                    color: "#33dbcdbd"
+                    color: Theme.hairline
                 }
 
                 HusMenu {
@@ -218,7 +227,7 @@ HusWindow {
         Rectangle {
             Layout.fillHeight: true
             Layout.preferredWidth: 1
-            color: "#dbcdbd"
+            color: Theme.hairline
         }
 
         // ==== CONTENT AREA ====

@@ -27,6 +27,9 @@ PROFILE = GameProfile(
             repo="OneDragon-Anything/StarRailOneDragon",
             option_name="StarRailOneDragon",
             tool_key="sr-one-dragon",
+            # OneDragon 系同绝区零：git 快照安装，本地版本取 HEAD 日期
+            # （2026-11-17 实机：本地 HEAD 2026-02-19，远端已 v4.0.3，此前一直漏报）
+            git_commit_date=True,
         ),
         ScriptToolSpec(
             label="March7th Assistant",

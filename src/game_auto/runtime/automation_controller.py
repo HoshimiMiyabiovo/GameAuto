@@ -993,7 +993,7 @@ class AutomationController:
             else:
                 launcher = config["launcher"]
                 params = config.get("launcher_params", [])
-           
+
             self.logger.debug(f"启动程序: {launcher} {params} (类型: {script_type})")
 
             # 启动前摘掉 MOTW：带 Zone.Identifier 的可执行文件经 ShellExecuteW
@@ -1033,7 +1033,7 @@ class AutomationController:
                     self.logger.error(f"ShellExecuteW 失败 (错误码: {result})")
                     return False, None
                 self.logger.info(f"程序通过 ShellExecuteW 启动成功 (工作目录: {exe_dir})")
-           
+
             launcher_name = os.path.basename(launcher)
             launcher_stem = os.path.splitext(launcher_name)[0]
             is_script_file = launcher_name.lower().endswith((".bat", ".cmd", ".py"))
@@ -1433,21 +1433,48 @@ class AutomationController:
             time.sleep(1)
 
     def _launch_special(self, config: dict) -> Tuple[bool, Optional[int]]:
+        """special 类型启动器：与 _launch_normal 同款分叉（exe → CreateProcess，
+        其余 → ShellExecuteW）。
+
+        2026-11-18 修可移植性：旧实现 `subprocess.Popen(f'cmd /c start "" "{path}"',
+        shell=True)` 把路径裸插进 cmd 命令行——路径里的 `&`、`^` 等 cmd 元字符
+        （Windows 目录名合法！）会被 shell 解释成命令拼接/转义，轻则启动失败、
+        重则注入执行。现在 exe 走列表参数的 CreateProcess（不经 shell、无元字符
+        问题，且与 11-16 的 MOTW 教训对齐：CreateProcess 不经过附件管理器），
+        非 exe（.lnk/.bat）走 ShellExecuteW（shell 关联语义与旧 start 一致）。
+        """
+        launcher = config["launcher"]
+        params = config.get("launcher_params", []) or []
         try:
-            self.logger.debug(f"启动特殊程序: {config['launcher']}")
-            subprocess.Popen(
-                f'cmd /c start "" "{config["launcher"]}"',
-                shell=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
+            self.logger.debug(f"启动特殊程序: {launcher} {params}")
+            if clear_motw_marker(launcher):
+                self.logger.info(f"[启动] 已清除特殊程序的 MOTW 标记: {launcher}")
+            exe_dir = os.path.dirname(launcher)
+            if launcher.lower().endswith(".exe"):
+                try:
+                    subprocess.Popen(
+                        [launcher, *params],
+                        cwd=exe_dir,
+                        close_fds=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+                except OSError as exc:
+                    self.logger.error(f"特殊程序 CreateProcess 启动失败: {exc}")
+                    return False, None
+            else:
+                param_str = ' '.join(f'"{p}"' if ' ' in p else p for p in params)
+                result = ctypes.windll.shell32.ShellExecuteW(
+                    None, "open", launcher, param_str, exe_dir, 1
+                )
+                if result <= 32:
+                    self.logger.error(f"特殊程序 ShellExecuteW 失败 (错误码: {result})")
+                    return False, None
         except Exception as e:
             self.logger.error(f"特殊程序启动失败: {str(e)}", exc_info=DEBUG_MODE)
             return False, None
         start_time = time.time()
         timeout = config['timeouts']['launch']
-       
+
         while time.time() - start_time < timeout:
             if pid := WindowDetector.find_window_process(config["launcher_profile"]["window_title"]):
                 self.logger.info(f"窗口检测成功 PID: {pid}")
@@ -1456,12 +1483,12 @@ class AutomationController:
                 if proc := ProcessSupervisor.find_process(pattern["name"], pattern.get("cmdline")):
                     self.logger.info(f"进程匹配成功 PID: {proc.pid}")
                     return True, proc.pid
-           
+
             elapsed = int(time.time() - start_time)
             remaining = timeout - elapsed
             self.logger.debug(f"等待目标程序启动... (已等待: {elapsed}s, 剩余: {remaining}s)")
             time.sleep(CHECK_INTERVAL)
-           
+
             if self._task_abort_requested():
                 self.logger.info("检测到终止请求，停止启动过程")
                 return False, None
@@ -1489,7 +1516,7 @@ class AutomationController:
         focus_guard_deadline = time.time() + max(0.0, float(launch_config.get("post_launch_focus_guard_sec", 0) or 0.0))
         focus_retry_interval = max(1.0, float(launch_config.get("post_launch_focus_retry_interval_sec", 2.0) or 2.0))
         last_focus_retry = 0.0
-       
+
         start_time = time.time()
         # 异环：ok-nte 日志出现更新行时不等超时，直接跳过（更新日等俩小时没意义）
         # 米游三件套：官方公告显示当前在维护窗口内时同样快速跳过；桥接层会按公告
@@ -1635,7 +1662,7 @@ class AutomationController:
                     runtime_processes=runtime_processes,
                 )
                 return True, duration, "game_exited"
-           
+
             if time.time() - last_log > 300:
                 elapsed = int((time.time() - start_time) / 60)
                 self.logger.info(f"游戏运行中 (已运行: {elapsed}分钟)")
@@ -1892,7 +1919,7 @@ class AutomationController:
         self.logger.info(
             f"[任务] enter app={app_name} display={game_display} script={script_display} pid={os.getpid()}"
         )
-        
+
         script_pid = None
         runtime_processes: Dict[str, ProcessSnapshot] = {}
         # 任务线程心跳看门狗：卡死时 dump 栈 + 置停止标志 + 杀进程树
@@ -2175,11 +2202,11 @@ class AutomationController:
                 and not self._task_abort_requested()
             )
             return success, status, duration
-        
+
         except Exception as e:
             self.logger.error(f"任务执行异常: {str(e)}", exc_info=DEBUG_MODE)
             return False, f"执行异常: {str(e)}", 0
-        
+
         finally:
             self._heartbeat.stop()
             # 先摘 thread-local 再停看门狗：任务线程到此为止，残留回调

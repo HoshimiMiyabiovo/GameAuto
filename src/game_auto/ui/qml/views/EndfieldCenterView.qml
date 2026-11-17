@@ -188,7 +188,7 @@ Item {
                     HusText {
                         text: "填写终末地账号的 OAuth token + UID，直接从官方接口拉取抽卡记录。Token 仅保存在本地 app_config.json，不会上传任何第三方。"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -258,7 +258,7 @@ Item {
                         HusText {
                             text: "状态: 等待操作"
                             font.pixelSize: Math.round(12 * root.fs)
-                            color: "#6d6257"
+                            color: "#71717a"
                             Layout.fillWidth: true
                         }
                     }
@@ -329,10 +329,10 @@ Item {
                                 height: 56
                                 required property var modelData
                                 required property int index
-                                color: root.selectedPoolIndex === index ? "#fff1d6" : (efPoolItemHover.containsMouse ? "#faf3e8" : "transparent")
+                                color: root.selectedPoolIndex === index ? "#ecfdf5" : (efPoolItemHover.containsMouse ? "#fafafa" : "transparent")
                                 radius: 6
                                 border.width: root.selectedPoolIndex === index ? 2 : 0
-                                border.color: "#ffaa44"
+                                border.color: "#10b981"
 
                                 MouseArea {
                                     id: efPoolItemHover
@@ -351,7 +351,7 @@ Item {
                                         text: modelData.pool_name || "?"
                                         font.pixelSize: Math.round(14 * root.fs)
                                         font.bold: root.selectedPoolIndex === index
-                                        color: "#2f4f4f"
+                                        color: "#27272a"
                                         Layout.fillWidth: true
                                         elide: Text.ElideRight
                                     }
@@ -360,12 +360,12 @@ Item {
                                         HusText {
                                             text: (modelData.total_pulls || 0) + " 抽"
                                             font.pixelSize: Math.round(12 * root.fs)
-                                            color: "#6d6257"
+                                            color: "#71717a"
                                         }
                                         HusText {
                                             text: "· 6★: " + (modelData.six_star_count || 0)
                                             font.pixelSize: Math.round(12 * root.fs)
-                                            color: "#a8351f"
+                                            color: "#dc2626"
                                         }
                                     }
                                 }
@@ -388,7 +388,7 @@ Item {
                                 text: root.currentPool.pool_name || "—"
                                 font.pixelSize: Math.round(22 * root.fs)
                                 font.bold: true
-                                color: "#2f4f4f"
+                                color: "#27272a"
                                 Layout.fillWidth: true
                                 elide: Text.ElideRight
                                 ToolTip.text: root.currentPool.pool_name || ""
@@ -406,12 +406,12 @@ Item {
                                 text: (root.currentPool.total_pulls || 0)
                                 font.pixelSize: Math.round(36 * root.fs)
                                 font.bold: true
-                                color: "#2f7d4a"
+                                color: "#16a34a"
                             }
                             HusText {
                                 text: "抽"
                                 font.pixelSize: Math.round(14 * root.fs)
-                                color: "#6d6257"
+                                color: "#71717a"
                                 Layout.alignment: Qt.AlignBottom
                                 Layout.bottomMargin: 6
                             }
@@ -421,9 +421,9 @@ Item {
                         Rectangle {
                             Layout.fillWidth: true
                             height: 70
-                            color: "#fffaf2"
+                            color: "#ffffff"
                             radius: 8
-                            border.color: "#dbcdbd"
+                            border.color: "#e4e4e7"
                             border.width: 1
 
                             RowLayout {
@@ -438,18 +438,18 @@ Item {
                                     HusText {
                                         text: "6★ 数"
                                         font.pixelSize: Math.round(12 * root.fs)
-                                        color: "#6d6257"
+                                        color: "#71717a"
                                         Layout.alignment: Qt.AlignHCenter
                                     }
                                     HusText {
                                         text: (root.currentPool.six_star_count || 0)
                                         font.pixelSize: Math.round(22 * root.fs)
                                         font.bold: true
-                                        color: "#a8351f"
+                                        color: "#dc2626"
                                         Layout.alignment: Qt.AlignHCenter
                                     }
                                 }
-                                Rectangle { width: 1; height: 40; color: "#dbcdbd" }
+                                Rectangle { width: 1; height: 40; color: "#e4e4e7" }
 
                                 // 6★ 出货率
                                 ColumnLayout {
@@ -458,18 +458,18 @@ Item {
                                     HusText {
                                         text: "6★ 出货率"
                                         font.pixelSize: Math.round(12 * root.fs)
-                                        color: "#6d6257"
+                                        color: "#71717a"
                                         Layout.alignment: Qt.AlignHCenter
                                     }
                                     HusText {
                                         text: (root.currentPool.six_star_rate || "0%")
                                         font.pixelSize: Math.round(20 * root.fs)
                                         font.bold: true
-                                        color: "#2f7d4a"
+                                        color: "#16a34a"
                                         Layout.alignment: Qt.AlignHCenter
                                     }
                                 }
-                                Rectangle { width: 1; height: 40; color: "#dbcdbd" }
+                                Rectangle { width: 1; height: 40; color: "#e4e4e7" }
 
                                 // 当前保底
                                 ColumnLayout {
@@ -478,14 +478,14 @@ Item {
                                     HusText {
                                         text: "当前保底"
                                         font.pixelSize: Math.round(12 * root.fs)
-                                        color: "#6d6257"
+                                        color: "#71717a"
                                         Layout.alignment: Qt.AlignHCenter
                                     }
                                     HusText {
                                         text: (root.overview.current_pity || 0) + " / " + root.maxPity6
                                         font.pixelSize: Math.round(18 * root.fs)
                                         font.bold: true
-                                        color: "#b66f1f"
+                                        color: "#d97706"
                                         Layout.alignment: Qt.AlignHCenter
                                     }
                                 }
@@ -497,7 +497,7 @@ Item {
                             text: "6★ 出货历史 (最新在前，共 " + (root.currentPool.high_rarity_history || []).length + " 条)"
                             font.pixelSize: Math.round(15 * root.fs)
                             font.bold: true
-                            color: "#2f4f4f"
+                            color: "#27272a"
                             Layout.topMargin: 6
                         }
 
@@ -522,9 +522,9 @@ Item {
                                 width: efSixStarList.width
                                 height: 38
                                 required property var modelData
-                                color: "#faf6f0"
+                                color: "#fafafa"
                                 radius: 6
-                                border.color: "#e0d6c8"
+                                border.color: "#e4e4e7"
                                 border.width: 1
 
                                 RowLayout {
@@ -570,7 +570,7 @@ Item {
                                     HusText {
                                         text: modelData.pity ? ("第 " + modelData.pity + " 抽") : ""
                                         font.pixelSize: Math.round(13 * root.fs)
-                                        color: "#2f7d4a"
+                                        color: "#16a34a"
                                         font.bold: true
                                         Layout.minimumWidth: 70
                                         Layout.preferredWidth: 80
@@ -624,7 +624,7 @@ Item {
                     HusText {
                         text: "默认走森空岛官方 API，复用下方「森空岛签到」已填的 Token，无需额外注册。"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -636,14 +636,14 @@ Item {
                         onClicked: bridge.queryEndfieldSkland()
                     }
 
-                    Rectangle { Layout.fillWidth: true; height: 1; color: "#e0d6c8" }
+                    Rectangle { Layout.fillWidth: true; height: 1; color: "#e4e4e7" }
 
                     // ── 高级：第三方协议终端（需自行注册 API Key）──
                     HusText {
                         text: "以下为第三方协议终端（end.shallow.ink），需自行注册 API Key；"
                               + "仅在森空岛不可用时才需要配置。"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#8a7f72"
+                        color: "#a1a1aa"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -750,9 +750,9 @@ Item {
                         // 直接用 height: 会被布局忽略并改用 implicitHeight(矩形默认 0)，
                         // 导致结果卡塌缩、内容溢出到下方签到卡之下。必须用 Layout.preferredHeight。
                         Layout.preferredHeight: resultColumn.implicitHeight + 20
-                        color: root.queryResult.success ? "#dff1e4" : "#f7dfdd"
+                        color: root.queryResult.success ? "#ecfdf5" : "#fef2f2"
                         radius: 8
-                        border.color: root.queryResult.success ? "#2f7d4a" : "#b04b44"
+                        border.color: root.queryResult.success ? "#16a34a" : "#dc2626"
                         border.width: 1
 
                         ColumnLayout {
@@ -772,7 +772,7 @@ Item {
                                     text: root.queryResult.success ? "✓ " + (root.queryResult.query_type || "") + " 查询成功"
                                           : "✗ " + (root.queryResult.query_type || "") + " 查询失败"
                                     font.pixelSize: Math.round(14 * root.fs); font.bold: true
-                                    color: root.queryResult.success ? "#2f7d4a" : "#b04b44"
+                                    color: root.queryResult.success ? "#16a34a" : "#dc2626"
                                 }
                             }
 
@@ -789,7 +789,7 @@ Item {
                                     return "📦 数据更新于 " + hh + ":" + mm + " · 过期后自动刷新，也可点上方按钮手动刷新"
                                 }
                                 font.pixelSize: Math.round(11 * root.fs)
-                                color: "#6b7d6b"
+                                color: "#71717a"
                                 wrapMode: Text.Wrap
                             }
 
@@ -797,7 +797,7 @@ Item {
                             HusText {
                                 text: root.queryResult.message || ""
                                 font.pixelSize: Math.round(12 * root.fs)
-                                color: "#2f4f4f"
+                                color: "#27272a"
                                 wrapMode: Text.Wrap
                                 Layout.fillWidth: true
                                 visible: !!(root.queryResult.message) && !root.isSklandResult
@@ -809,7 +809,7 @@ Item {
                                 visible: root.isSklandResult
                                 color: "#ffffff"
                                 radius: 6
-                                border.color: "#d4c8b8"
+                                border.color: "#d4d4d8"
                                 border.width: 1
                                 // 本矩形是 resultColumn(ColumnLayout) 的布局子项，必须用 Layout.preferredHeight
                                 Layout.preferredHeight: sklandColumn.implicitHeight + 16
@@ -833,12 +833,12 @@ Item {
                                             text: root.sklandData.role_name || "未知角色"
                                             font.pixelSize: Math.round(18 * root.fs)
                                             font.bold: true
-                                            color: "#2c241d"
+                                            color: "#18181b"
                                         }
 
                                         Rectangle {
                                             visible: (root.sklandData.extras || {}).level !== undefined
-                                            color: "#fff1d6"
+                                            color: "#ecfdf5"
                                             radius: 4
                                             height: levelText.height + 6
                                             width: levelText.width + 12
@@ -848,13 +848,13 @@ Item {
                                                 text: "Lv." + ((root.sklandData.extras || {}).level || "-")
                                                 font.pixelSize: Math.round(12 * root.fs)
                                                 font.bold: true
-                                                color: "#b66f1f"
+                                                color: "#d97706"
                                             }
                                         }
 
                                         Rectangle {
                                             visible: !!root.sklandData.server_name
-                                            color: "#e8f4fc"
+                                            color: "#eff6ff"
                                             radius: 4
                                             height: serverText.height + 6
                                             width: serverText.width + 12
@@ -863,7 +863,7 @@ Item {
                                                 anchors.centerIn: parent
                                                 text: root.sklandData.server_name || ""
                                                 font.pixelSize: Math.round(11 * root.fs)
-                                                color: "#295d86"
+                                                color: "#2563eb"
                                             }
                                         }
 
@@ -872,14 +872,14 @@ Item {
                                         HusText {
                                             text: "UID: " + (root.sklandData.uid || "-")
                                             font.pixelSize: Math.round(11 * root.fs)
-                                            color: "#8a7a68"
+                                            color: "#a1a1aa"
                                         }
                                     }
 
                                     // 每日活跃（核心）
                                     Rectangle {
                                         Layout.fillWidth: true
-                                        color: "#faf6f0"
+                                        color: "#fafafa"
                                         radius: 6
                                         height: dailyColumn.implicitHeight + 16
 
@@ -899,14 +899,14 @@ Item {
                                                     text: "每日活跃"
                                                     font.pixelSize: Math.round(14 * root.fs)
                                                     font.bold: true
-                                                    color: "#2c241d"
+                                                    color: "#18181b"
                                                 }
                                                 Rectangle {
                                                     visible: !!(root.sklandData.daily)
                                                     color: {
                                                         var cur = (root.sklandData.daily || {}).current || 0
                                                         var tot = (root.sklandData.daily || {}).total || 0
-                                                        return (tot > 0 && cur >= tot) ? "#dff1e4" : "#fff1d6"
+                                                        return (tot > 0 && cur >= tot) ? "#ecfdf5" : "#ecfdf5"
                                                     }
                                                     radius: 4
                                                     height: statusText.height + 5
@@ -925,7 +925,7 @@ Item {
                                                         color: {
                                                             var cur = (root.sklandData.daily || {}).current || 0
                                                             var tot = (root.sklandData.daily || {}).total || 0
-                                                            return (tot > 0 && cur >= tot) ? "#2f7d4a" : "#b66f1f"
+                                                            return (tot > 0 && cur >= tot) ? "#16a34a" : "#d97706"
                                                         }
                                                     }
                                                 }
@@ -941,7 +941,7 @@ Item {
                                                     }
                                                     font.pixelSize: Math.round(28 * root.fs)
                                                     font.bold: true
-                                                    color: "#2c241d"
+                                                    color: "#18181b"
                                                 }
                                                 HusText {
                                                     text: {
@@ -951,7 +951,7 @@ Item {
                                                         return "(" + pct + "%)"
                                                     }
                                                     font.pixelSize: Math.round(13 * root.fs)
-                                                    color: "#8a7a68"
+                                                    color: "#a1a1aa"
                                                     Layout.alignment: Qt.AlignBottom
                                                     Layout.bottomMargin: 4
                                                 }
@@ -961,7 +961,7 @@ Item {
                                                 visible: !!(root.sklandData.daily) && ((root.sklandData.daily || {}).total > 0)
                                                 Layout.fillWidth: true
                                                 Layout.preferredHeight: 6
-                                                color: "#e8ddd0"
+                                                color: "#ececee"
                                                 radius: 3
                                                 property real ratio: {
                                                     var daily = root.sklandData.daily || {}
@@ -972,7 +972,7 @@ Item {
                                                     width: parent.width * parent.ratio
                                                     height: parent.height
                                                     radius: 3
-                                                    color: parent.ratio >= 1.0 ? "#2f7d4a" : "#c98a2e"
+                                                    color: parent.ratio >= 1.0 ? "#16a34a" : "#d97706"
                                                 }
                                             }
                                         }
@@ -1018,9 +1018,9 @@ Item {
                                                 visible: modelData.visible
                                                 Layout.fillWidth: true
                                                 Layout.preferredHeight: 62
-                                                color: "#faf6f0"
+                                                color: "#fafafa"
                                                 radius: 6
-                                                border.color: "#e8ddd0"
+                                                border.color: "#ececee"
                                                 border.width: 1
 
                                                 ColumnLayout {
@@ -1031,14 +1031,14 @@ Item {
                                                     HusText {
                                                         text: modelData.label
                                                         font.pixelSize: Math.round(11 * root.fs)
-                                                        color: "#8a7a68"
+                                                        color: "#a1a1aa"
                                                         Layout.alignment: Qt.AlignHCenter
                                                     }
                                                     HusText {
                                                         text: modelData.text
                                                         font.pixelSize: Math.round(14 * root.fs)
                                                         font.bold: true
-                                                        color: "#2c241d"
+                                                        color: "#18181b"
                                                         Layout.alignment: Qt.AlignHCenter
                                                     }
                                                 }
@@ -1050,7 +1050,7 @@ Item {
                                     Rectangle {
                                         Layout.fillWidth: true
                                         visible: !!(root.sklandData.extras || {}).main_mission
-                                        color: "#f0f7ff"
+                                        color: "#eff6ff"
                                         radius: 6
                                         border.color: "#cfe0f5"
                                         border.width: 1
@@ -1073,7 +1073,7 @@ Item {
                                                 text: (root.sklandData.extras || {}).main_mission || ""
                                                 font.pixelSize: Math.round(13 * root.fs)
                                                 font.bold: true
-                                                color: "#2c5a8c"
+                                                color: "#2563eb"
                                                 wrapMode: Text.Wrap
                                                 Layout.fillWidth: true
                                             }
@@ -1112,7 +1112,7 @@ Item {
                                                 }
                                                 font.family: "Consolas, Monaco, monospace"
                                                 font.pixelSize: Math.round(11 * root.fs)
-                                                color: "#2f4f4f"
+                                                color: "#27272a"
                                                 wrapMode: Text.WrapAnywhere
                                             }
                                         }
@@ -1145,7 +1145,7 @@ Item {
                                         }
                                         font.family: "Consolas, Monaco, monospace"
                                         font.pixelSize: Math.round(11 * root.fs)
-                                        color: "#2f4f4f"
+                                        color: "#27272a"
                                         wrapMode: Text.WrapAnywhere
                                     }
                                 }
@@ -1209,7 +1209,7 @@ Item {
                     HusText {
                         text: "状态: 等待操作"
                         font.pixelSize: Math.round(12 * root.fs)
-                        color: "#6d6257"
+                        color: "#71717a"
                     }
                 }
             }

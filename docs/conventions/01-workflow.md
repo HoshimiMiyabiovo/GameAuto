@@ -116,9 +116,27 @@
   `workflow.sqlite3` 一律按新的 `data/` 路径理解。`storage/` 目录现在只放
   SQLite 访问层代码，不再存缓存。
 
+## 工作区卫生（2026-11-17 起，用户拍板）
+
+**根目录禁止堆临时产物，用完即删。** 适用于所有 AI 会话（Claude Code / Trae /
+Kilo / Qoder / WorkBuddy / 星辰等）与人工操作：
+
+- 一次性脚本、探针、中间产物放**系统临时目录**或 `.temp/`（已 gitignore），
+  **绝不落在仓库根**；根目录出现 `_tmp_*`、`tmp*`、`*_tmp*`、`pytest-of-*`、
+  `ga_*` 等一律视为未清理的垃圾。
+- 任务收尾动作：删除本任务产生的临时文件/目录/截图/探针脚本——**收尾即清理，
+  不等用户提醒**。pytest/mkdtemp 的临时目录在套件 finally 里回收。
+- 并行会话正在写入的产物（按 mtime 判断，几分钟内活跃）不删，等其收尾；
+  已在 changelog 里宣告收尾的会话遗留物可清。
+- 有保留价值的产物进正式目录：截图/工件 `data/artifacts/`，抓取数据
+  `data/<name>_capture/`，脚本入 `tools/`，套件入 `tests/`——**不放根目录**。
+- `app_config.json.bak*` 是程序自动备份，不属于垃圾，不要顺手清。
+
 ## 变更记录约定
 
 - 每次改动在 [docs/changelog.md](../changelog.md) 对应日期下**追加一行**，
   只写"做了什么 / 为什么"；实现细节与踩坑写进本目录对应分篇，不写进 changelog。
 - 新增游戏：在 `games/` 加一个 `GameProfile` 模块并 `register()`，不要再手改
   `settings/defaults.py`、`game_update_calendar.py`、`task_batch_runner.py` 的映射表。
+
+> AI生成
