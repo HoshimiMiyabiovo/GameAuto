@@ -48,11 +48,14 @@ from .baijing_common import (
     _click_ratio,
     _ensure_window,
     _ocr_best_match,
+    _ratio_point,
     _stopped,
+    _template_center,
 )
 from .baijing_scene import _ensure_main_ui
 from .foreground_flow_runner import _pyautogui_click_guarded
 from .ocr_click_tester import ocr_window_content
+from ..settings.paths import TEMPLATES_DIR
 
 LOGGER = logging.getLogger("GameAutomation")
 LOG_TAG = "[白荆回廊·联合训练场]"
@@ -64,17 +67,23 @@ MIN_CONF = 0.5
 # ── 外勤作战中心 hub 页 → 联合训练场入口（ref_baijing_joint_center_20261115）──
 HUB_ENTRY_TEXTS = ("联合训练场",)
 HUB_ENTRY_REGION = (0.50, 0.50, 0.78, 0.66)   # 含标签 (0.636,0.570)；排 天隙勘测(0.710)/分进合击战(0.452)
-P_JOINT_ENTRY_LABEL = (1220 / 1920, 616 / 1080)   # OCR 实测标签中心（先点）
-P_JOINT_ENTRY_ICON = (1047 / 1920, 605 / 1080)    # 六边形图标中心（标签点不进时的兜底）
+# 六边形图标模板（裁自 ref 实机帧 (1042,580)-(1150,690)，避开会消失的道具角标；
+# 2026-11-16 事故：静态比例点 (1047,605) 与标签点 (1220,616) 两次点击都未导航
+# （弧形节点热区未知，拟合回归那种"标签整行可点"在此不成立）——改为模板匹配
+# 定位图标真中心为主，OCR 标签/静态比例降级为兜底。
+JOINT_ENTRY_TEMPLATE = str(TEMPLATES_DIR / "白荆回廊-联合训练场入口.png")
+P_JOINT_ENTRY_LABEL = (1220 / 1920, 616 / 1080)   # OCR 实测标签中心（兜底 2）
+P_JOINT_ENTRY_ICON = (1070 / 1920, 630 / 1080)    # 网格实测六边形中心（兜底 3，2026-11-16 修正）
 
 # ── 防区页（ref_baijing_joint_zones_20261115）──
 ZONE_TITLE_MARKERS = ("联合训练",)                # 标题「联合训练·捷速难逃」OCR 保留「·」
 ZONE_BODY_MARKERS = ("防区未完成", "防区推演进度")  # 防区页独占（hub 页永无）
+ZONE_NAVIGATED_MARKERS = ("捷速难逃", "返回")      # 已进入联合训练相关页但 body 词缺失时的现场特征
 P_ZONE_BACK = (193 / 1920, 52 / 1080)             # 左上「返回」实测 (193,52)
 
 WAIT_FIELD = 8.0        # 主界面 → 外勤 hub（复用 fitting 的 field 判定）
 WAIT_ZONE = 12.0        # hub → 防区页过场
-POLL_INTERVAL_SEC = 1.0
+POLL_INTERVAL_SEC = 0.8  # 2026-11-16：缩短轮询间隔——短命页面（点击后被弹回）也要抓得到
 
 PROGRESS_RE = re.compile(r"(\d{1,3})\s*%\s*/\s*(\d{1,3})\s*%")
 UNLOCK_RE = re.compile(r"将于(\d{4})年(\d{1,2})月(\d{1,2})日\s*(\d{1,2}:\d{2})")
@@ -106,25 +115,72 @@ def _is_joint_zone_page(items: Sequence[Dict]) -> bool:
     return any(any(marker in t for t in texts) for marker in ZONE_BODY_MARKERS)
 
 
+def _frame_signature(items: Sequence[Dict], limit: int = 4) -> str:
+    """OCR 帧 → 摘要签名（前 N 条达标文本），用于区分轮询期间见过的不同画面。"""
+    texts = _texts(items)[:limit]
+    return " | ".join(texts) if texts else "(空白帧)"
+
+
 def _wait_zone_page(
     logger: logging.Logger,
     hwnd,
     stop_check: Optional[Callable[[], bool]],
     timeout: float = WAIT_ZONE,
-) -> Tuple[bool, List[Dict]]:
-    """轮询等防区页双证据出现；超时/停止返回 (False, 最后当帧)。"""
+) -> Tuple[bool, List[Dict], str]:
+    """轮询等防区页双证据出现。
+
+    返回 (ok, 最后当帧, 现场证据摘要)——摘要记录轮询期间见过的**所有不同画面**
+    （2026-11-16 事故教训：点击后页面短暂出现又被弹回的话，盲等只留最后一帧
+    hub，什么都没看到；逐帧记签名才能把"到底点进过什么"带回来）。
+    """
     deadline = time.time() + max(1.0, float(timeout))
+    seen: List[str] = []
     last_items: List[Dict] = []
     while time.time() < deadline:
         if _stopped(stop_check):
-            return False, last_items
+            return False, last_items, _frames_evidence(seen)
         items = ocr_window_content(logger, hwnd=hwnd) or []
         last_items = items
         if _is_joint_zone_page(items):
-            return True, items
+            return True, items, _frames_evidence(seen)
+        sig = _frame_signature(items)
+        if sig not in seen:
+            seen.append(sig)
         time.sleep(POLL_INTERVAL_SEC)
     logger.warning(f"{LOG_TAG} 等防区页超时 {timeout:.0f}s")
-    return False, last_items
+    return False, last_items, _frames_evidence(seen)
+
+
+def _frames_evidence(seen: Sequence[str], limit: int = 3) -> str:
+    if not seen:
+        return ""
+    return "；轮询期间见过：" + "／".join(f"「{s}」" for s in seen[:limit])
+
+
+def _locate_joint_entry(logger: logging.Logger, hwnd) -> List[Tuple[str, Tuple[int, int]]]:
+    """三级定位联合训练场入口（hub 页稳定，一次算好整条点击链）。
+
+    返回 [(方式, 屏幕绝对坐标), ...]：模板命中 → OCR 标签命中 → 静态比例。
+    **模板与 OCR 都未命中时返回空表**——入口不存在/改版，静态比例点绝不盲点
+    （禁盲点铁律：layout 变了比例点可能落在别处）。
+    """
+    chain: List[Tuple[str, Tuple[int, int]]] = []
+    try:
+        pt = _template_center(logger, hwnd, JOINT_ENTRY_TEMPLATE, frac_region=HUB_ENTRY_REGION)
+        if pt:
+            chain.append(("模板", pt))
+    except Exception as exc:  # noqa: BLE001 - 模板定位异常降级 OCR
+        logger.debug(f"{LOG_TAG} 模板定位异常（降级 OCR）: {exc}")
+    hit = _ocr_best_match(
+        logger, HUB_ENTRY_TEXTS, hwnd, frac_region=HUB_ENTRY_REGION, min_conf=0.6,
+    )
+    if hit:
+        chain.append(("OCR标签", hit["center"]))
+    if chain:
+        ratio_pt = _ratio_point(logger, hwnd, P_JOINT_ENTRY_ICON)
+        if ratio_pt:
+            chain.append(("静态比例", ratio_pt))
+    return chain
 
 
 def parse_zone_state(items: Sequence[Dict]) -> Dict:
@@ -255,28 +311,29 @@ def run_joint_training_recon(logger: logging.Logger, hwnd, stop_check=None) -> D
         return result
     result["countdown"] = parse_hub_countdown(hub_items)
 
-    # hub → 联合训练场入口：OCR 定位（未命中=skip 不点击，活动结束/换期禁盲点）
-    hit = _ocr_best_match(
-        logger, HUB_ENTRY_TEXTS, hwnd, frac_region=HUB_ENTRY_REGION, min_conf=0.6,
-    )
-    if not hit:
+    # hub → 联合训练场入口：三级定位（模板 → OCR 标签 → 静态比例），逐点点击
+    # 并验证；模板与 OCR 都未命中 = 入口不存在/改版，**skip 不点击**（禁盲点）。
+    chain = _locate_joint_entry(logger, hwnd)
+    if not chain:
         result["detail"] = "外勤页未见「联合训练场」入口（活动未开/已结束/版本改版）"
         logger.info(f"{LOG_TAG} {result['detail']}")
         return result
-    _pyautogui_click_guarded(*hit["center"])
-    logger.info(f"{LOG_TAG} 点击「联合训练场」入口 @ {hit['center']}")
     result["entered"] = True
-    time.sleep(2.5)  # hub → 防区页过场
-
-    zone_ok, items = _wait_zone_page(logger, hwnd, stop_check)
+    zone_ok, items, evidence = False, [], ""
+    for attempt, (how, pt) in enumerate(chain, 1):
+        _pyautogui_click_guarded(*pt)
+        logger.info(f"{LOG_TAG} 点击「联合训练场」入口（{how}）@ {pt} [{attempt}/{len(chain)}]")
+        time.sleep(1.0)  # 过场起步，随即进入逐帧轮询（短命页面也抓得到）
+        zone_ok, items, evidence = _wait_zone_page(logger, hwnd, stop_check)
+        if zone_ok:
+            break
+        logger.info(f"{LOG_TAG} {how} 点击未见防区页，尝试下一个定位点")
     if not zone_ok:
-        # 标签点不进（图标才是热区）时按比例点图标兜底一次，再验证——非盲点
-        logger.info(f"{LOG_TAG} 标签点击未见防区页，按比例点图标兜底")
-        _click_ratio(logger, hwnd, P_JOINT_ENTRY_ICON, "联合训练场图标（兜底）")
-        time.sleep(2.5)
-        zone_ok, items = _wait_zone_page(logger, hwnd, stop_check)
-    if not zone_ok:
-        result.update(status="failed", detail="点击入口后未见防区页（防区未完成/推演进度均未出现）")
+        result.update(
+            status="failed",
+            detail=f"点击入口后未见防区页（防区未完成/推演进度均未出现，已试 "
+                   f"{'/'.join(h for h, _ in chain)}）{evidence}",
+        )
         _record_failure(logger, hwnd, "防区页", result["detail"], items)
         result["returned_main"] = _ensure_main_ui(logger, hwnd, stop_check=stop_check)
         if not result["returned_main"]:

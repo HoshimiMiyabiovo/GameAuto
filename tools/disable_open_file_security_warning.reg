@@ -1,0 +1,15 @@
+Windows Registry Editor Version 5.00
+
+; 关闭 Windows「打开文件 - 安全警告」（来自 Internet 的文件... 是否运行）
+; 双击本文件 → 弹【是/确定】→ 注销重登或重启生效。
+; 原理：SaveZoneInformation=1 让系统不再给下载文件打 Zone 来源标记，
+;       LowRiskFileTypes 把 .exe/.bat 等列为低风险，附件管理器不再拦截。
+; 副作用：以后从网上下载任何 exe/脚本都不会再弹这个提示（包括真正陌生的文件），
+;         安全性下降，靠火绒/Defender/SmartScreen 兜底。仅在你确认环境下使用。
+; 恢复：把下面两处改为原值（SaveZoneInformation=2、删除 LowRiskFileTypes 一行）
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments]
+"SaveZoneInformation"=dword:00000001
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Policies\Associations]
+"LowRiskFileTypes"=".exe;.bat;.cmd;.msi;.scr;.pif;.com;.js;.vbs;.ps1;.jar;.zip;.rar;.7z"

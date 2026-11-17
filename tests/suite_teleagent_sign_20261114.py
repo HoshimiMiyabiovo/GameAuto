@@ -10,8 +10,8 @@
 
 本套件锁：
 [1] flow_configs 双份配置静态断言（example 必查；本地文件存在才查镜像）：
-    五步结构 / OCR-only 无模板 / 第 4 步 optional_if_missing（幂等）/
-    第 5 步 fail-closed 核验 / 锚与区域防误点主界面悬浮福利社卡片；
+    六步结构 / OCR-only 无模板 / 更新弹窗可选忽略 / 第 5 步 optional_if_missing（幂等）/
+    第 6 步 fail-closed 核验 / 锚与区域防误点主界面悬浮福利社卡片；
 [2] 接线锁：WOOL_FLOW_KEYS 含 TELEAGENT（GUI 薅羊毛页 / WebUI /flows /
     WoolFlow 集合全自动获得）、两处显示名 meta、WoolFlow friendly_note、
     本机 flow_exe_paths 路径映射（存在才查）。
@@ -36,8 +36,8 @@ import game_auto.services.launch_task_catalog as catalog  # noqa: E402
 
 FAILURES = []
 
-STEP_NAMES = ["等待主界面", "点击左下角用户名", "等待用户面板", "点击立即领取", "核验今日已领"]
-STEP_ACTIONS = ["wait_template", "click_template", "wait_template", "click_template", "wait_template"]
+STEP_NAMES = ["等待主界面", "关闭更新提示", "点击左下角用户名", "等待用户面板", "点击立即领取", "核验今日已领"]
+STEP_ACTIONS = ["wait_template", "click_template", "click_template", "wait_template", "click_template", "wait_template"]
 
 
 def check(label, ok, detail=None):
@@ -70,9 +70,10 @@ def test_flow_configs():
         check(f"{name}: 跑完关游戏（含失败）", flow.get("close_process_on_finish") is True
               and flow.get("close_process_on_fail") is True)
         steps = flow.get("steps") or []
-        check(f"{name}: 五步且顺序锁定", [s.get("name") for s in steps] == STEP_NAMES,
+        check(f"{name}: 六步且顺序锁定", [s.get("name") for s in steps] == STEP_NAMES,
               [s.get("name") for s in steps])
-        check(f"{name}: 动作序列 等→点→等→点→核验", [s.get("action") for s in steps] == STEP_ACTIONS,
+        check(f"{name}: 动作序列 等→关更新→点→等→点→核验",
+              [s.get("action") for s in steps] == STEP_ACTIONS,
               [s.get("action") for s in steps])
         check(f"{name}: 全 OCR 路线（不裁模板）",
               all(not (s.get("template") or "").strip() for s in steps),
@@ -80,6 +81,13 @@ def test_flow_configs():
         by_name = _steps_by_name(flow)
         wait_main = by_name.get("等待主界面") or {}
         check(f"{name}: 等主界面容忍冷启动（timeout≥60）", (wait_main.get("timeout_sec") or 0) >= 60)
+        dismiss_update = by_name.get("关闭更新提示") or {}
+        check(f"{name}: 更新弹窗只点忽略（不自动更新）",
+              "忽略" in (dismiss_update.get("target_text") or []))
+        check(f"{name}: 无更新弹窗时幂等跳过（optional_if_missing）",
+              dismiss_update.get("optional_if_missing") is True)
+        region = dismiss_update.get("ocr_region_frac") or []
+        check(f"{name}: 更新弹窗区域锁左下（y2≤0.9）", len(region) == 4 and region[3] <= 0.9, region)
         click_user = by_name.get("点击左下角用户名") or {}
         check(f"{name}: 用户名 prefix 可容忍改名", "user_" in (click_user.get("target_text") or []))
         region = click_user.get("ocr_region_frac") or []

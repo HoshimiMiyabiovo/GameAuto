@@ -16,6 +16,7 @@
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 from datetime import datetime, timedelta
@@ -30,6 +31,9 @@ from game_auto.games.base import ScriptToolSpec  # noqa: E402
 from game_auto.services import script_version_check as svc  # noqa: E402
 
 FAILURES = []
+# 本套件造的假安装目录必须带可识别前缀并在进程退出时清掉（2026-11-16：
+# 旧版用裸 mkdtemp() 且无人回收，跑四轮全量就在项目根留四个 tmp*/）。
+_LEAK_TMP_DIRS: list[str] = []
 
 
 def check(name, cond, detail=""):
@@ -163,7 +167,8 @@ def _patch_check(specs, fetch_results):
 
 def _make_install(version_txt: str = "") -> str:
     """造一个 March7th 式安装目录：过期目录名 + 自更新后的 version.txt。"""
-    tmp = tempfile.mkdtemp()
+    tmp = tempfile.mkdtemp(prefix="ga_script_ver_")
+    _LEAK_TMP_DIRS.append(tmp)
     root = Path(tmp) / "March7thAssistant_v2.2.0.3_full"
     if version_txt:
         vf = root / "assets" / "config" / "version.txt"
@@ -523,4 +528,9 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    finally:
+        # 即使断言失败也回收假安装目录，别再往项目根/系统临时目录扔垃圾。
+        for _tmp in _LEAK_TMP_DIRS:
+            shutil.rmtree(_tmp, ignore_errors=True)

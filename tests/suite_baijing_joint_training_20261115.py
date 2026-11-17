@@ -91,8 +91,9 @@ ZONE_FRAME = [
 ]
 
 JOINT_LABEL_CENTER = (1220, 616)      # hub 页「联合训练场」标签实测
-JOINT_ICON_CENTER = (1047, 605)       # 六边形图标中心（标签点不进时的兜底比例）
+JOINT_ICON_CENTER = (1070, 630)       # 网格实测六边形图标中心（模板失配时的比例兜底）
 ZONE_BACK_CENTER = (193, 52)
+TEMPLATE_HIT_CENTER = (1200, 700)     # 模板匹配桩的返回点（屏幕绝对坐标）
 
 
 class FakeTime:
@@ -120,12 +121,13 @@ def _records():
 
 
 def _patch_env(frames_for_ocr=None, zone_waits=None, ensure_main=True, ft=None,
-               entry_hit=True):
-    """一次性打桩：窗口/OCR/点击/快照/主界面恢复。
+               entry_hit=True, template_hit=True):
+    """一次性打桩：窗口/OCR/模板/点击/快照/主界面恢复。
 
     frames_for_ocr: ocr_window_content side_effect（_wait_zone_page 的轮询帧）
-    zone_waits: 若给定，patch bjt._wait_zone_page 的 side_effect
+    zone_waits: 若给定，patch bjt._wait_zone_page 的 side_effect（3 元组）
     entry_hit: False 时 OCR 永远未命中（入口未命中禁点用）
+    template_hit: False 时模板匹配永远未命中
     """
     rec = _records()
     ft = ft or FakeTime()
@@ -171,6 +173,9 @@ def _patch_env(frames_for_ocr=None, zone_waits=None, ensure_main=True, ft=None,
         mock.patch.object(bjt, "_pyautogui_click_guarded", side_effect=_guarded_rec),
         mock.patch.object(bjt, "_capture_daily_list_snapshot", side_effect=_snapshot_rec),
         mock.patch.object(bjt, "_ocr_best_match", side_effect=_ocr_rec),
+        mock.patch.object(bjt, "_template_center",
+                          return_value=TEMPLATE_HIT_CENTER if template_hit else None),
+        mock.patch.object(bjt, "_ratio_point", return_value=JOINT_ICON_CENTER),
     ]
     if frames_for_ocr is not None:
         patches.append(mock.patch.object(bjt, "ocr_window_content",
@@ -237,9 +242,8 @@ def test_parse():
 
 
 def test_no_entry_no_click():
-    print("[4] 入口未命中禁点")
-    patches, rec, _ft = _patch_env(frames_for_ocr=None, zone_waits=[(True, ZONE_FRAME)],
-                                   entry_hit=False)
+    print("[4] 入口未命中禁点（模板 + OCR 双未命中 → 零点击）")
+    patches, rec, _ft = _patch_env(frames_for_ocr=None, entry_hit=False, template_hit=False)
     with _multi(patches + [_wait_page_patched(True, "field", HUB_FRAME)]):
         res = bjt.run_joint_training_recon(__import__("logging").getLogger("t"), 1234)
     check("未命中 → skipped", res["status"] == "skipped", res["detail"])
@@ -261,10 +265,10 @@ def test_event_expired():
 
 
 def test_success_path():
-    print("[6] 成功链路")
+    print("[6] 成功链路（模板点一次进）")
     patches, rec, _ft = _patch_env(
         frames_for_ocr=None,
-        zone_waits=[(True, ZONE_FRAME)],
+        zone_waits=[(True, ZONE_FRAME, "")],
     )
     with _multi(patches + [_wait_page_patched(True, "field", HUB_FRAME)]):
         res = bjt.run_joint_training_recon(__import__("logging").getLogger("t"), 1234)
@@ -275,8 +279,8 @@ def test_success_path():
           and res["zones"]["progress"] == {"current": 0, "cap": 180},
           str(res["zones"]))
     check("hub 倒计时进结果", res["countdown"] == "6小时54分后结算", str(res["countdown"]))
-    check("入口点击 = OCR 标签中心（首次 guarded 点击）",
-          rec["guarded"][:1] == [JOINT_LABEL_CENTER], str(rec["guarded"]))
+    check("首次点击 = 模板匹配点", rec["guarded"][:1] == [TEMPLATE_HIT_CENTER],
+          str(rec["guarded"]))
     check("退出点左上返回（末次 guarded 点击）",
           rec["guarded"][-1:] == [ZONE_BACK_CENTER], str(rec["guarded"]))
     check("主界面点击外勤走 _click_ratio",
@@ -286,30 +290,33 @@ def test_success_path():
 
 
 def test_icon_fallback():
-    print("[7] 标签点不进 → 图标比例兜底")
+    print("[7] 模板/标签点都不进 → 静态比例兜底")
     patches, rec, _ft = _patch_env(
         frames_for_ocr=None,
-        zone_waits=[(False, HUB_FRAME), (True, ZONE_FRAME)],
+        zone_waits=[(False, HUB_FRAME, ""), (False, HUB_FRAME, ""), (True, ZONE_FRAME, "")],
     )
     with _multi(patches + [_wait_page_patched(True, "field", HUB_FRAME)]):
         res = bjt.run_joint_training_recon(__import__("logging").getLogger("t"), 1234)
     check("兜底后 success", res["status"] == "success", res["detail"])
-    ratio_points = [p for p, _label in rec["ratio"]]
-    check("图标兜底点击发生",
-          any(abs(p[0] - bjt.P_JOINT_ENTRY_ICON[0]) < 1e-6
-              and abs(p[1] - bjt.P_JOINT_ENTRY_ICON[1]) < 1e-6 for p in ratio_points),
-          str(ratio_points))
+    check("点击链 = 模板 → OCR标签 → 静态比例",
+          rec["guarded"][:3] == [TEMPLATE_HIT_CENTER, JOINT_LABEL_CENTER, JOINT_ICON_CENTER],
+          str(rec["guarded"]))
+    check("成功 detail 只含防区状态（无失败残留）",
+          "未完成防区" in res["detail"] and "未见防区页" not in res["detail"], res["detail"])
 
 
 def test_entry_never_opens():
-    print("[8] 两次都进不去 → failed")
+    print("[8] 三个定位点都进不去 → failed + 现场证据")
+    ev = "；轮询期间见过：「hub帧签名」"
     patches, rec, _ft = _patch_env(
         frames_for_ocr=None,
-        zone_waits=[(False, HUB_FRAME), (False, HUB_FRAME)],
+        zone_waits=[(False, HUB_FRAME, ev), (False, HUB_FRAME, ev), (False, HUB_FRAME, ev)],
     )
     with _multi(patches + [_wait_page_patched(True, "field", HUB_FRAME)]):
         res = bjt.run_joint_training_recon(__import__("logging").getLogger("t"), 1234)
     check("status failed", res["status"] == "failed", res["detail"])
+    check("detail 带轮询现场证据", "轮询期间见过" in res["detail"], res["detail"])
+    check("detail 列出尝试过的定位方式", "模板" in res["detail"], res["detail"])
     check("未取证快照（没进页不快照）", not rec["snapshot"], str(rec["snapshot"]))
     check("退回主界面", res["returned_main"] is True)
 
@@ -318,7 +325,7 @@ def test_exit_fail():
     print("[9] 退出失败 → failed 需人工恢复")
     patches, rec, _ft = _patch_env(
         frames_for_ocr=None,
-        zone_waits=[(True, ZONE_FRAME)],
+        zone_waits=[(True, ZONE_FRAME, "")],
         ensure_main=[True, False],   # 进流程时回得到主界面，退出时回不去
     )
     with _multi(patches + [_wait_page_patched(True, "field", HUB_FRAME)]):

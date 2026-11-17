@@ -232,8 +232,56 @@ def test_controller_module_branch():
             pass
 
 
+def test_daily_log_parser_module_format():
+    print("[6] 内置 okww 日志判定：Daily Task Completed / 任务切换即上一项完成")
+    from tempfile import NamedTemporaryFile
+
+    from game_auto.services.ok_ww_daily_parser import parse_ok_ww_log
+
+    lines = [
+        "2026-11-17 08:52:58,177 INFO TaskExecutor DailyTask:open_daily",
+        "2026-11-17 08:56:26,493 INFO TaskExecutor DailyTask:info_set current task claim daily",
+        "2026-11-17 08:56:43,907 INFO TaskExecutor DailyTask:info_set current task claim mail",
+        "2026-11-17 08:56:55,535 INFO TaskExecutor DailyTask:battle pass",
+        "2026-11-17 08:57:11,779 INFO TaskExecutor DailyTask:info_set current task check weekly garden",
+        "2026-11-17 09:13:42,543 INFO TaskExecutor DailyTask:Daily Task Completed",
+        "2026-11-17 09:13:42,543 INFO TaskExecutor TaskExecutor:Successfully Executed Task, Exiting Game and App!",
+    ]
+    with NamedTemporaryFile("w", encoding="utf-8", suffix=".log", delete=False) as fh:
+        fh.write("\n".join(lines) + "\n")
+        path = fh.name
+    try:
+        data = parse_ok_ww_log(path)
+    finally:
+        Path(path).unlink(missing_ok=True)
+    statuses = {t["task_key"]: t["status"] for t in data["tasks"]}
+    check("内置日志 final marker 认 Daily Task Completed", data["is_all_success"] is True)
+    check("五个子任务全部 success",
+          all(statuses.get(k) == "success" for k in
+              ("open_daily", "claim daily", "claim mail", "battle pass", "check weekly garden")),
+          statuses)
+    check("progress_percent=100", data["progress_percent"] == 100, data["progress_percent"])
+
+    # 中途退出：只有任务切换、没有成功标志 → 已切换的上一项算完成，当前项必须 pending
+    lines = [
+        "2026-11-17 08:52:58,177 INFO TaskExecutor DailyTask:open_daily",
+        "2026-11-17 08:56:26,493 INFO TaskExecutor DailyTask:info_set current task claim daily",
+    ]
+    with NamedTemporaryFile("w", encoding="utf-8", suffix=".log", delete=False) as fh:
+        fh.write("\n".join(lines) + "\n")
+        path = fh.name
+    try:
+        data = parse_ok_ww_log(path)
+    finally:
+        Path(path).unlink(missing_ok=True)
+    statuses = {t["task_key"]: t["status"] for t in data["tasks"]}
+    check("中途退出：open_daily 已切换 → success", statuses.get("open_daily") == "success", statuses)
+    check("中途退出：claim daily 仍 pending", statuses.get("claim daily") == "pending", statuses)
+    check("中途退出：progress_percent<100", data["progress_percent"] < 100, data["progress_percent"])
+
+
 def test_runner_protocol():
-    print("[6] 真实 runner 协议（无 ok-ww 安装时跳过）")
+    print("[7] 真实 runner 协议（无 ok-ww 安装时跳过）")
     config_path = PROJECT_ROOT / "app_config.json"
     if not config_path.is_file():
         print("  SKIP app_config.json 不存在")
@@ -281,6 +329,7 @@ def main():
     test_click_rate()
     test_team_override()
     test_controller_module_branch()
+    test_daily_log_parser_module_format()
     test_runner_protocol()
     print()
     if FAILURES:

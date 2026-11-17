@@ -213,6 +213,9 @@ class AutomationView:
         "TRAE": "Trae CN 每日签到",
         "QODER": "Qoder 每日积分领取",
         "TELEAGENT": "TeleAgent 每日签到",
+        "CODEARTS": "码道Agent Space 每日领取",
+        "ASTUDIO": "AStudio 每日福利领取",
+        "DUMATE": "DuMate 每日福利",
     }
 
     @Slot(result=str)

@@ -540,20 +540,23 @@ def _find_window_by_filters(
     if not candidates:
         return None
 
+    # 同为「置顶小窗劫持」的防线：本函数按进程名/标题跨进程找窗口，候选里混入
+    # 桌面宠物/通知气泡时会选中它（2026-11-17 与 _choose_best_window_for_flow
+    # 同源事故）。过滤后空则回退原集合。
+    candidates = _filter_flow_window_candidates(candidates)
+    if not candidates:
+        return None
+
     foreground_hwnd = None
     try:
         foreground_hwnd = win32gui.GetForegroundWindow()
     except Exception:
         foreground_hwnd = None
 
-    def sort_key(hwnd: int):
-        return (
-            1 if hwnd == foreground_hwnd else 0,
-            1 if _matches_window_keywords(hwnd, title_keywords) else 0,
-            _window_area(hwnd),
-        )
-
-    best_hwnd = max(candidates, key=sort_key)
+    best_hwnd = max(
+        candidates,
+        key=lambda hwnd: _flow_window_sort_key(hwnd, title_keywords, foreground_hwnd),
+    )
     best_pid = _window_pid(best_hwnd)
     if best_pid is None:
         return None
@@ -725,6 +728,53 @@ def _matches_window_keywords(hwnd: int, title_keywords: Optional[List[str]]) -> 
     return any(k in title for k in keywords)
 
 
+# ── 流程主窗口的尺寸门槛（2026-11-17 薅羊毛实锤）────────────────────────────
+# Qoder Desktop Pet（51×79 置顶小窗、长期占据前台）被「前台优先」的排序选中，
+# 流程就在 51×79 区域里找「权益中心」模板——模板图比整个区域还大，重试 16 次
+# 全败（日志原文 "needle dimension(s) exceed the haystack image or region
+# dimensions"）。同批 TELEAGENT / AStudio 也报「目标窗口被遮挡约 100%」，根子
+# 都是窗口选择被置顶小窗劫持。
+# 阈值取 200×120：正常客户端主窗口（各 AI IDE / 游戏启动器）都远超；桌面宠物、
+# 通知气泡、工具窗挡不住。小于阈值的窗口只在「没有更大候选」时才用（见
+# _filter_flow_window_candidates），避免迷你模式应用直接没有候选而卡死。
+MIN_FLOW_WINDOW_WIDTH = 200
+MIN_FLOW_WINDOW_HEIGHT = 120
+
+
+def _is_full_size_flow_window(hwnd: int) -> bool:
+    """是否够格当流程主窗口（过滤桌面宠物 / 通知气泡 / 工具窗）。"""
+    rect = _window_rect(hwnd)
+    if not rect:
+        # 最小化窗口 _window_rect 返回 None，但它可 SW_RESTORE，仍是合格候选
+        return True
+    return rect[2] >= MIN_FLOW_WINDOW_WIDTH and rect[3] >= MIN_FLOW_WINDOW_HEIGHT
+
+
+def _filter_flow_window_candidates(candidates: List[int]) -> List[int]:
+    """优先保留够尺寸的主窗口；全是小窗时原样返回（迷你模式应用仍需可用）。"""
+    full_size = [hwnd for hwnd in candidates if _is_full_size_flow_window(hwnd)]
+    return full_size or list(candidates)
+
+
+def _flow_window_sort_key(
+    hwnd: int,
+    title_keywords: Optional[List[str]],
+    foreground_hwnd: Optional[int],
+    current_hwnd: Optional[int] = None,
+):
+    """流程窗口排序：标题关键词 > 面积 > 前台 > 既有句柄。
+
+    面积必须排在前台之前——置顶的桌面宠物 / 小部件长期占据前台，若「前台优先」
+    它会被稳定选中（2026-11-17 Qoder Desktop Pet 事故）。
+    """
+    return (
+        1 if _matches_window_keywords(hwnd, title_keywords) else 0,
+        _window_area(hwnd),
+        1 if foreground_hwnd is not None and hwnd == foreground_hwnd else 0,
+        1 if current_hwnd is not None and hwnd == current_hwnd else 0,
+    )
+
+
 def _choose_best_window_for_flow(
     pid: int,
     title_keywords: Optional[List[str]] = None,
@@ -733,6 +783,10 @@ def _choose_best_window_for_flow(
     candidates = _visible_windows_by_pid(pid)
     if not candidates:
         return None
+
+    # 先按尺寸筛掉桌面宠物/通知气泡，再做标题关键词过滤：反过来的话，一个
+    # 「标题含关键词的小窗」会把不含关键词的真正主窗口挤出候选（11-17 事故）。
+    candidates = _filter_flow_window_candidates(candidates)
 
     keyword_matched = [hwnd for hwnd in candidates if _matches_window_keywords(hwnd, title_keywords)]
     if keyword_matched:
@@ -744,15 +798,10 @@ def _choose_best_window_for_flow(
     except Exception:
         foreground_hwnd = None
 
-    def sort_key(hwnd: int):
-        return (
-            1 if hwnd == foreground_hwnd else 0,
-            1 if _matches_window_keywords(hwnd, title_keywords) else 0,
-            _window_area(hwnd),
-            1 if hwnd == current_hwnd else 0,
-        )
-
-    return max(candidates, key=sort_key)
+    return max(
+        candidates,
+        key=lambda hwnd: _flow_window_sort_key(hwnd, title_keywords, foreground_hwnd, current_hwnd),
+    )
 
 
 def _refresh_flow_window(
@@ -1303,6 +1352,58 @@ def _post_click_window(hwnd: int, x_local: int, y_local: int) -> bool:
         return False
 
 
+def _click_spot_owner(hwnd: int, sx: int, sy: int) -> int:
+    """屏幕坐标下的窗口根句柄（用于确认点击点没落到别的程序上）。"""
+    try:
+        at = win32gui.WindowFromPoint((int(sx), int(sy)))
+        if not at:
+            return 0
+        try:
+            return win32gui.GetAncestor(at, win32con.GA_ROOT) or at
+        except Exception:
+            return at
+    except Exception:
+        return 0
+
+
+def _same_process_window(hwnd_a: int, hwnd_b: int) -> bool:
+    try:
+        _, pid_a = win32process.GetWindowThreadProcessId(hwnd_a)
+        _, pid_b = win32process.GetWindowThreadProcessId(hwnd_b)
+        return bool(pid_a) and pid_a == pid_b
+    except Exception:
+        return False
+
+
+def _foreground_click_block_reason(hwnd: int, sx: int, sy: int) -> str:
+    """前台点击前的硬闸：目标不在前台、或点击点属于别的窗口 → 拒绝点击。
+
+    2026-11-17 实锤：CrystalDiskMark（07:21 就已打开、置顶全屏）压住薅羊毛
+    窗口，自动化仍按屏幕坐标发点击，鼠标实际点在测速软件上。OCR 侧已有
+    「遮挡 100% 拒绝识别」，但点击路径没有同等护栏；这里补上，宁可让步骤
+    失败并留下明确日志，也绝不把点击送到无关程序。
+
+    目标进程自己的模态弹窗/子窗（前台句柄或坐标归属同 PID）放行，避免把
+    「窗口内弹窗」误判成外来遮挡。
+    """
+    try:
+        fg = win32gui.GetForegroundWindow()
+    except Exception:
+        fg = 0
+    if fg and fg != hwnd and not _same_process_window(fg, hwnd):
+        return (
+            f"目标窗口不在前台（前台 HWND={fg} 标题={_window_title(fg)!r}，"
+            f"目标 HWND={hwnd} 标题={_window_title(hwnd)!r}）"
+        )
+    owner = _click_spot_owner(hwnd, sx, sy)
+    if owner and owner != hwnd and not _same_process_window(owner, hwnd):
+        return (
+            f"点击坐标 ({sx}, {sy}) 属于其他窗口（HWND={owner} "
+            f"标题={_window_title(owner)!r}，目标 HWND={hwnd}）"
+        )
+    return ""
+
+
 def _click_window_local(hwnd: int, x_local: int, y_local: int, clicks: int = 1,
                         interval: float = 0.2, background: bool = False,
                         hold_sec: Optional[float] = None):
@@ -1313,10 +1414,12 @@ def _click_window_local(hwnd: int, x_local: int, y_local: int, clicks: int = 1,
     （其 DOWN/UP 之间已有 20ms 间隔，天然是按住式）。
     hold_sec 交给 `_pyautogui_click_guarded`：None=全局默认按住，
     0=显式瞬时，>0=指定时长。
+
+    返回值：True=已发出点击；False=前台点击被防护闸拦下（没有发任何输入）。
     """
     rect = _window_rect(hwnd)
     if not rect:
-        return
+        return False
     l, t, _, _ = rect
     if background:
         ok_all = True
@@ -1327,11 +1430,24 @@ def _click_window_local(hwnd: int, x_local: int, y_local: int, clicks: int = 1,
             if interval:
                 time.sleep(interval)
         if ok_all:
-            return
+            return True
     _release_modifier_keys()
     _focus_window(hwnd)
     sx, sy = l + int(x_local), t + int(y_local)
+    # 置顶/前台可能被系统前台锁拒绝，给一次短暂重试；仍失败就不发点击。
+    block_reason = _foreground_click_block_reason(hwnd, sx, sy)
+    if block_reason:
+        time.sleep(0.12)
+        _focus_window(hwnd)
+        block_reason = _foreground_click_block_reason(hwnd, sx, sy)
+    if block_reason:
+        _LOGGER.warning(
+            "[点击防护] 拒绝前台点击：%s；目标 HWND=%s，窗口内坐标=(%s, %s)",
+            block_reason, hwnd, x_local, y_local,
+        )
+        return False
     _pyautogui_click_guarded(sx, sy, clicks=clicks, interval=interval, hold_sec=hold_sec)
+    return True
 
 
 def _hover_window_local(hwnd: int, x_local: int, y_local: int, duration: float = 0.2):
@@ -1342,10 +1458,15 @@ def _hover_window_local(hwnd: int, x_local: int, y_local: int, duration: float =
     """
     rect = _window_rect(hwnd)
     if not rect:
-        return
+        return False
     l, t, _, _ = rect
     _focus_window(hwnd)
+    block_reason = _foreground_click_block_reason(hwnd, l + int(x_local), t + int(y_local))
+    if block_reason:
+        _LOGGER.warning("[点击防护] 拒绝前台悬停：%s；目标 HWND=%s", block_reason, hwnd)
+        return False
     pyautogui.moveTo(l + int(x_local), t + int(y_local), duration=duration)
+    return True
 
 
 class FailSafeAborted(Exception):
@@ -1961,6 +2082,8 @@ _BUILTIN_ACTIONS = (
     "genshin_enter_main",
     "qoder_open_campaign",
     "qoder_verify_claim",
+    "codearts_claim_daily",
+    "astudio_claim_daily",
     "wool_dismiss_update",
     "wool_verify_log",
     "script_checklist_sync",
@@ -2105,6 +2228,38 @@ def _dispatch_step_action(
         if not claim_ok:
             return False, f"[{flow_key}] 步骤失败: {name} ({claim_msg})", hwnd, pid
         logger.info(f"[{flow_key}] 步骤{step_no}领取状态确认: {claim_msg}")
+    elif action == "codearts_claim_daily":
+        # 码道Agent Space：点头像 → 悬停「活动福利」→ 从两四边形连接处进浮层
+        # → 点「每日领取」。轨迹要求（用户实锤）见 codearts_claim 模块注释。
+        from .codearts_claim import claim_daily
+
+        claim_ok, claim_msg = claim_daily(
+            logger,
+            hwnd,
+            scales=scales,
+            confidences=confidences,
+            timeout_sec=int(step.get("timeout_sec", 90)),
+            stop_check=stop_check,
+        )
+        if not claim_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({claim_msg})", hwnd, pid
+        logger.info(f"[{flow_key}] 步骤{step_no}CodeArts 每日领取完成: {claim_msg}")
+    elif action == "astudio_claim_daily":
+        # AStudio：等左下角「限时每日福利」卡片 → 点「领取」→ OCR 三态核验
+        # （已领文字或卡片收起才算成功；卡片等不到视为今日已领，幂等出口）。
+        from .astudio_claim import claim_daily
+
+        claim_ok, claim_msg = claim_daily(
+            logger,
+            hwnd,
+            scales=scales,
+            confidences=confidences,
+            timeout_sec=int(step.get("timeout_sec", 90)),
+            stop_check=stop_check,
+        )
+        if not claim_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({claim_msg})", hwnd, pid
+        logger.info(f"[{flow_key}] 步骤{step_no}AStudio 每日福利领取完成: {claim_msg}")
     elif action == "wool_dismiss_update":
         # MiniMax：关掉「更新已来」公告弹窗。
         # 2026-11-02 实锤：公告只在**更新后第一次启动**弹（用户 17:05 重开后就没再弹，
@@ -3069,12 +3224,18 @@ def run_flow(
                             )
                         except (TypeError, ValueError):
                             dismiss_hold = None
-                        _click_window_local(hwnd, center[0], center[1], clicks=1,
-                                            background=False, hold_sec=dismiss_hold)
-                        logger.info(
-                            f"[{flow_key}] 步骤{step_no}「{name}」已点击弹窗 "
-                            f"({center[0]}, {center[1]}) [方式: ocr_dismiss]，继续等待"
-                        )
+                        clicked = _click_window_local(hwnd, center[0], center[1], clicks=1,
+                                                      background=False, hold_sec=dismiss_hold)
+                        if clicked is False:
+                            logger.warning(
+                                f"[{flow_key}] 步骤{step_no}「{name}」弹窗点击被防护闸拦下，"
+                                "本轮不发输入，继续等待目标"
+                            )
+                        else:
+                            logger.info(
+                                f"[{flow_key}] 步骤{step_no}「{name}」已点击弹窗 "
+                                f"({center[0]}, {center[1]}) [方式: ocr_dismiss]，继续等待"
+                            )
                         center = None
                         match_method = None
                         time.sleep(1.5)  # 等弹窗关闭动画，避免下一轮 OCR 还扫到残影重复点
@@ -3144,9 +3305,16 @@ def run_flow(
                     # 悬停型入口：只移动鼠标不点击（浮层菜单/预览卡片）
                     if search_scope == "screen":
                         pyautogui.moveTo(center[0], center[1], duration=0.2)
+                        hovered = True
                     else:
-                        _hover_window_local(hwnd, center[0], center[1])
-                    logger.info(f"[{flow_key}] 已悬停: ({center[0]}, {center[1]}) [方式: {match_method}]")
+                        hovered = _hover_window_local(hwnd, center[0], center[1])
+                    if hovered is False:
+                        logger.warning(
+                            f"[{flow_key}] 步骤{step_no}「{name}」悬停被防护闸拦下，"
+                            "目标窗口不在前台，未移动鼠标"
+                        )
+                    else:
+                        logger.info(f"[{flow_key}] 已悬停: ({center[0]}, {center[1]}) [方式: {match_method}]")
                 elif no_click:
                     logger.info(f"[{flow_key}] 仅确认不点击: {name}")
                 else:
@@ -3162,8 +3330,13 @@ def run_flow(
                         _pyautogui_click_guarded(center[0], center[1], clicks=clicks,
                                                  hold_sec=effective_hold)
                     else:
-                        _click_window_local(hwnd, center[0], center[1], clicks=clicks,
-                                            background=use_background, hold_sec=effective_hold)
+                        clicked = _click_window_local(hwnd, center[0], center[1], clicks=clicks,
+                                                      background=use_background, hold_sec=effective_hold)
+                        if clicked is False:
+                            return False, (
+                                f"[{flow_key}] 步骤失败: {name}"
+                                "（目标窗口不在前台或点击坐标被其他窗口占用，已拒绝点击）"
+                            )
                     if use_background:
                         hold_tag = ""
                     else:

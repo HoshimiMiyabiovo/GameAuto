@@ -41,6 +41,10 @@ REGISTRY = {
     # 以下不是页面判定：登记是为了让「新增函数必须声明」的守卫能区分动作函数
     ("baijing_task_handlers.py", "_do_friend_medal_on_page"): "动作函数（非页面判定）",
     ("qoder_claim.py", "_ensure_visible"): "动作函数（聚焦/置前，非页面判定）",
+    ("codearts_claim.py", "_ensure_visible"): "动作函数（聚焦/置前，非页面判定）",
+    ("astudio_claim.py", "_ensure_visible"): "动作函数（聚焦/置前，非页面判定）",
+    # 2026-11-16 码道Agent Space：面板权益状态判定（非页面判定）
+    ("codearts_claim.py", "pending_subtitle_visible"): "面板「活动福利」行的「待领取」副标题 OCR 子串（权益状态专属词，主界面无此词）",
     ("hsr_resin_craft.py", "detail_visible"): "双证据：商品名 + 「获得途径/消耗品」",
     ("hsr_resin_craft.py", "synth_visible"): "合成页专属词「本月还可合成 / 所需材料」",
     # 2026-11-07 白荆「拟合回归」每周活动：8 张实机截图矩阵见

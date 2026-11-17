@@ -110,3 +110,7 @@ storage/cache/
 # 清理，这里再兜一层防误提交）
 /tmp*/
 /pytest-of-*/
+
+# Trae 分享会话抓取产物（含聊天正文，按 2026-11-17 changelog 约定落 data/ 不入库）
+/data/trae_capture/
+/tools/trae_capture/share_links.txt

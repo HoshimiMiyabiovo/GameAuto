@@ -78,6 +78,14 @@
 - **已迁移**：`flow_configs(.example).json` 的 MINIMAX / WORKBUDDY 流程级 `ocr_match_mode: "smart"`；MiniMax 步骤4 锚点几何 + 标注图，WorkBuddy 步骤2/6/7（导航与「今日已领取」验证）开标注图。其他流程保持 legacy，验证稳定后再逐步迁移。
 - **范围限制**：anchor/near 只作用于步骤的首次匹配（click_template / wait_template）；`confirm_type=disappear/text_change` 仍走旧的全量确认逻辑，目前迁移的两个流程都用 `confirm_type=none`，不冲突。
 - 回归：`tests/suite_ocr_structured_match_20261031.py`（legacy 撞词复现 / smart 前缀优先 / 锚点方向距离 / required / exact/prefix/substring/reverse / 排除词 / 歧义与 fail / 标注图与节流 / runner 透传 / 两份配置迁移）；旧 `tests/suite_minimax_ocr_exclude_20261031.py` 已改为 patch `_ocr_scan`。
+### 流程窗口选择：置顶小窗劫持 (2026-11-17)
+
+- **现象**：薅羊毛 QODER 步骤 1「打开权益中心」连败两轮，失败截图分别拍到 CrystalDiskMark / 桌面 / 黑屏（用户问「这是点到哪里去了」）。实锤是日志里的搜索区域 `region=(1768, 928, 51, 79)`——选中拿来识别的是 **Qoder Desktop Pet**（右下角 51×79 的置顶宠物窗），不是 Qoder 主窗口；在 51×79 区域里找 `qoder-权益中心.png`，模板图比整个区域还大，报 `needle dimension(s) exceed the haystack image or region dimensions`，重试 16 次全败。这三个步骤**都没有产生有效点击**（等待型步骤不点；点击型步骤在 `_ensure_visible` 就放弃）。同批 TELEAGENT/AStudio 报「目标窗口被遮挡约 100%」、TRAE 被 `'Agent [管理员]'` 遮挡，都是窗口选择/前台归属的同族问题。
+- **根因**：`foreground_flow_runner._choose_best_window_for_flow` 旧排序 `(是否前台, 标题关键词, 面积, 当前句柄)` 把「前台」放第一位。置顶宠物窗 / 通知气泡 / 小部件长期占据前台，于是稳定胜出，面积只在第三顺位救不回来。`_find_window_by_filters`（跨进程按进程名/标题找窗口）同款排序同病。
+- **修法**：统一 `_flow_window_sort_key` = `(标题关键词, 面积, 前台, 当前句柄)`；并在**关键词过滤之前**先过 `_filter_flow_window_candidates` 尺寸门槛（`MIN_FLOW_WINDOW_WIDTH/HEIGHT` = 200×120，小于阈值视为宠物/气泡/工具窗；全是小窗时原样回退，迷你模式应用不会没窗口可用）。**顺序关键**：反过来先按关键词过滤的话，「标题含关键词的宠物窗」会把不含关键词的真正主窗挤出候选，门槛白设。
+- **排查手法**：`flow_failures.window_title` + 失败日志里的 `region=(left, top, width, height)` 能直接看出选中的是不是主窗口——客户端主窗口至少几百像素，出现个两位数宽高必是宠物/气泡/工具窗。
+- 回归：`tests/suite_flow_window_pick_20261117.py`（尺寸门槛纯函数 / 事故复现 / 先尺寸后关键词 / 双大窗取面积 / 只有小窗回退 / 关键词优先 / 句柄稳定性 / `_find_window_by_filters` 同源）。
+
 ### 流程结束关闭进程 (重要)
 
 - `runtime/foreground_flow_runner.py` 的 `close_flow_processes(logger, flow_key, pid, process_names)` 是统一收口：先按 PID 杀**整棵进程树**（`ProcessSupervisor.safe_kill_process`），再按 `window_process_names` **按名兜底**清残留。

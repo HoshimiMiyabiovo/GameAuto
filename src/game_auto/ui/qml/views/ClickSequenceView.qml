@@ -171,6 +171,7 @@ Item {
     ScrollView {
         anchors.fill: parent
         clip: true
+        contentWidth: availableWidth
 
         RowLayout {
             width: parent.width

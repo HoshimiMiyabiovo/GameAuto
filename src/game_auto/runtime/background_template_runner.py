@@ -23,7 +23,7 @@ def run_cj_background(
 
 
 # 薅羊毛集合：依次执行的子流程 key（flow_configs.json），新增羊毛任务在此追加
-WOOL_FLOW_KEYS: List[str] = ["MINIMAX", "WORKBUDDY", "TRAE", "QODER", "TELEAGENT"]
+WOOL_FLOW_KEYS: List[str] = ["MINIMAX", "WORKBUDDY", "TRAE", "QODER", "TELEAGENT", "CODEARTS", "ASTUDIO", "DUMATE"]
 
 
 def _close_wool_flow(logger: logging.Logger, flow_key: str, cfg, ok: bool) -> bool:

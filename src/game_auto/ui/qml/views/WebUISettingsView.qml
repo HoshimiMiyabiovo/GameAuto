@@ -30,6 +30,7 @@ Item {
     ScrollView{
         anchors.fill: parent
         clip: true
+        contentWidth: availableWidth
         ColumnLayout{
             width: parent.width
             spacing: 14

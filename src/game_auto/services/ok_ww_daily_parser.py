@@ -7,6 +7,12 @@ ok-ww 执行时会在日志目录下生成形如 `ok-script.log`（当前）或
     YYYY-MM-DD HH:MM:SS,mmm INFO TaskExecutor DailyTask:Task completed
     YYYY-MM-DD HH:MM:SS,mmm INFO TaskExecutor TaskExecutor:Successfully Executed Task, Exiting Game and App!
 
+内置 okww（module_mode v3.8.3）的日志没有逐子任务 `Task completed`，
+只有任务切换行和最终的 `DailyTask:Daily Task Completed`，因此这里：
+  * 完成标记同时认 `Task completed` / `Daily Task Completed`；
+  * 切换到下一子任务时，视为上一子任务已完成；
+  * 只有出现整体成功标记，才把本轮仍 pending 的子任务补齐为 success。
+
 只要日志中出现 `Successfully Executed Task, Exiting Game and App!` 就算整体成功。
 """
 
@@ -25,7 +31,13 @@ RESET_HOUR = 4
 _APP_CONFIG_PATH = Path(__file__).resolve().parents[3] / "app_config.json"
 
 SUCCESS_MARKER = "Successfully Executed Task, Exiting Game and App!"
-TASK_COMPLETED_MARKER = "DailyTask:Task completed"
+# 外置壳：DailyTask:Task completed；内置 okww（module_mode v3.8.3）：
+# DailyTask:Daily Task Completed。两种都认，否则模块模式日志里所有子任务
+# 永远停在 pending、progress_percent=0（2026-11-17 实锤）。
+TASK_COMPLETED_MARKERS = (
+    "DailyTask:Task completed",
+    "DailyTask:Daily Task Completed",
+)
 RUN_START_MARKER = "DailyTask:open_daily"
 
 # 子任务名 → 中文显示名（键名同时也是日志中的关键词）
@@ -132,7 +144,9 @@ def parse_ok_ww_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
 
     # 检查整体成功标志
     overall_success = any(SUCCESS_MARKER in line for line in run_lines)
-    task_completed = any(TASK_COMPLETED_MARKER in line for line in run_lines)
+    task_completed = any(
+        marker in line for line in run_lines for marker in TASK_COMPLETED_MARKERS
+    )
 
     # 提取子任务和它们的状态
     subtasks: List[Dict[str, str]] = []
@@ -172,6 +186,10 @@ def parse_ok_ww_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
         if "DailyTask:" in body and "already completed" not in body and "can not" not in body:
             for keyword in SUBTASK_NAMES:
                 if keyword in body:
+                    # 内置 okww（module_mode）不再逐子任务打 "Task completed"，
+                    # 只在中途切换 current task；能切到下一项说明上一项已跑完。
+                    if current_task and keyword != current_task:
+                        _mark_subtask_done_if_pending(subtasks, current_task)
                     current_task = keyword
                     if keyword not in seen_tasks:
                         seen_tasks.add(keyword)
@@ -183,14 +201,22 @@ def parse_ok_ww_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
                         })
                     break
 
-        # 任务完成行 → 当前子任务成功
-        if TASK_COMPLETED_MARKER in line and current_task:
-            _mark_subtask(subtasks, current_task, "success", "任务完成")
+        # 任务完成行 → 当前子任务成功（兼容外置壳与内置 runner 两种标记）
+        if any(marker in line for marker in TASK_COMPLETED_MARKERS) and current_task:
+            _mark_subtask_done_if_pending(subtasks, current_task)
 
         # 检测 ERROR 行 → 标记当前子任务为 failed
         if " ERROR " in line and "DailyTask:" in body:
             if current_task:
                 _mark_subtask(subtasks, current_task, "failed", body.split("DailyTask:")[-1].strip())
+
+    # 整体成功标志是最终裁决：内置 runner 的日志可能没有逐子任务完成行，
+    # 只要末尾 Successfully Executed Task，本轮已开始的子任务都算完成。
+    if overall_success:
+        for st in subtasks:
+            if st["status"] == "pending":
+                st["status"] = "success"
+                st["message"] = "任务完成"
 
     # 如果没有提取到任何子任务，但有成功标志，添加一个汇总任务
     if not subtasks and overall_success:
@@ -226,6 +252,17 @@ def parse_ok_ww_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
         "errors": errors,
         "report_time": report_time,
     }
+
+
+def _mark_subtask_done_if_pending(subtasks: List[Dict[str, str]],
+                                  task_keyword: str) -> None:
+    """把仍在 pending 的子任务标 success；已 failed/already 的不覆盖。"""
+    for st in subtasks:
+        if task_keyword in st["task_key"]:
+            if st["status"] == "pending":
+                st["status"] = "success"
+                st["message"] = "任务完成"
+            return
 
 
 def _mark_subtask(subtasks: List[Dict[str, str]], task_keyword: str,

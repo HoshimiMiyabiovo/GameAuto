@@ -329,6 +329,11 @@ This file mirrors important repository-level development notes inside the projec
   运行时固定 `data/okww/src`（v3.7.17），`configs` 用 junction 指向现有安装；
   旧链路保留，改回 false 即回滚。输入节流和验收口径见
   `docs/鸣潮自动战斗脚本编写流程.md` 第 13 节。
+  **退出回收（2026-11-17 补，11-16 深夜漏杀实锤）**：runner 常驻等待重连、
+  控制端退出不自杀——GUI 退出钩子原来只置停止标志，空闲 runner 会以无窗口
+  后台 python 形态一直挂着。现 `AutomationController.shutdown_module_runtime()`
+  （停当前会话 + 扫杀孤儿）由 `gui._cleanup_on_quit` 显式调用；回归
+  `tests/suite_module_runtime_shutdown_20261117.py`。
 - **收尾必须清理官方启动器（2026-11-15 事故固化）**：官方启动器 launcher.exe
   （主进程 launcher_main.exe，装**独立目录**）在鸣潮任务收尾后残留，会自我
   激活拉到前台遮挡下一个游戏——09:27 鸣潮收尾杀漏 → 09:35:20 暖暖启动时
@@ -896,6 +901,22 @@ This file mirrors important repository-level development notes inside the projec
   `ref_baijing_joint_ocr_20261115.json`；回归 `tests/suite_baijing_joint_training_20261115.py`。
   **phase 2 待实机取证**：点「+」槽位后的选队页面（队长不可重复约束怎么落）、
   结算/领取界面形态、`weekly_flow` 门控写入。
+  **2026-11-16 实机 6 连败与加固**：入口层首跑 22:38-23:21 六次「点击入口后
+  未见防区页」——失败帧全是 hub 页（「联合训练场」标签原地不动），标签点
+  (1220,616) 与目测图标点 (1047,605) 都没导航（同页拟合回归的标签点击每周
+  成功，坐标系 `_ocr_scan` 明确屏幕绝对、echo 同链路实机成功——排除坐标系；
+  弧形节点热区未探明）。修复：①裁六边形图标模板
+  `assets/templates/白荆回廊-联合训练场入口.png`（(1042,580)-(1150,690)，避开
+  会消失的道具角标），定位链改 **模板 → OCR 标签 → 静态比例**（网格重测图标
+  中心 ≈(1070,630)），**模板+OCR 双未命中才 skip**，比例点只在入口确认存在后
+  作第三点击（禁盲点不变）；②轮询间隔 1.0→0.8s 且**去掉点击后 2.5s 盲睡**，
+  `_wait_zone_page` 返回轮询期间全部不同画面的签名摘要写进失败 detail（点击
+  后短命页面/被弹回也能留证据）；③逐点击验证改 3 点循环（每点验证后再试
+  下一点）。回归同套件 [4][6][7][8] 同步。
+  **2026-11-15 17:07 E 节点战败（配队重置后仍败）**：取证帧为回图后地图
+  （A~D 绿勾、E 无勾）——结构化记录明确「节点 E 战败（任务失败），未收录」；
+  战败页双词判定按 11-14 口径正常工作，未写已清标记（下次自动重打）。E 仍需
+  人工看编队/刻印（自动化只负责开打与如实回报）。
 - **有猫兑换每月购买**（`runtime/baijing_cat_exchange.py`，2026-10-25 用户新增需求）：
   「有猫零售 → 有猫兑换」页每月刷新，可以每月买点小东西；清单做成配置
   `app_config.json → baijing.cat_exchange.items`（2026-10-25 时待定；**2026-11-01 用户

@@ -223,6 +223,15 @@ def _launch_qml_ui(dep_report=None) -> None:
                 ui_logger.info("[退出] 后台任务已收尾")
         except Exception as exc:
             ui_logger.debug("[退出] 等待后台任务收尾失败: %s", exc)
+        # 显式回收 ok-ww 常驻 module runner（2026-11-16 退出漏杀实锤）：runner
+        # 设计为常驻等待重连，只置停止标志的话它会以无窗口后台 python 的形态
+        # 一直挂着；被中断会话的启动器同理。此处连孤儿一起扫杀。
+        try:
+            if bridge._controller is not None:
+                bridge._controller.shutdown_module_runtime()
+                ui_logger.info("[退出] 已回收 ok-ww 常驻 runner")
+        except Exception as exc:
+            ui_logger.warning("[退出] 回收 ok-ww 常驻 runner 异常: %s", exc)
         try:
             # 移除日志 handler 防止 Qt 对象被回收后回调崩溃
             game_logger.removeHandler(ui_log_handler)
