@@ -224,7 +224,7 @@ def test_tool_patch_summary():
 def test_convert_session():
     print("[4] convert_session add() 同构字段")
     kf = load_fetch()
-    ws_entry = {"title": "某排版咨询会话", "chatIds": ["ses_abc"]}
+    ws_entry = {"title": "示例会话", "chatIds": ["ses_abc"]}
     msgs = [
         {"info": {"role": "user", "time": {"created": 1794916232525},
                   "path": {"cwd": "E:\\GithubProject\\game_auto"}},
@@ -236,7 +236,7 @@ def test_convert_session():
     ]
     s = kf.convert_session(ws_entry, msgs)
     check("id 前缀 kilo: + chat id", s["id"] == "kilo:ses_abc", s["id"])
-    check("src=Kilo / 标题来自 work-sessions", s["src"] == "Kilo" and s["title"] == "某排版咨询会话")
+    check("src=Kilo / 标题来自 work-sessions", s["src"] == "Kilo" and s["title"] == "示例会话")
     check("ws 从 path.cwd 提取", s["ws"] == "game_auto", s["ws"])
     check("sk 取末条记录时间（记录带 created，不含 completed）", s["sk"] == 1794916240, s["sk"])
     check("n=3 条记录 / chars=各记录 x 长度和", s["n"] == 3 and s["chars"] > 0, (s["n"], s["chars"]))

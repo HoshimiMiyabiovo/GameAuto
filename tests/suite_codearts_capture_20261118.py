@@ -55,7 +55,7 @@ def make_db(path):
     msgs = [
         ("msg_u", 1794927099000,
          {"role": "user", "time": {"created": 1794927099000}},
-         [{"type": "text", "text": "某健康咨询示例"}]),
+         [{"type": "text", "text": "示例问题"}]),
         ("msg_a", 1794927100000,
          {"role": "assistant", "modelID": "deepseek-v4.1-flash-1017",
           "providerID": "huaweicloud", "time": {"created": 1794927100000}},

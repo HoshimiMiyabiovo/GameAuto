@@ -156,4 +156,14 @@ shutil 即可）；AI 对话史串链（`services/ai_history_refresh.py`）依�
 - 新增游戏：在 `games/` 加一个 `GameProfile` 模块并 `register()`，不要再手改
   `settings/defaults.py`、`game_update_calendar.py`、`task_batch_runner.py` 的映射表。
 
+## 隐私脱敏（2026-11-18 起，用户拍板；仓库为 public）
+
+changelog / conventions 分篇 / 套件夹具里**不写 AI 对话的标题原文、正文片段、
+检索验证用的 query 原文**——尤其健康/私人类查询。写 AI 对话史相关改动时用
+「某来源会话（N 条 / M 字）」这类规模表述；举例需要文本时用编造的中性文案
+（如「示例问题」），不用真实对话内容。检索验证截图/日志同样不外引。
+套件夹具（make_db / convert_session 测试数据）也用编造文案，不镜像真实会话。
+RAG/总库数据本体在 gitignored 区不受此约束（本机私有），约束的是**会推送到
+public 仓库的文本**。
+
 > AI生成
