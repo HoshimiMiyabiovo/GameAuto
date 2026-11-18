@@ -2,11 +2,13 @@
 """AI 对话史「模型名」还原：从各客户端原始日志恢复被导出/建库丢掉的 model 字段。
 
 背景：外部 ``F:\\data\\_ai_organize_tools\\build.py`` 生成 ``AI对话汇总/data.json`` 时，
-每条消息只保留 ``r/t/k/x``，模型名最多以会话级 ``note="模型：xxx"`` 出现（52/526 会话）；
-``tools/ai_history_rag.py build`` 连 note 都没复制，所以 RAG 库 103 会话里查不到模型。
+每条消息只保留 ``r/t/k/x``，模型名最多以会话级 note 出现（「模型：xxx」或
+fetch 侧「· 模型 xxx」无冒号格式，两种都认）；``tools/ai_history_rag.py build``
+连 note 都没复制，所以 RAG 库 103 会话里查不到模型。
 但原始日志/SQLite 里其实逐条带模型：ZCode 的 message.data / model_usage、
 WorkBuddy 的 providerData.model、Qoder/Claude Code/MiniMax 的 message.model、
-OpenCode 的 session_message.data.model、Copilot 的 requests[].modelId 等。
+OpenCode 的 session_message.data.model、Copilot 的 requests[].modelId、
+TeleAgent/码道内核三表的 message.modelID（opencode 变体，同 Kilo）等。
 
 数据流（本工具全程只读原始文件，不改上游、不改 RAG 库）：
   上游 data.json（会话清单 + note，作为对齐基准）
@@ -78,6 +80,10 @@ CATPAW_ROOT = Path(os.environ.get("APPDATA", os.path.expanduser("~"))) / "catpaw
 CATPAW_LOG_ROOT = Path(os.path.expanduser("~")) / ".meituan-catpaw"
 TRAE_JSON = PROJECT_ROOT / "data" / "trae_capture" / "export" / "trae.json"
 KILO_RAW = PROJECT_ROOT / "data" / "kilo_capture" / "raw"
+# opencode 变体三表来源的抓取 raw（teleagent/codearts_fetch 导出，Kilo 是内核
+# HTTP API 的另一形状，走 recover_kilo 自己的 raw 格式）。raw/<ses_id>/messages.json
+TELEAGENT_RAW = PROJECT_ROOT / "data" / "teleagent_capture" / "raw"
+CODEARTS_RAW = PROJECT_ROOT / "data" / "codearts_capture" / "raw"
 # 来源固定模型（2026-11-17 用户拍板）：Trae 分享接口不带模型字段、本地正文加密，
 # 但用户明确该来源跑的就是 deepseek-v4.1-flash——整源记账。只适用于**没有**
 # 模型字段的来源；有字段的（如 Kilo 的逐条 modelID）一律用真实字段。
@@ -818,6 +824,59 @@ def recover_kilo() -> Dict[str, dict]:
     return out
 
 
+def _recover_opencode_raw(raw_root: Path, prefix: str, source: str) -> Dict[str, dict]:
+    """opencode 变体三表来源（TeleAgent/码道）共用的 raw 恢复器：
+    raw/<ses_id>/messages.json = {session, messages:[{msg:{role, modelID, time:{created}}, ts_ms, parts}]}。
+
+    assistant 逐条 modelID 按原值记录（口径铁律 3：有真实字段不臆测映射、不进
+    MODEL_ALIASES，同 Kilo 的 particle-ai/particle-1:free）；ts 用 msg.time.created
+    （epoch 毫秒，turn_models 口径，缺了退 ts_ms）。raw 被清理时靠 load_existing 记忆沿用。
+    """
+    out: Dict[str, dict] = {}
+    if not raw_root.exists():
+        return out
+    for ses_dir in sorted(raw_root.iterdir()):
+        fp = ses_dir / "messages.json"
+        if not fp.is_file():
+            continue
+        try:
+            with fp.open(encoding="utf-8") as f:
+                dump = json.load(f)
+        except (ValueError, OSError):
+            continue
+        msgs = dump.get("messages") or [] if isinstance(dump, dict) else (dump or [])
+        turns: List[Tuple[str, str]] = []
+        for m in msgs:
+            if not isinstance(m, dict):
+                continue
+            msg = m.get("msg") if isinstance(m.get("msg"), dict) else m
+            if msg.get("role") != "assistant":
+                continue
+            ts = (msg.get("time") or {}).get("created") or m.get("ts_ms") or 0
+            turns.append((str(ts or 0), _clean_model(msg)))
+        if turns:
+            _put(out, prefix + ":" + ses_dir.name,
+                 _rec("per_message", source, turns, len(msgs)))
+    return out
+
+
+def recover_teleagent() -> Dict[str, dict]:
+    """TeleAgent：内核 SQLite 抓取 raw 的逐条 modelID（data/teleagent_capture/raw/）。
+
+    本机实测全部 assistant modelID=`chat-flash`（TeleAgent 内部路由名，单一模型）。
+    有真实字段按原值记录——不进 MODEL_ALIASES（2026-11-17 用户纠正，同 Kilo）。
+    """
+    return _recover_opencode_raw(TELEAGENT_RAW, "teleagent", "teleagent:message.modelID")
+
+
+def recover_codearts() -> Dict[str, dict]:
+    """码道：同 TeleAgent 形态，raw=data/codearts_capture/raw/。
+
+    本机实测 assistant modelID=`deepseek-v4.1-flash-1017`（真实模型名，按原值记录）。
+    """
+    return _recover_opencode_raw(CODEARTS_RAW, "codearts", "codearts:message.modelID")
+
+
 def recover_trae() -> Dict[str, dict]:
     """Trae：分享接口不带模型字段、本地正文加密，无逐条证据可恢复——
     按 TRAE_FIXED_MODEL（用户拍板 2026-11-17）整源记会话级模型。
@@ -864,6 +923,8 @@ RECOVERERS = (
     ("DeepSeek", recover_deepseek),
     ("妙手", recover_catpaw),
     ("Kilo", recover_kilo),
+    ("TeleAgent", recover_teleagent),
+    ("码道", recover_codearts),
     ("Trae", recover_trae),
 )
 
@@ -877,7 +938,12 @@ def load_upstream() -> List[dict]:
 
 
 def note_model(note: str) -> str:
-    m = re.search(r"模型[：:]\s*([^\s｜|]+)", str(note or ""))
+    s = str(note or "")
+    m = re.search(r"模型[：:]\s*([^\s｜|]+)", s)
+    if not m:
+        # 无冒号形态（fetch 侧「· 模型 xxx」，Kilo/TeleAgent/码道 note 用）：
+        # token 必须以 ASCII 开头，避免把「模型字段/模型名」这类散文词误当模型
+        m = re.search(r"模型\s+([A-Za-z0-9][^\s｜|]*)", s)
     return m.group(1) if m else ""
 
 
