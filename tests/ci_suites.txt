@@ -83,6 +83,7 @@ suite_nte_launch_heartbeat_20261105.py
 suite_nte_monthly_20261101.py
 suite_nte_reward_popup_20261105.py
 suite_ocr_structured_match_20261031.py
+suite_ocr_warmup_log_20261118.py
 suite_okww_module_20261104.py
 suite_codearts_capture_20261118.py
 suite_codearts_wool_20261116.py

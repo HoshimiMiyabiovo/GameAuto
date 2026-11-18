@@ -201,6 +201,9 @@ try:
     _precision_engine = None
     _precision_engine_resolved = False
     _tesseract_error_logged = False  # 避免重复记录Tesseract错误
+    # 预热线程与步骤线程可能同时走到这里（薅羊毛批次入口会后台预热）：
+    # 必须加锁，否则会并发构建两套 CUDA session（显存翻倍 + 初始化互相踩）。
+    _onnxocr_build_lock = threading.Lock()
 
     def _get_onnxocr_engine(logger: logging.Logger = None):
         """唯一 OCR 引擎：onnxocr PP-OCRv6（CUDA）。模型缺失/初始化失败返回 None。
@@ -212,20 +215,25 @@ try:
         global _onnxocr_engine
         if _onnxocr_engine is not None:
             return _onnxocr_engine
-        lg = logger or logging.getLogger("GameAutomation")
-        try:
-            from .onnxocr_precision import build_onnxocr_engine
+        with _onnxocr_build_lock:
+            # 预热线程可能刚构建完，拿到锁后必须再检查一次
+            if _onnxocr_engine is not None:
+                return _onnxocr_engine
+            lg = logger or logging.getLogger("GameAutomation")
+            lg.info("[OCR] 首次加载 onnxocr v6 引擎（冷加载可能数秒，异常时会更久）...")
+            try:
+                from .onnxocr_precision import build_onnxocr_engine
 
-            eng = build_onnxocr_engine("v6", logger=lg)
-            if eng is None:
-                lg.warning("[OCR] onnxocr v6 引擎不可用（模型缺失或初始化失败），OCR 将返回空结果")
+                eng = build_onnxocr_engine("v6", logger=lg)
+                if eng is None:
+                    lg.warning("[OCR] onnxocr v6 引擎不可用（模型缺失或初始化失败），OCR 将返回空结果")
+                    return None
+                _onnxocr_engine = eng
+                lg.info(f"[OCR] 引擎已加载: onnxocr v6，EP={eng.providers()}")
+                return _onnxocr_engine
+            except Exception as exc:
+                lg.warning(f"[OCR] onnxocr v6 引擎初始化失败: {exc}")
                 return None
-            _onnxocr_engine = eng
-            lg.info(f"[OCR] 引擎已加载: onnxocr v6，EP={eng.providers()}")
-            return _onnxocr_engine
-        except Exception as exc:
-            lg.warning(f"[OCR] onnxocr v6 引擎初始化失败: {exc}")
-            return None
 
     def _release_onnxocr_engine(logger: logging.Logger = None) -> bool:
         """卸载 v6 引擎，尽量归还显存（与 ok-ww/ok-ef 的 GPU 进程错峰）。
@@ -270,6 +278,28 @@ except ImportError:
         return False
 
     _tesseract_error_logged = False
+
+
+def warmup_onnxocr_engine(logger: logging.Logger = None) -> bool:
+    """后台预热 OCR 引擎：把首次冷加载从「首个流程步骤」前移到批次启动阶段。
+
+    2026-11-18 实锤：薅羊毛第一步首次 OCR 撞上冷加载，22:30:47 → 22:52:53 卡了
+    22 分钟（历史同机 3-6s），用户看到的现象是「应用启动成功但脚本没反应」。
+    预热放在后台 daemon 线程，异常只记 debug，绝不阻塞或中断流程。
+    """
+    lg = logger or _LOGGER
+    getter = globals().get("_get_onnxocr_engine")
+    if not callable(getter):
+        lg.debug("[OCR] 预热跳过：onnxocr/onnxruntime 不可用")
+        return False
+    try:
+        eng = getter(lg)
+    except Exception as exc:
+        lg.debug("[OCR] 预热异常: %s", exc)
+        return False
+    lg.info("[OCR] 预热完成: %s", "可用" if eng else "不可用（模型缺失/初始化失败）")
+    return eng is not None
+
 
 LOCAL_TESSERACT_EXE = str(TESSERACT_EXE)
 PROJECT_OCR_DEBUG_DIR = str(OCR_DEBUG_DIR)

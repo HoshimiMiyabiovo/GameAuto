@@ -14,6 +14,7 @@
 | [06-robustness.md](docs/conventions/06-robustness.md) | 长等待可中断、OCR 铁律、fail-safe、finally 收尾、失败诊断 | 改执行链路 |
 | [07-operations.md](docs/conventions/07-operations.md) | 定时任务补跑、更新日历、薅羊毛、月度合成/周常 | 改调度与后台任务 |
 | [08-game-config.md](docs/conventions/08-game-config.md) | 第三方脚本刷本配置、flow_configs 本地/示例拆分 | 改刷本配置 |
+| [09-ai-history.md](docs/conventions/09-ai-history.md) | AI 对话史工具链：来源清单、串链顺序、口径铁律、环境坑 | 改对话抓取/总库/RAG/模型链 |
 
 ## 游戏档案（插件式）
 

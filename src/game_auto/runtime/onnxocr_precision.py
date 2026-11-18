@@ -65,12 +65,27 @@ def build_onnxocr_engine(
 
     from .ocr_click_tester import _ensure_nvidia_cuda_dlls  # 延迟导入：避免工厂循环依赖
 
+    # 2026-11-18 实锤：首次 OCR 冷加载曾卡 22 分钟（22:30:47 进步骤 → 22:52:53 才
+    # 创建 ONNX session），历史同机只要 3-6s。当时没有阶段日志，无法区分是 DLL 搜索
+    # 路径注册、onnxruntime 导入还是 session 构建慢；这里按阶段打点，下次直接定位。
+    t0 = time.perf_counter()
+    t = t0
     _ensure_nvidia_cuda_dlls(force=True)
+    lg.info("[OCR] CUDA DLL 搜索路径注册完成: %.2fs", time.perf_counter() - t)
+
+    t = time.perf_counter()
     from onnxocr.onnx_paddleocr import ONNXPaddleOcr
+    lg.info("[OCR] onnxocr/onnxruntime 首次导入完成: %.2fs", time.perf_counter() - t)
 
     # ocr_model_name 触发 fork 的 v6 调参：det 960/max、box_thresh 0.45、
     # rec 3,48,320、v6 专用字典；模型路径由 vendored 模型根（data/models/onnx_ocr）解析。
+    t = time.perf_counter()
     ocr = ONNXPaddleOcr(use_gpu=True, ocr_model_name="ppocrv6", use_angle_cls=False)
+    lg.info("[OCR] ONNX session 构建完成: %.2fs", time.perf_counter() - t)
+
     eng = OnnxOcrEngine(ocr, backend=f"onnxocr_{model_set}")
-    lg.info(f"[OCR] onnxocr {model_set} 高精度引擎已加载，EP={eng.providers()}")
+    lg.info(
+        f"[OCR] onnxocr {model_set} 高精度引擎已加载，EP={eng.providers()}"
+        f"（总耗时 {time.perf_counter() - t0:.2f}s）"
+    )
     return eng

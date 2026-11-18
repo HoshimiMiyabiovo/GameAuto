@@ -130,6 +130,23 @@ Kilo / Qoder / WorkBuddy / 星辰等）与人工操作：
   已在 changelog 里宣告收尾的会话遗留物可清。
 - 有保留价值的产物进正式目录：截图/工件 `data/artifacts/`，抓取数据
   `data/<name>_capture/`，脚本入 `tools/`，套件入 `tests/`——**不放根目录**。
+- **套件/脚本自建临时目录必须显式 `dir=` 钉到 `data/cache/`**（gitignored）：
+  本机 Git Bash 的 `TEMP=/tmp` 不存在，绕过 pytest 直跑 python/套件时
+  tempfile 一路回退 **cwd（仓库根）**——11-16 conftest 修过 pytest 侧，
+  2026-11-18 又在 version_check/teleagent/codearts 四个直跑套件复发
+  （根目录 ga_git_ver_×15 + tmp×9）。sqlite 的 `order by` 排序临时文件
+  同理报 unable to open，连接上 `PRAGMA temp_store = MEMORY`。
+
+## F 盘写入拦截（2026-11-18 提权探针实锤）
+
+**非管理员进程一律禁写 F 盘**（任何路径）：python 直写、`cmd /c copy`、
+PowerShell `Copy-Item` 全部拒绝访问，`robocopy` 挂死，msys `cp.exe` 从
+python 派生直接 NtCreateFile 崩——按进程镜像/谱系拦截，与内容无关。
+**管理员 python 直写可用**（GUI 经 `start_gui_admin.bat` 自提权，直接
+shutil 即可）；AI 对话史串链（`services/ai_history_refresh.py`）依赖此规则。
+写 F: 的非 GUI 脚本走「暂存到工作区 → 管理员拷回」两步，或整段以管理员
+运行。读 F: 不受限制。探针记录见 `data/cache/aihist_admin_probe.json`
+（已清，结论同 changelog 2026-11-18）。
 - `app_config.json.bak*` 是程序自动备份，不属于垃圾，不要顺手清。
 
 ## 变更记录约定

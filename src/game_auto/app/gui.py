@@ -36,6 +36,12 @@ def main():
 
     warn_once_at_startup(bootstrap_logger)
 
+    # 2026-11-18：AutomationController 懒加载，只跑薅羊毛时 _init_logger 从未执行 →
+    # 日志只进 console/WebUI 内存，data/logs/auto_runner.log 整段断档。启动边界兜底。
+    from ..services.logging_setup import ensure_file_log_handler
+
+    ensure_file_log_handler()
+
     # 依赖检测丢后台线程，首窗先出（dep_report 在 QML 侧仅透传未消费，结果就绪后 toast 提示）
     import threading as _th
     dep_state: dict = {}

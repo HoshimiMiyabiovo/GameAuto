@@ -80,6 +80,11 @@ _web_handler: WebLogHandler | None = None
 def ensure_log_handler():
     global _web_handler
     root = logging.getLogger("GameAutomation")
+    # 独立 uvicorn 启动 WebUI 时没有 AutomationController，日志只进内存缓冲；
+    # 兜底挂文件 handler（已由 controller 接管/已挂文件时内部幂等跳过）。
+    from ...services.logging_setup import ensure_file_log_handler
+
+    ensure_file_log_handler(root)
     # 已创建且仍挂载则直接返回；若被 AutomationController 清掉则重新挂载
     if _web_handler is not None:
         if _web_handler in root.handlers:

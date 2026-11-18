@@ -43,8 +43,11 @@ LOGGER = logging.getLogger("GameAutomation")
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
 STAGE_DIR = os.path.join(PROJECT_ROOT, "data", "cache", "ai_history_stage")
-OUT_DIR_F = r"F:\data\AI对话汇总"
-BUILD_PY = r"F:/data/_ai_organize_tools\build.py"
+# 汇总目录/工具链目录与 build.py 同一口径（AI_ORGANIZE_OUTDIR / AI_ORGANIZE_TOOLS
+# 可覆盖，缺省=本机现值）——此前三处独立硬编码会在换目录时静默断链（2026-11-18 审计）
+OUT_DIR_F = os.environ.get("AI_ORGANIZE_OUTDIR") or r"F:\data\AI对话汇总"
+BUILD_PY = os.path.join(os.environ.get("AI_ORGANIZE_TOOLS") or r"F:/data/_ai_organize_tools",
+                        "build.py")
 
 # 拷回 F: 的产物（build.py 串链三件套）
 COPY_FILES = ("AI对话全览.html", "data.json", "model_length_report.html")

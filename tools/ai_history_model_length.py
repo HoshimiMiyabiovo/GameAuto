@@ -45,7 +45,8 @@ from typing import Dict, List, Tuple
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # 数据源：默认 F: 汇总目录的 data.json；build.py 串链时用 AI_ORGANIZE_SOURCE
 # 传本轮暂存的 data.json——否则长度统计吃上一轮旧库（2026-11-18 实锤同 recover）
-SOURCE_JSON = Path(os.environ.get("AI_ORGANIZE_SOURCE") or r"F:\data\AI对话汇总\data.json")
+SOURCE_JSON = Path(os.environ.get("AI_ORGANIZE_SOURCE") or os.path.join(
+    os.environ.get("AI_ORGANIZE_OUTDIR") or r"F:\data\AI对话汇总", "data.json"))
 MODEL_DIR = PROJECT_ROOT / "data" / "ai_history" / "model"
 SESSION_FILE = MODEL_DIR / "session_models.jsonl"
 TURN_FILE = MODEL_DIR / "turn_models.jsonl"

@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 from datetime import date, datetime
 from typing import Callable, List, Optional, Tuple
@@ -24,6 +25,29 @@ def run_cj_background(
 
 # 薅羊毛集合：依次执行的子流程 key（flow_configs.json），新增羊毛任务在此追加
 WOOL_FLOW_KEYS: List[str] = ["MINIMAX", "WORKBUDDY", "TRAE", "QODER", "TELEAGENT", "CODEARTS", "ASTUDIO", "DUMATE"]
+
+
+def _start_ocr_warmup(logger: logging.Logger):
+    """批次入口后台预热 OCR 引擎（daemon 线程，失败不影响任何子流程）。
+
+    2026-11-18 实锤：TELEAGENT 步骤 1 的首次 OCR 撞上冷加载，22:30:47 → 22:52:53
+    卡了 22 分钟（历史同机 3-6s），表现为「应用启动成功但脚本没反应」。预热放到
+    批次启动阶段，子流程真正需要 OCR 时引擎通常已就绪。
+    """
+    try:
+        from .ocr_click_tester import warmup_onnxocr_engine
+    except Exception as exc:
+        logger.debug("[薅羊毛] OCR 预热模块不可用: %s", exc)
+        return None
+    t = threading.Thread(
+        target=warmup_onnxocr_engine,
+        args=(logger,),
+        daemon=True,
+        name="OcrWarmup",
+    )
+    t.start()
+    logger.info("[薅羊毛] OCR 引擎已在后台预热（避免首个流程步骤撞冷加载）")
+    return t
 
 
 def _close_wool_flow(logger: logging.Logger, flow_key: str, cfg, ok: bool) -> bool:
@@ -60,6 +84,8 @@ def _flow_time_allowed(cfg, now_hm: Optional[str] = None) -> bool:
 def run_wool_flow_background(logger: logging.Logger, flow_keys: List[str]) -> Tuple[bool, str]:
     """按给定子流程顺序执行；支持 not_before 时间门槛（如 Qoder 10:00 刷新）。"""
     from .foreground_flow_runner import _load_flow_config
+
+    _start_ocr_warmup(logger)
 
     messages = []
     all_ok = True

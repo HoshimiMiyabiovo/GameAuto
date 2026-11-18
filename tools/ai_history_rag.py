@@ -44,7 +44,10 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 
-SOURCE_JSON = Path(r"F:\data\AI对话汇总\data.json")
+# 汇总目录单一来源：AI_ORGANIZE_SOURCE（本轮暂存，串链内）> AI_ORGANIZE_OUTDIR
+# （汇总目录）> 默认本机路径——与 recover/model_length/build.py 同一口径
+_ORGANIZE_HOME = os.environ.get("AI_ORGANIZE_OUTDIR") or r"F:\data\AI对话汇总"
+SOURCE_JSON = Path(os.environ.get("AI_ORGANIZE_SOURCE") or os.path.join(_ORGANIZE_HOME, "data.json"))
 OUT_DIR = Path(__file__).resolve().parent.parent / "data" / "ai_history"
 CHUNK_SIZE = 1200          # 块字符数（含角色/时间头）
 CHUNK_OVERLAP = 150        # 相邻块重叠，防句子被切腰

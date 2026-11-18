@@ -52,8 +52,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = PROJECT_ROOT / "data" / "ai_history" / "model"
 SESSION_FILE = MODEL_DIR / "session_models.jsonl"
 TURN_FILE = MODEL_DIR / "turn_models.jsonl"
-DEFAULT_HTML = Path(r"F:\data\AI对话汇总\AI对话全览.html")
-DEFAULT_TEMPLATE = Path(r"F:\data\_ai_organize_tools\viewer_template.html")
+# 汇总目录/工具链目录可经环境变量覆盖（与 build.py 同口径，缺省=本机现值）
+DEFAULT_HTML = Path(os.environ.get("AI_ORGANIZE_OUTDIR") or r"F:\data\AI对话汇总") / "AI对话全览.html"
+DEFAULT_TEMPLATE = Path(os.environ.get("AI_ORGANIZE_TOOLS") or r"F:\data\_ai_organize_tools") / "viewer_template.html"
 
 BLOCK_RE = re.compile(r'(<script id="model-data"[^>]*>)(.*?)(</script>)', re.S)
 ALIAS_BLOCK_RE = re.compile(r'(<script id="model-aliases"[^>]*>)(.*?)(</script>)', re.S)
