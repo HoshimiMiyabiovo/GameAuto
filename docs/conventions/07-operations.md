@@ -184,29 +184,6 @@
   在此流程里补点击步（参考 ASTUDIO 的左下角卡片点击实现）。回归
   `tests/suite_dumate_wool_20261117.py`（单步 optional 结构/启动等待/close 口径/接线锁）。
 
-### Meoo（秒悟）每日登录送积分（2026-11-18 接入薅羊毛集合）
-
-- **任务事实**：Meoo 平台每天登录一次领每日赠送积分（FREE 档 2,000/天）。
-  **首个 CLI 型羊毛子流程**：无窗口、无进程、不跑 run_flow——
-  `run_wool_flow_background` 新增 runner 分发（`cfg.runner == "meoo"` →
-  `runtime/meoo_claim.run_wool`，且跳过 `_close_wool_flow` 关进程收尾）。
-- **触发与证据门控**：`meoo whoami` 触发当日登录（用户口径：跑一次 whoami 就算）；
-  `meoo account --json` 读 `points.totalGranted`（每日到账 +2,000 时递增）做
-  fail-closed 门控：workflow.sqlite3 `meoo_login_bonus:last` 记最近值，
-  增长→✅、持平→❌（批次重试自动补）。**`daily_login.used` 是配额消耗口径、
-  不代表是否领取**——实测 2026-11-18（OAuth 登录后仍 used=0）。
-- **触发方式未实锤**：注册当天无法判别 whoami 是否算登录（注册即首次登录，
-  当日赠送疑似已随注册入账——model_credits quota 7000 = 默认 5000 + 2000）。
-  连续多日持平即校准信号：查 meoo.com 积分明细定位真实触发。
-  `meoo login --token` 实测**不收** OAuth refresh token（要网页签发凭证），
-  无法静默重登。
-- **环境依赖**：便携 Node v22.20.0（`%LOCALAPPDATA%\Programs\nodejs`，npmmirror
-  下载、免 UAC）+ `npm i -g @aliyun-meoo/cli`。子进程 PATH **前置 cli_path 所在
-  目录**——meoo.cmd 依赖同目录 node.exe，而 GUI 进程早于 PATH 变更启动，
-  裸 `meoo` 找不到。DSH NEXT 也要重启才能把新 PATH 带进它开的终端。
-- **回归**：`tests/suite_meoo_daily_login_20261118.py`（到账判定六态/
-  真实响应解析/双份配置/接线锁）。
-
 ## 定时任务补跑 (2026-10-21)
 
 - GUI 定时任务保存在 `app_config.json` 的 `scheduled_tasks`，`UiBridge._sched_timer`

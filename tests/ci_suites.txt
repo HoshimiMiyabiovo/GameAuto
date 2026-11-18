@@ -67,7 +67,6 @@ suite_module_runtime_shutdown_20261117.py
 suite_monthly_auto_schedule_20261101.py
 suite_monthly_scroll_find_20261102.py
 suite_monthly_shop_buy_20261103.py
-suite_meoo_daily_login_20261118.py
 suite_monthly_shop_observability_20261104.py
 suite_motw_clear_20261116.py
 suite_nikki_calendar_20261101.py

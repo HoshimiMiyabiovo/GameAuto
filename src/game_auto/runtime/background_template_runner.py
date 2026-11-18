@@ -23,7 +23,7 @@ def run_cj_background(
 
 
 # 薅羊毛集合：依次执行的子流程 key（flow_configs.json），新增羊毛任务在此追加
-WOOL_FLOW_KEYS: List[str] = ["MINIMAX", "WORKBUDDY", "TRAE", "QODER", "TELEAGENT", "CODEARTS", "ASTUDIO", "DUMATE", "MEOO"]
+WOOL_FLOW_KEYS: List[str] = ["MINIMAX", "WORKBUDDY", "TRAE", "QODER", "TELEAGENT", "CODEARTS", "ASTUDIO", "DUMATE"]
 
 
 def _close_wool_flow(logger: logging.Logger, flow_key: str, cfg, ok: bool) -> bool:
@@ -74,15 +74,8 @@ def run_wool_flow_background(logger: logging.Logger, flow_keys: List[str]) -> Tu
             messages.append(f"{flow_key} ⏭ 未到 {not_before}")
             continue
         ran_any = True
-        # runner 分发（2026-11-18）：MEOO 这类 CLI 型子流程没有窗口/进程，
-        # 走专属 runner（触发+证据门控见 meoo_claim），也不做关进程收尾
-        if str((cfg or {}).get("runner") or "").strip().lower() == "meoo":
-            from .meoo_claim import run_wool as run_meoo_wool
-
-            ok, msg = run_meoo_wool(logger, cfg)
-        else:
-            ok, msg = run_flow(logger, flow_key)
-            _close_wool_flow(logger, flow_key, cfg, ok)
+        ok, msg = run_flow(logger, flow_key)
+        _close_wool_flow(logger, flow_key, cfg, ok)
         # 每日进度仅需精简状态，详细 msg 已在日志中，避免卡片文字过长
         messages.append(f"{flow_key} {'✅' if ok else '❌'}")
         if not ok:

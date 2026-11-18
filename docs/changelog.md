@@ -13,6 +13,7 @@
 - 修鸣潮 WuwaLauncher 被官方启动器「启动器版本更新」模态框卡死 40 分钟（用户贴 12:17 失败截图）：`krupdatereminderdlg` 是与启动器同 PID 的独立顶层窗，OCR 遮挡判据把它算 100% 遮挡 → 拒绝识别；步骤1 legacy 子串又会先命中标题「启动器版本更新」点空，后续「进入游戏」点击被模态框吞掉。`_window_obscured_ratio` 同 PID 顶层窗口不计遮挡（点击防护 11-17 已同口径放行），WuwaLauncher 步骤1 改 `ocr_match_mode=exact` 只点真正的「更新」按钮；回归 `tests/suite_wuwa_launcher_update_modal_20261118.py` ALL PASS。
 - 补齐签到凭证获取：QML 迁移后 GachaView 的「打开登录页/抓取 Cookie/扫码登录/执行签到」和 WuwaView 的「登录/刷新信息」全是无 onClicked 的死按钮，用户只能手抄 Cookie/Token。现接线米游社浏览器抓取（Edge/Chrome/Brave，`browser_cookie3` + COM 初始化）、App 扫码（`complete_qrcode_login`，stoken 回写且空值不覆盖旧 stoken）、手动签到（先同步保存输入框 Cookie 再签，结果写 tracker）；库街区补手机号+验证码登录（token/did 进 DPAPI，phone/source/roles 写配置，profile 不落明文）；塔吉多补密码登录/发送验证码/验证码登录（deviceid 留空自动生成，验证码登录不覆盖已有密码）。森空岛（终末地）仍只有手动 Token（无开放登录接口）；回归 `tests/suite_sign_credential_acquisition_20261118.py` ALL PASS。
 - 纠正「森空岛无登录接口」的错误说法：官方确实有手机号密码/短信/扫码登录（`as.hypergryph.com` 的 `token_by_phone_password`、`send_phone_code`+`token_by_phone_code`、`gen_scan/login`+`scan_status`+`token_by_scan_code`），只是自建登录要过数美 `dId` 设备指纹与 Geetest，之前没做不等于没有。新增不造指纹的等价路径：浏览器打开森空岛官网正常登录 → 读 `ACCOUNT` Cookie → `web-api.skland.com/account/info/hg` 换 token；EndfieldCenterView 加浏览器选择/打开登录页/从浏览器抓取 Token，回归 `tests/suite_sign_credential_acquisition_20261118.py` [8] ALL PASS。
+- 按用户要求移除 Meoo（秒悟）全部集成：删除 `runtime/meoo_claim.py`、薅羊毛 MEOO 子流程配置与接线（`WOOL_FLOW_KEYS`、GUI/WebUI 显示名、`flow_exe_paths.MEOO`）、回归套件与 07-operations 章节，清空 `workflow.sqlite3` 的 `meoo_login_bonus:last`；本地 `.env` 绑定删除。云端 `GameAuto` 项目未删（meoo CLI 无 delete 命令，需 meoo.com 控制台操作）。
 
 ## 2026-11-17
 

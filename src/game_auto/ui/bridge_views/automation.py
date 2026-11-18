@@ -216,7 +216,6 @@ class AutomationView:
         "CODEARTS": "码道Agent Space 每日领取",
         "ASTUDIO": "AStudio 每日福利领取",
         "DUMATE": "DuMate 每日福利",
-        "MEOO": "秒悟每日登录送积分",
     }
 
     @Slot(result=str)
