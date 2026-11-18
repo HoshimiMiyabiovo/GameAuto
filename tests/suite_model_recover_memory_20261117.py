@@ -224,12 +224,72 @@ def test_recover_kilo_and_trae():
         rec.TRAE_JSON = old_trae_json
 
 
+def test_recover_opencode_raw_and_note_model():
+    print("[6] TeleAgent/码道逐条 modelID（opencode 变体 raw）+ note_model 双格式"
+          "（2026-11-19 补：新源接入漏恢复器，最终页模型空）")
+    old_tele = rec.TELEAGENT_RAW
+    old_code = rec.CODEARTS_RAW
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            def stub_raw(root: Path, ses: str, mid: str, no_time: bool = False):
+                d = root / ses
+                d.mkdir(parents=True)
+                msg = {"role": "assistant", "modelID": mid}
+                ts = {"created": 2000} if not no_time else {}
+                (d / "messages.json").write_text(json.dumps({
+                    "session": {"id": ses, "title": "t"},
+                    "messages": [
+                        {"msg": {"role": "user"}, "ts_ms": 1000, "parts": []},
+                        {"msg": dict(msg, time=ts), "ts_ms": 2000, "parts": []},
+                        {"msg": dict(msg, time=ts), "ts_ms": 3000, "parts": []},
+                    ],
+                }), encoding="utf-8")
+
+            tele = Path(td) / "tele_raw"
+            code = Path(td) / "code_raw"
+            stub_raw(tele, "ses_ta", "chat-flash")
+            stub_raw(code, "ses_ca", "deepseek-v4.1-flash-1017", no_time=True)
+            rec.TELEAGENT_RAW = tele
+            rec.CODEARTS_RAW = code
+            got = rec.recover_teleagent()
+            check("teleagent:ses_ta 命中（raw 目录名 + teleagent: 前缀）",
+                  "teleagent:ses_ta" in got, got.keys())
+            r = got.get("teleagent:ses_ta") or {}
+            check("逐条级，user 不算建模（2 assistant）",
+                  r.get("level") == "per_message" and r.get("n_modeled") == 2
+                  and r.get("n_records") == 3, (r.get("level"), r.get("n_modeled")))
+            check("TeleAgent 内部路由名 chat-flash 按原值，不臆测映射",
+                  r.get("models") == {"chat-flash": 2}
+                  and rec.canonical_model("chat-flash") == "chat-flash", r.get("models"))
+            check("turn ts 用 time.created 毫秒",
+                  [t[0] for t in r.get("turns", [])] == ["2000", "2000"], r.get("turns"))
+
+            got = rec.recover_codearts()
+            r = got.get("codearts:ses_ca") or {}
+            check("码道 modelID 按原值 + time 缺失退 ts_ms",
+                  r.get("models") == {"deepseek-v4.1-flash-1017": 2}
+                  and [t[0] for t in r.get("turns", [])] == ["2000", "3000"], r.get("turns"))
+    finally:
+        rec.TELEAGENT_RAW = old_tele
+        rec.CODEARTS_RAW = old_code
+
+    check("note_model 认「模型：xxx」冒号格式",
+          rec.note_model("xx · 模型：Auto / 备") == "Auto", rec.note_model("xx · 模型：Auto"))
+    check("note_model 兼容「· 模型 xxx」无冒号（Kilo/TeleAgent/码道 fetch 格式）",
+          rec.note_model("381 条入库记录 · 模型 chat-flash") == "chat-flash",
+          rec.note_model("381 条入库记录 · 模型 chat-flash"))
+    check("note_model 不把散文词当模型（「模型字段/模型名」）",
+          rec.note_model("只有模型字段说明") == "" and rec.note_model("模型名字段") == "",
+          "prose words leaked")
+
+
 def main():
     test_pick_rec()
     test_load_existing_roundtrip()
     test_rec_from_row()
     test_recover_catpaw_session_model()
     test_recover_kilo_and_trae()
+    test_recover_opencode_raw_and_note_model()
     print("-" * 60)
     if FAILURES:
         print(f"FAILED {len(FAILURES)}: {FAILURES}")

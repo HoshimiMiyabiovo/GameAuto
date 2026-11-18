@@ -69,8 +69,11 @@ kilo/teleagent/codearts 等）以 `~` 相对或客观安装位置为准，属机
    摘要（600），返回全文进 output（20 万帽）。**Copilot 例外**：存档只有
    invocationMessage 展示消息、无返回字段。
 3. **模型名**：有逐条/会话级 modelID 字段的来源按**原值**记录（不臆测映射，
-   2026-11-17 用户纠偏）；客户端内部代号/无字段来源才进 `MODEL_ALIASES` 或
-   `TRAE_FIXED_MODEL`（用户拍板表，ai_history_model_recover.py）。
+   2026-11-17 用户纠偏；TeleAgent 的 `chat-flash`、码道的
+   `deepseek-v4.1-flash-1017` 同此口径）；客户端内部代号/无字段来源才进
+   `MODEL_ALIASES` 或 `TRAE_FIXED_MODEL`（用户拍板表，ai_history_model_recover.py）。
+   会话 note 的模型标注两种格式都认：「模型：xxx」（Hermes/WorkBuddy/妙手）与
+   「· 模型 xxx」无冒号（Kilo/TeleAgent/码道 fetch）。
 4. **正文本地不存在的来源不上库**：码道桌面端 chatSessions jsonl 曾被误判
    「无正文可接」——真相源是内核数据目录（AgentKernel=opencode 变体，
    `~/.codeartsdoer/codearts-data/opencode.db`）。**找对话正文先找应用的
@@ -78,7 +81,9 @@ kilo/teleagent/codearts 等）以 `~` 相对或客观安装位置为准，属机
 5. **新抓取器必带**：临时目录钉 `data/cache`（TEMP 坏境回退 cwd，见 01 分篇）、
    数据根 `data/<src>_capture/`（gitignore）、raw/ 留原始数据、export/ 聚合
    按 id 合并去重、独立套件（临时 DB 复现 schema 打桩，不碰真实数据）、
-   ci_suites 登记。
+   ci_suites 登记、**模型恢复器**（`recover_<src>` + `RECOVERERS` 登记 +
+   套件桩测；有真实字段按铁律 3 原值记。漏接恢复器=最终页模型列空，
+   2026-11-17/11-19 两次复发后立此规）。
 
 ## 已知环境坑（详见 01 分篇）
 

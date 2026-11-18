@@ -8,6 +8,10 @@
 > （2025-02 萌芽 → 前身项目 → ok-* 脚本群 → 重构）归档到
 > [notes/ai-dev-history-202611.md](notes/ai-dev-history-202611.md)。
 
+## 2026-11-19
+
+- fix: AI 对话史 TeleAgent/码道最终页模型列空——model_recover 补 `recover_teleagent`/`recover_codearts`（opencode 变体 raw 逐条 modelID 按原值：chat-flash / deepseek-v4.1-flash-1017）+ `note_model` 兼容「· 模型 xxx」无冒号格式 + 重跑 scan/inject 回填 F: 展示页（577/582 有模型字段）；铁律 5 立「新抓取器必带模型恢复器」防第三次复发（11-17 用户「每次新导入都不加模型字段」同类问题）+ 套件补 [6] 桩测
+
 ## 2026-11-18
 
 - 修薅羊毛首次 OCR 冷加载卡 22 分钟 + 日志不落盘（用户 22:30 实跑反馈「应用启动成功但脚本没反应」）：实锤卡点是 TELEAGENT 步骤 1 的首次 OCR——22:30:47 进步骤、22:52:53 才创建 ONNX session，历史同机只要 3-6s；同时 `data/logs/auto_runner.log` 停在 21:16（AutomationController 懒加载、薅羊毛走 `run_wool_background → run_flow` 不经过 controller，`_init_logger` 从未执行，整段日志只在 WebUI 内存）。三处修：① `build_onnxocr_engine` 按阶段打耗时日志（CUDA DLL 注册 / onnxruntime 导入 / session 构建）并把引擎构建加锁；② 新增 `warmup_onnxocr_engine` + 薅羊毛批次入口后台预热，把冷加载前移，避免首个流程步骤阻塞；③ 新增 `services/logging_setup.ensure_file_log_handler`，GUI / 独立 WebUI 启动边界兜底挂文件 handler（QueueHandler 已接管、已挂 FileHandler、测试禁写三种情况幂等跳过）。回归 `tests/suite_ocr_warmup_log_20261118.py` ALL PASS，`pytest tests` 快回归 123 套件无 fail。
