@@ -362,7 +362,9 @@ def main():
     test_msg_to_records()
     test_tool_patch_summary()
     test_convert_session()
-    with tempfile.TemporaryDirectory() as td:
+    _pin = os.path.join(PROJECT_ROOT, "data", "cache")
+    os.makedirs(_pin, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=_pin) as td:
         test_merge_export(Path(td))
         test_load_password(Path(td))
     test_fetch_messages()

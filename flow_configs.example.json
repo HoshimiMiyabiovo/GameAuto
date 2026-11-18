@@ -1701,13 +1701,15 @@
         "template": "assets/templates\\鸣潮-更新.png",
         "target_text": "更新",
         "search_scope": "window",
+        "ocr_match_mode": "exact",
         "confirm_type": "none",
         "timeout_sec": 8,
         "clicks": 1,
         "post_delay_sec": 5.0,
         "optional_if_missing": true,
         "on_fail": "retry_step",
-        "max_attempts": 2
+        "max_attempts": 2,
+        "_comment": "2026-11-18 #431：官方启动器会弹「启动器版本更新」模态框（HWND 标题 krupdatereminderdlg），标题同样含「更新」。legacy 子串匹配会先点标题（无效），必须 exact 只点真正的「更新」按钮；不点掉它会吞掉后续「进入游戏」点击，白等 40 分钟。"
       },
       {
         "name": "等待更新完成",

@@ -96,6 +96,38 @@ Item {
 
                     RowLayout {
                         spacing: 10
+
+                        CredentialInput {
+                            id: tajiduoSmsCodeInput
+                            Layout.fillWidth: true
+                            placeholderText: "短信验证码（点「发送验证码」后填入）..."
+                        }
+                        HusButton {
+                            text: "发送验证码"
+                            type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning && tajiduoPhoneInput.text.length === 11
+                            onClicked: bridge.sendTajiduoSmsCode(tajiduoPhoneInput.text)
+                        }
+                        HusButton {
+                            text: "验证码登录"
+                            type: HusButton.Type_Primary
+                            enabled: !bridge.isRunning && tajiduoPhoneInput.text.length === 11
+                                     && tajiduoSmsCodeInput.text.length >= 4
+                            onClicked: bridge.runTajiduoSmsLogin(
+                                tajiduoPhoneInput.text, tajiduoSmsCodeInput.text)
+                        }
+                        HusButton {
+                            text: "密码登录"
+                            type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning && tajiduoPhoneInput.text.length === 11
+                                     && tajiduoPasswordInput.text.length > 0
+                            onClicked: bridge.runTajiduoPasswordLogin(
+                                tajiduoPhoneInput.text, tajiduoPasswordInput.text)
+                        }
+                    }
+
+                    RowLayout {
+                        spacing: 10
                         HusButton {
                             text: "执行签到"
                             type: HusButton.Type_Primary

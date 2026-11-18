@@ -63,6 +63,8 @@ Item {
                 root.tokenConfigured = !!profile.token_configured
                 root.didConfigured = !!profile.did_configured
                 wuwaAutoSign.checked = !!wuwa.auto_sign
+                if (wuwa.phone) wuwaPhoneInput.text = wuwa.phone
+                wuwaSourceSelect.currentIndex = String(wuwa.source || "") === "h5" ? 1 : 0
             } catch(e) { /* ignore */ }
         }
     }
@@ -118,16 +120,46 @@ Item {
 
                     RowLayout {
                         spacing: 10
+
+                        CredentialInput {
+                            id: wuwaPhoneInput
+                            Layout.preferredWidth: 170
+                            placeholderText: "手机号（验证码登录用）..."
+                            onEditingFinished: bridge.saveCredential("wuwa_kujiequ", "phone", text)
+                        }
+                        CredentialInput {
+                            id: wuwaCodeInput
+                            Layout.fillWidth: true
+                            placeholderText: "验证码（库街区 App / 网页端登录后获取）..."
+                        }
                         HusSelect {
+                            id: wuwaSourceSelect
+                            Layout.preferredWidth: 135
                             clearEnabled: false
                             model: ListModel {
-                                ListElement { label: "账号密码" }
-                                ListElement { label: "Token" }
+                                ListElement { label: "APP / Android"; value: "android" }
+                                ListElement { label: "网页 / H5"; value: "h5" }
                             }
                             currentIndex: 0
                         }
-                        HusButton { text: "登录"; type: HusButton.Type_Primary }
-                        HusButton { text: "刷新信息"; type: HusButton.Type_Outlined }
+                        HusButton {
+                            text: "登录"
+                            type: HusButton.Type_Primary
+                            enabled: !bridge.isRunning && wuwaPhoneInput.text.length > 0 && wuwaCodeInput.text.length > 0
+                            onClicked: bridge.runWuwaKujiequCodeLogin(
+                                wuwaPhoneInput.text, wuwaCodeInput.text,
+                                wuwaSourceSelect.currentIndex === 1)
+                        }
+                    }
+
+                    RowLayout {
+                        spacing: 10
+                        HusButton {
+                            text: "刷新信息"
+                            type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning
+                            onClicked: bridge.refreshWuwaDaily()
+                        }
                         HusButton {
                             text: "ADB 抓取 Token"
                             type: HusButton.Type_Outlined

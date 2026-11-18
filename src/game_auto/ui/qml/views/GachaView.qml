@@ -50,6 +50,13 @@ Item {
                 var creds = JSON.parse(jsonStr || "{}")
                 var mihoyo = creds.mihoyo_sign || {}
                 if (mihoyo.cookie) mihoyoCookieInput.text = mihoyo.cookie
+                var browser = String(mihoyo.browser || "edge")
+                for (var bi = 0; bi < mihoyoBrowserSelect.model.count; bi++) {
+                    if (mihoyoBrowserSelect.model.get(bi).value === browser) {
+                        mihoyoBrowserSelect.currentIndex = bi
+                        break
+                    }
+                }
                 genshinSignCheck.checked = !!(mihoyo.enabled_games && mihoyo.enabled_games.genshin)
                 honkaiSrSignCheck.checked = !!(mihoyo.enabled_games && mihoyo.enabled_games.honkai_sr)
                 zzzSignCheck.checked = !!(mihoyo.enabled_games && mihoyo.enabled_games.zzz)
@@ -586,17 +593,40 @@ Item {
 
                     RowLayout {
                         spacing: 10
-                        HusButton { text: "打开登录页"; type: HusButton.Type_Outlined }
-                        HusButton { text: "抓取 Cookie"; type: HusButton.Type_Outlined }
-                        HusButton { text: "扫码登录"; type: HusButton.Type_Outlined }
+                        HusSelect {
+                            id: mihoyoBrowserSelect
+                            Layout.preferredWidth: 150
+                            clearEnabled: false
+                            model: ListModel {
+                                ListElement { label: "Microsoft Edge"; value: "edge" }
+                                ListElement { label: "Google Chrome"; value: "chrome" }
+                                ListElement { label: "Brave"; value: "brave" }
+                            }
+                            currentIndex: 0
+                            onActivated: bridge.saveCredential("mihoyo_sign", "browser", model.get(currentIndex).value)
+                        }
+                        HusButton {
+                            text: "打开登录页"
+                            type: HusButton.Type_Outlined
+                            onClicked: bridge.openMihoyoLoginPage()
+                        }
+                        HusButton {
+                            text: "抓取 Cookie"
+                            type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning
+                            onClicked: bridge.fetchMihoyoCookie(mihoyoBrowserSelect.model.get(mihoyoBrowserSelect.currentIndex).value)
+                        }
+                        HusButton {
+                            text: "扫码登录"
+                            type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning
+                            onClicked: bridge.runMihoyoQrLogin(mihoyoBrowserSelect.model.get(mihoyoBrowserSelect.currentIndex).value)
+                        }
                         HusButton {
                             text: "执行签到"
                             type: HusButton.Type_Primary
-                            onClicked: {
-                                if (mihoyoCookieInput.text.length > 0) {
-                                    bridge.saveCredential("mihoyo_sign", "cookie", mihoyoCookieInput.text)
-                                }
-                            }
+                            enabled: !bridge.isRunning
+                            onClicked: bridge.runMihoyoSign(mihoyoCookieInput.text)
                         }
                     }
 

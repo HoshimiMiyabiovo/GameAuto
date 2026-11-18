@@ -76,6 +76,13 @@ Item {
                 var sk = creds.skendfield_sign || {}
                 if (sk.token) skendfieldTokenInput.text = sk.token
                 skendfieldStartupCheck.checked = !!sk.startup_sign
+                var skBrowser = String(sk.browser || "edge")
+                for (var sbi = 0; sbi < skendfieldBrowserSelect.model.count; sbi++) {
+                    if (skendfieldBrowserSelect.model.get(sbi).value === skBrowser) {
+                        skendfieldBrowserSelect.currentIndex = sbi
+                        break
+                    }
+                }
 
                 // 终末地抽卡 token 同步凭据
                 var eg = creds.endfield_gacha || {}
@@ -1169,6 +1176,34 @@ Item {
                         Layout.fillWidth: true
                         placeholderText: "粘贴 Token..."
                         onEditingFinished: bridge.saveCredential("skendfield_sign", "token", text)
+                    }
+
+                    RowLayout {
+                        spacing: 10
+                        HusSelect {
+                            id: skendfieldBrowserSelect
+                            Layout.preferredWidth: 150
+                            clearEnabled: false
+                            model: ListModel {
+                                ListElement { label: "Microsoft Edge"; value: "edge" }
+                                ListElement { label: "Google Chrome"; value: "chrome" }
+                                ListElement { label: "Brave"; value: "brave" }
+                            }
+                            currentIndex: 0
+                            onActivated: bridge.saveCredential("skendfield_sign", "browser", model.get(currentIndex).value)
+                        }
+                        HusButton {
+                            text: "打开登录页"
+                            type: HusButton.Type_Outlined
+                            onClicked: bridge.openSklandLoginPage()
+                        }
+                        HusButton {
+                            text: "从浏览器抓取 Token"
+                            type: HusButton.Type_Outlined
+                            enabled: !bridge.isRunning
+                            onClicked: bridge.fetchSklandToken(
+                                skendfieldBrowserSelect.model.get(skendfieldBrowserSelect.currentIndex).value)
+                        }
                     }
 
                     RowLayout {

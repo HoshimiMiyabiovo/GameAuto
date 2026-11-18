@@ -32,6 +32,7 @@ suite_baijing_tea_invite_20261103.py
 suite_baijing_tea_marker_20261025.py
 suite_baijing_tea_select_drink_20261107.py
 suite_wuwa_launcher_cleanup_20261115.py
+suite_wuwa_launcher_update_modal_20261118.py
 suite_baijing_update_prompt_20261105.py
 suite_bridge_batch_email_20261021.py
 suite_cj_script_update_20261107.py
@@ -98,6 +99,7 @@ suite_script_checklist_tab_20261108.py
 suite_script_monitor_20261104.py
 suite_script_version_check_20261103.py
 suite_shop_no_blind_buy_20261108.py
+suite_sign_credential_acquisition_20261118.py
 suite_stamina_configs_phase2_20261029.py
 suite_stamina_view_perf_20261031.py
 suite_starrail_activity_20261024.py

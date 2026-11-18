@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 import time
+import webbrowser
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QTimer, Slot
@@ -233,6 +234,55 @@ class GachaView:
             daemon=True,
         ).start()
 
+    @Slot()
+    def openMihoyoLoginPage(self):
+        """打开米游社网页登录页（Cookie 抓取前置步骤）。"""
+        try:
+            from ...clients.mihoyo_sign import get_login_url
+
+            url = get_login_url("genshin")
+            webbrowser.open(url)
+            logger.info("[Bridge] 已打开米游社登录页: %s", url)
+            self.emit_event(
+                "toast",
+                message="已打开米游社登录页，登录完成后点「抓取 Cookie」",
+                color="#2f7d4a",
+            )
+        except Exception as exc:
+            logger.exception("[Bridge] 打开米游社登录页失败")
+            self.emit_event("toast", message=f"打开登录页失败: {exc}", color="#b04b44")
+
+    @Slot(str)
+    def fetchMihoyoCookie(self, browser: str):
+        """从本机浏览器读取米游社 Cookie 并加密保存。"""
+        threading.Thread(
+            target=self._fetch_mihoyo_cookie_backend,
+            args=(browser,),
+            daemon=True,
+        ).start()
+
+    @Slot(str)
+    def runMihoyoQrLogin(self, browser: str):
+        """米游社 App 扫码登录（弹出二维码图片，扫码后保存 stoken Cookie）。"""
+        threading.Thread(
+            target=self._run_mihoyo_qr_login_backend,
+            args=(browser,),
+            daemon=True,
+        ).start()
+
+    @Slot(str)
+    def runMihoyoSign(self, cookie: str = ""):
+        """手动执行米游社签到（原神 / 星铁 / 绝区零）。
+
+        cookie 非空时先同步保存再签到，避免 saveCredential 后台线程与签到
+        线程抢配置导致用了旧 Cookie。
+        """
+        threading.Thread(
+            target=self._run_mihoyo_sign_backend,
+            args=(cookie,),
+            daemon=True,
+        ).start()
+
     @Slot(str)
     def queryEndfieldCenter(self, query_type: str):
         """终末地数据中心查询（第三方协议终端，需 api_key/framework_token）。
@@ -331,9 +381,42 @@ class GachaView:
         threading.Thread(target=self._run_skendfield_sign_backend, daemon=True).start()
 
     @Slot()
+    def openSklandLoginPage(self):
+        """打开森空岛网页登录页（浏览器抓 Token 前置步骤）。"""
+        try:
+            webbrowser.open("https://www.skland.com/")
+            logger.info("[Bridge] 已打开森空岛登录页")
+            self.emit_event(
+                "toast",
+                message="已打开森空岛登录页，登录后点「从浏览器抓取 Token」",
+                color="#2f7d4a",
+            )
+        except Exception as exc:
+            logger.exception("[Bridge] 打开森空岛登录页失败")
+            self.emit_event("toast", message=f"打开登录页失败: {exc}", color="#b04b44")
+
+    @Slot(str)
+    def fetchSklandToken(self, browser: str):
+        """从浏览器登录态提取森空岛 token（无需密码/短信/扫码风控）。"""
+        threading.Thread(
+            target=self._fetch_skland_token_backend,
+            args=(browser,),
+            daemon=True,
+        ).start()
+
+    @Slot()
     def runWuwaKujiequSign(self):
         """手动触发库街区签到（QML "执行签到" 按钮）。"""
         threading.Thread(target=self._run_wuwa_kujiequ_sign_backend, daemon=True).start()
+
+    @Slot(str, str, bool)
+    def runWuwaKujiequCodeLogin(self, phone: str, code: str, is_web: bool):
+        """手机号 + 验证码登录库街区，token/did 加密入库。"""
+        threading.Thread(
+            target=self._run_wuwa_kujiequ_code_login_backend,
+            args=(phone, code, bool(is_web)),
+            daemon=True,
+        ).start()
 
     @Slot()
     def runWuwaKujiequAdbGrab(self):
@@ -348,6 +431,33 @@ class GachaView:
     def runTajiduoSign(self):
         """手动触发塔吉多（异环）签到（QML "执行签到" 按钮）。"""
         threading.Thread(target=self._run_tajiduo_sign_backend, daemon=True).start()
+
+    @Slot(str, str)
+    def runTajiduoPasswordLogin(self, phone: str, password: str):
+        """塔吉多手机号+密码登录（旧 Flet 页面已有，QML 补齐）。"""
+        threading.Thread(
+            target=self._run_tajiduo_password_login_backend,
+            args=(phone, password),
+            daemon=True,
+        ).start()
+
+    @Slot(str)
+    def sendTajiduoSmsCode(self, phone: str):
+        """塔吉多发送短信验证码。"""
+        threading.Thread(
+            target=self._send_tajiduo_sms_code_backend,
+            args=(phone,),
+            daemon=True,
+        ).start()
+
+    @Slot(str, str)
+    def runTajiduoSmsLogin(self, phone: str, code: str):
+        """塔吉多手机号+短信验证码登录。"""
+        threading.Thread(
+            target=self._run_tajiduo_sms_login_backend,
+            args=(phone, code),
+            daemon=True,
+        ).start()
 
     # ── WebUI 账号与状态（GUI 内设置，WebUI 通过 /api/auth 鉴权） ──
     @Slot(result=str)
@@ -632,6 +742,407 @@ class GachaView:
         except Exception as exc:
             logger.exception("[Bridge] 清除设备指纹失败")
             self.emit_event("toast", message=f"清除失败: {exc}", color="#b04b44")
+
+    def _persist_mihoyo_login(
+        self,
+        cookie: str,
+        *,
+        browser: str = "edge",
+        stoken_cookie: str = "",
+    ) -> None:
+        """保存米游社登录 Cookie（settings.manager 自动 DPAPI 加密敏感键）。
+
+        stoken_cookie 留空时保留已保存值：浏览器抓取通常只有 cookie_token，
+        不能把已有扫码得到的 stoken 覆盖掉。
+        """
+        from ...clients.mihoyo_sign import tidy_cookie
+        from ...settings import manager as cfg_manager
+
+        cleaned = tidy_cookie(cookie)
+        if not cleaned:
+            raise RuntimeError("没有读到可用的米游社 Cookie")
+
+        cfg = cfg_manager.load(force=True)
+        section = cfg.setdefault("mihoyo_sign", {})
+        section["cookie"] = cleaned
+        if browser:
+            section["browser"] = str(browser).strip().lower()
+        stoken = tidy_cookie(stoken_cookie)
+        if not stoken:
+            stoken = tidy_cookie(str(section.get("stoken_cookie") or ""))
+        if stoken:
+            section["stoken_cookie"] = stoken
+        cfg_manager.save(cfg)
+        logger.info(
+            "[Bridge] 米游社 Cookie 已保存: browser=%s len=%d stoken=%s",
+            section.get("browser") or "-",
+            len(cleaned),
+            bool(stoken),
+        )
+        self._load_credentials_backend()
+
+    @staticmethod
+    def _mihoyo_cookie_identity(cookie: str) -> str:
+        """从 Cookie 中提取账号标识（仅用于日志/toast，返回非敏感摘要）。"""
+        try:
+            from ...clients.mihoyo_sign import extract_cookie_fields
+
+            fields = extract_cookie_fields(cookie)
+            return str(
+                fields.get("account_id_v2")
+                or fields.get("account_id")
+                or fields.get("ltuid_v2")
+                or fields.get("ltuid")
+                or fields.get("stuid_v2")
+                or fields.get("stuid")
+                or "-"
+            )
+        except Exception:  # noqa: BLE001
+            return "-"
+
+    def _fetch_mihoyo_cookie_backend(self, browser: str):
+        """从浏览器读取 Cookie。browser_cookie3 需要 COM 初始化（与 Flet 同口径）。"""
+        browser = str(browser or "edge").strip().lower()
+        try:
+            import pythoncom
+        except Exception:  # noqa: BLE001
+            pythoncom = None
+        if pythoncom is not None:
+            pythoncom.CoInitialize()
+        try:
+            from ...clients.mihoyo_sign import extract_cookie_from_browser
+
+            result = extract_cookie_from_browser(browser)
+            cookie = str(result.get("cookie") or "")
+            self._persist_mihoyo_login(cookie, browser=browser)
+            account = self._mihoyo_cookie_identity(cookie)
+            record_ready = bool(result.get("record_ready"))
+            suffix = "，便笺查询已就绪" if record_ready else "，仅签到级别（便笺可能不可用）"
+            self.emit_event(
+                "toast",
+                message=f"已从 {browser} 读取米游社 Cookie（账号 {account}{suffix}）",
+                color="#2f7d4a",
+            )
+        except Exception as exc:
+            logger.warning("[Bridge] 抓取米游社 Cookie 失败: %s", exc)
+            self.emit_event(
+                "toast",
+                message=f"抓取米游社 Cookie 失败: {exc}",
+                color="#b04b44",
+            )
+        finally:
+            if pythoncom is not None:
+                pythoncom.CoUninitialize()
+
+    def _run_mihoyo_qr_login_backend(self, browser: str):
+        """App 扫码登录；complete_qrcode_login 会弹出二维码并阻塞到扫码完成。"""
+        browser = str(browser or "edge").strip().lower()
+        try:
+            from ...clients.mihoyo_sign import complete_qrcode_login
+
+            result = complete_qrcode_login(browser_name=browser)
+            cookie = str(result.get("cookie") or "")
+            stoken_cookie = str(result.get("stoken_cookie") or cookie)
+            self._persist_mihoyo_login(
+                cookie, browser=browser, stoken_cookie=stoken_cookie,
+            )
+            account = str(result.get("account_id") or "-")
+            self.emit_event(
+                "toast",
+                message=f"米游社扫码登录成功（账号 {account}），Cookie 已加密保存",
+                color="#2f7d4a",
+            )
+        except Exception as exc:
+            logger.warning("[Bridge] 米游社扫码登录失败: %s", exc)
+            self.emit_event(
+                "toast",
+                message=f"米游社扫码登录失败: {exc}",
+                color="#b04b44",
+            )
+
+    def _run_mihoyo_sign_backend(self, cookie_text: str = ""):
+        """读取已保存 Cookie 执行三游戏签到，并把结果写入每日进度。"""
+        try:
+            from ...clients.mihoyo_sign import (
+                format_sign_report,
+                sign_games,
+                tidy_cookie,
+            )
+            from ...settings import manager as cfg_manager
+
+            typed_cookie = tidy_cookie(str(cookie_text or ""))
+            if typed_cookie:
+                self._persist_mihoyo_login(typed_cookie)
+
+            cfg = cfg_manager.load(force=True)
+            section = cfg.get("mihoyo_sign") or {}
+            cookie = tidy_cookie(
+                str(section.get("cookie") or section.get("stoken_cookie") or "")
+            )
+            if not cookie:
+                self.emit_event(
+                    "toast",
+                    message="未配置米游社 Cookie，请先抓取或扫码登录",
+                    color="#b04b44",
+                )
+                return
+
+            enabled = section.get("enabled_games")
+            all_games = ("genshin", "honkai_sr", "zzz")
+            if isinstance(enabled, dict):
+                games = [key for key in all_games if bool(enabled.get(key))]
+            else:
+                games = list(all_games)
+            if not games:
+                self.emit_event(
+                    "toast",
+                    message="请至少勾选一个米游社签到游戏",
+                    color="#b04b44",
+                )
+                return
+
+            logger.info(
+                "[Bridge] 米游社签到开始: 账号=%s games=%s",
+                self._mihoyo_cookie_identity(cookie),
+                ",".join(games),
+            )
+            result = sign_games(cookie, games)
+            for line in format_sign_report(result):
+                logger.info("[Bridge] 米游社签到: %s", line)
+
+            success = sum(int(item.get("success_count") or 0) for item in result.get("games") or [])
+            already = sum(int(item.get("already_count") or 0) for item in result.get("games") or [])
+            failed = sum(int(item.get("failed_count") or 0) for item in result.get("games") or [])
+            color = "#2f7d4a" if failed == 0 else "#b66f1f"
+            self.emit_event(
+                "toast",
+                message=f"米游社签到完成：成功 {success}，已签 {already}，失败 {failed}",
+                color=color,
+            )
+
+            try:
+                from ...services.daily_progress_tracker import get_tracker
+                from ...services.startup_sign_runner import _record_mihoyo_sign_to_tracker
+                from ...settings.paths import WORKFLOW_DB_PATH
+
+                tracker = get_tracker(str(WORKFLOW_DB_PATH))
+                _record_mihoyo_sign_to_tracker(tracker, result)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[Bridge] 米游社签到结果写入每日进度失败: %s", exc)
+        except Exception as exc:
+            logger.exception("[Bridge] 米游社签到失败")
+            self.emit_event("toast", message=f"米游社签到失败: {exc}", color="#b04b44")
+
+    def _run_wuwa_kujiequ_code_login_backend(self, phone: str, code: str, is_web: bool):
+        """手机号+验证码换 token；密钥入库，角色/来源写配置。"""
+        try:
+            from ...clients.wuwa_kujiequ import login_with_code, profile_to_dict
+            from ...services import credential_store
+            from ...settings import manager as cfg_manager
+
+            profile, roles = login_with_code(phone, code, is_web=is_web)
+            credential_store.set_secret(
+                credential_store.WUWA_CATEGORY, "token", profile.token,
+            )
+            credential_store.set_secret(
+                credential_store.WUWA_CATEGORY, "did", profile.did,
+            )
+
+            cfg = cfg_manager.load(force=True)
+            section = cfg.setdefault(credential_store.WUWA_CATEGORY, {})
+            section["phone"] = str(phone or "").strip()
+            section["source"] = "h5" if is_web else "android"
+            section["roles"] = roles
+            profile_data = profile_to_dict(profile)
+            profile_data.pop("token", None)
+            profile_data.pop("did", None)
+            section["profile"] = profile_data
+            cfg_manager.save(cfg)
+
+            self._load_credentials_backend()
+            role_label = profile.role_name or profile.role_id or profile.user_id or "-"
+            logger.info(
+                "[Bridge] 库街区验证码登录成功: role=%s roles=%d source=%s",
+                role_label, len(roles), section["source"],
+            )
+            self.emit_event(
+                "toast",
+                message=f"库街区登录成功（{role_label}），Token 已加密保存",
+                color="#2f7d4a",
+            )
+            try:
+                self.refreshWuwaDaily()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[Bridge] 登录后刷新库街区数据失败: %s", exc)
+        except Exception as exc:
+            logger.exception("[Bridge] 库街区验证码登录失败")
+            self.emit_event(
+                "toast",
+                message=f"库街区登录失败: {exc}",
+                color="#b04b44",
+            )
+
+    def _fetch_skland_token_backend(self, browser: str):
+        """从浏览器 ACCOUNT Cookie 换森空岛 token 并加密保存。"""
+        browser = str(browser or "edge").strip().lower()
+        try:
+            from ...clients.skendfield_sign import extract_token_from_browser
+            from ...settings import manager as cfg_manager
+
+            result = extract_token_from_browser(browser)
+            token = str(result.get("token") or "").strip()
+            cfg = cfg_manager.load(force=True)
+            section = cfg.setdefault("skendfield_sign", {})
+            section["token"] = token
+            section["browser"] = browser
+            cfg_manager.save(cfg)
+            self._load_credentials_backend()
+            logger.info("[Bridge] 森空岛 token 已从 %s 读取并保存", browser)
+            self.emit_event(
+                "toast",
+                message=f"已从 {browser} 读取森空岛 Token 并加密保存",
+                color="#2f7d4a",
+            )
+        except Exception as exc:
+            logger.warning("[Bridge] 抓取森空岛 Token 失败: %s", exc)
+            self.emit_event(
+                "toast",
+                message=f"抓取森空岛 Token 失败: {exc}",
+                color="#b04b44",
+            )
+
+    def _tajiduo_login_runtime(self) -> tuple[str, Dict[str, str]]:
+        """读取/生成塔吉多 deviceid，并返回本次登录用的设备指纹。
+
+        旧 Flet 页面的口径：deviceid 留空时生成并回填；openudid/vendorid
+        每次登录重新生成（服务端不要求持久化）。
+        """
+        from ...clients.tajiduo_login import gen_fingerprint
+        from ...settings import manager as cfg_manager
+
+        cfg = cfg_manager.load(force=True)
+        section = cfg.setdefault("tajiduo_sign", {})
+        deviceid = str(section.get("deviceid") or "").strip()
+        fp = gen_fingerprint()
+        if not deviceid:
+            deviceid = str(fp.get("deviceid") or "").strip()
+            if deviceid:
+                section["deviceid"] = deviceid
+                cfg_manager.save(cfg)
+                logger.info("[Bridge] 塔吉多 deviceid 已生成并保存")
+        return deviceid, fp
+
+    def _persist_tajiduo_login(
+        self,
+        result: Dict[str, Any],
+        *,
+        phone: str = "",
+        password: Optional[str] = None,
+    ) -> None:
+        """保存登录返回的 token/deviceid/uid；密码只在本次确实输入时覆盖。"""
+        from ...settings import manager as cfg_manager
+
+        cfg = cfg_manager.load(force=True)
+        section = cfg.setdefault("tajiduo_sign", {})
+        for key in ("token", "deviceid", "uid"):
+            value = str(result.get(key) or "").strip()
+            if value:
+                section[key] = value
+        if phone:
+            section["phone"] = str(phone).strip()
+        if password:
+            section["password"] = str(password)
+        cfg_manager.save(cfg)
+        logger.info(
+            "[Bridge] 塔吉多登录凭据已保存: uid=%s deviceid=%s token=%s",
+            section.get("uid") or "-",
+            bool(section.get("deviceid")),
+            bool(section.get("token")),
+        )
+        self._load_credentials_backend()
+
+    def _run_tajiduo_password_login_backend(self, phone: str, password: str):
+        phone = str(phone or "").strip()
+        password = str(password or "").strip()
+        if len(phone) != 11:
+            self.emit_event("toast", message="请输入正确的 11 位手机号", color="#b04b44")
+            return
+        if not password:
+            self.emit_event("toast", message="请输入塔吉多账号密码", color="#b04b44")
+            return
+        try:
+            from ...clients.tajiduo_login import complete_password_login
+
+            deviceid, fp = self._tajiduo_login_runtime()
+            result = complete_password_login(
+                phone, password, deviceid, fp["openudid"], fp["vendorid"],
+            )
+            self._persist_tajiduo_login(result, phone=phone, password=password)
+            self.emit_event(
+                "toast",
+                message=f"塔吉多密码登录成功（UID {result.get('uid') or '-'}）",
+                color="#2f7d4a",
+            )
+        except Exception as exc:
+            logger.exception("[Bridge] 塔吉多密码登录失败")
+            self.emit_event("toast", message=f"塔吉多密码登录失败: {exc}", color="#b04b44")
+
+    def _send_tajiduo_sms_code_backend(self, phone: str):
+        phone = str(phone or "").strip()
+        if len(phone) != 11:
+            self.emit_event("toast", message="请输入正确的 11 位手机号", color="#b04b44")
+            return
+        try:
+            from ...clients.tajiduo_login import send_captcha
+
+            deviceid, fp = self._tajiduo_login_runtime()
+            http_code, payload = send_captcha(
+                phone, deviceid, fp["openudid"], fp["vendorid"],
+            )
+            body_code = payload.get("code") if isinstance(payload, dict) else None
+            if http_code == 200 and body_code == 0:
+                logger.info("[Bridge] 塔吉多验证码已发送: %s****%s", phone[:3], phone[7:])
+                self.emit_event(
+                    "toast",
+                    message=f"验证码已发送到 {phone[:3]}****{phone[7:]}",
+                    color="#2f7d4a",
+                )
+            else:
+                message = str(payload.get("message", payload)) if isinstance(payload, dict) else str(payload)
+                self.emit_event(
+                    "toast",
+                    message=f"发送验证码失败: {message}",
+                    color="#b04b44",
+                )
+        except Exception as exc:
+            logger.exception("[Bridge] 塔吉多发送验证码失败")
+            self.emit_event("toast", message=f"发送验证码失败: {exc}", color="#b04b44")
+
+    def _run_tajiduo_sms_login_backend(self, phone: str, code: str):
+        phone = str(phone or "").strip()
+        code = str(code or "").strip()
+        if len(phone) != 11:
+            self.emit_event("toast", message="请输入正确的 11 位手机号", color="#b04b44")
+            return
+        if len(code) < 4:
+            self.emit_event("toast", message="请输入收到的短信验证码", color="#b04b44")
+            return
+        try:
+            from ...clients.tajiduo_login import complete_sms_login
+
+            deviceid, fp = self._tajiduo_login_runtime()
+            result = complete_sms_login(
+                phone, code, deviceid, fp["openudid"], fp["vendorid"],
+            )
+            self._persist_tajiduo_login(result, phone=phone)
+            self.emit_event(
+                "toast",
+                message=f"塔吉多验证码登录成功（UID {result.get('uid') or '-'}）",
+                color="#2f7d4a",
+            )
+        except Exception as exc:
+            logger.exception("[Bridge] 塔吉多验证码登录失败")
+            self.emit_event("toast", message=f"塔吉多验证码登录失败: {exc}", color="#b04b44")
 
     def _query_tajiduo_daily_backend(self):
         """后台查询塔吉多（异环）每日任务进度。

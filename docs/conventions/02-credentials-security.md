@@ -85,3 +85,29 @@ DS 签名: `generate_cn_dynamic_secret(body=None, query=params)` + salt `DS_SALT
   页面内**不允许残留裸 HusInput 接收凭据**。
 - 测试注意：HusInput 内部真实 TextInput 在 contentItem（Loader）里，不在 children 链，
   实例化测试直接对 HusInput 自身 `property("text")` 断言。
+
+### 签到凭证获取入口（2026-11-18 补齐 QML）
+
+QML 迁移后凭据获取按钮一度是死的（有按钮无 onClicked），只留下"手动粘贴"。现接线：
+
+| 页面 | 入口 | 后端 | 产物 |
+|---|---|---|---|
+| 抽卡/米游社 | 打开登录页 | `openMihoyoLoginPage` | 浏览器打开米游社登录页 |
+| 抽卡/米游社 | 抓取 Cookie（Edge/Chrome/Brave） | `fetchMihoyoCookie` → `extract_cookie_from_browser` | `mihoyo_sign.cookie`（manager 加密） |
+| 抽卡/米游社 | 扫码登录 | `runMihoyoQrLogin` → `complete_qrcode_login` | cookie + `stoken_cookie`（含便笺 stoken） |
+| 抽卡/米游社 | 执行签到 | `runMihoyoSign(cookieText)` | 先同步保存输入框 Cookie，再按勾选游戏签到并写 tracker |
+| 鸣潮/库街区 | 手机号+验证码登录（APP/H5） | `runWuwaKujiequCodeLogin` → `login_with_code` | token/did 进 DPAPI credentials 表；phone/source/roles/profile(不含密钥) 进配置 |
+| 鸣潮/库街区 | ADB 抓取 Token | 已有 | token/did 加密入库 |
+| 异环/塔吉多 | 密码登录 | `runTajiduoPasswordLogin` → `complete_password_login` | token/deviceid/uid/phone/password 写配置 |
+| 异环/塔吉多 | 发送验证码 + 验证码登录 | `sendTajiduoSmsCode` / `runTajiduoSmsLogin` | 同上；验证码登录不覆盖已有密码 |
+| 终末地/森空岛 | 打开登录页 + 从浏览器抓取 Token | `openSklandLoginPage` / `fetchSklandToken` → `extract_token_from_browser` | `skendfield_sign.token`（manager 加密） |
+
+森空岛官方登录接口是存在的（手机号密码 `as.hypergryph.com/user/auth/v1/token_by_phone_password`、
+短信 `send_phone_code` + `token_by_phone_code`、扫码 `gen_scan/login` + `scan_status` +
+`token_by_scan_code`），但自建登录要过数美 `dId` 设备指纹和 Geetest 风控。本工具
+不自造指纹，改走**官方网页正常登录**后的 `ACCOUNT` Cookie，调用
+`web-api.skland.com/account/info/hg` 换 token，等价于用户本人在浏览器登录。
+库街区验证码仍需先在库街区 App/网页端取得（官方没有开放发送短信验证码接口）；
+塔吉多 deviceid 留空时会自动生成并回填。
+`mihoyo_sign` 的 `stoken_cookie` 在浏览器抓取未带回 stoken 时保留旧值，避免把扫码得到的
+便笺登录态覆盖掉。

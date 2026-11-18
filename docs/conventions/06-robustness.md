@@ -86,6 +86,12 @@
 - **排查手法**：`flow_failures.window_title` + 失败日志里的 `region=(left, top, width, height)` 能直接看出选中的是不是主窗口——客户端主窗口至少几百像素，出现个两位数宽高必是宠物/气泡/工具窗。
 - 回归：`tests/suite_flow_window_pick_20261117.py`（尺寸门槛纯函数 / 事故复现 / 先尺寸后关键词 / 双大窗取面积 / 只有小窗回退 / 关键词优先 / 句柄稳定性 / `_find_window_by_filters` 同源）。
 
+### 同 PID 模态弹窗不得算遮挡（2026-11-18 #431）
+- **事故**：鸣潮 WuwaLauncher 11:37 启动官方启动器后弹「启动器版本更新」模态框（独立顶层窗 `krupdatereminderdlg`，同 `launcher_main.exe` PID）。`_window_obscured_ratio` 按 `WindowFromPoint` 归属采样，把同 PID 弹窗全部算成遮挡 → 比例 100% → OCR 防护拒绝识别；同时该窗口标题 `krupdatereminderdlg` 不含 `window_title_keywords`，`_find_window_by_filters` 也按归属不符跳过。于是步骤1 扫不到「更新」按钮，步骤3 点「进入游戏」被模态框吞掉，步骤4 等进程空转 40 分钟。
+- **口径**：遮挡防护的目标是拦截**其他进程**窗口的文字污染；目标应用自己的模态/提醒窗属于同一应用内容，必须放行。`_window_obscured_ratio` 对 `WindowFromPoint` 命中窗口与目标窗口 PID 相同的情况不计覆盖（`_foreground_click_block_reason` 早在 11-17 已同口径放行同 PID 点击）。
+- **配置侧**：标题「启动器版本更新」同样含「更新」，`legacy` 子串匹配会先点标题。步骤配 `ocr_match_mode: "exact"` 只匹配正文按钮；WuwaLauncher 步骤1 已接线。
+- 回归：`tests/suite_wuwa_launcher_update_modal_20261118.py`（同 PID/跨进程遮挡比例、exact 避开标题、两份 flow_configs 接线）。
+
 ### 流程结束关闭进程 (重要)
 
 - `runtime/foreground_flow_runner.py` 的 `close_flow_processes(logger, flow_key, pid, process_names)` 是统一收口：先按 PID 杀**整棵进程树**（`ProcessSupervisor.safe_kill_process`），再按 `window_process_names` **按名兜底**清残留。

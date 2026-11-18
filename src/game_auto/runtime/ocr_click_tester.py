@@ -13,6 +13,7 @@ import threading
 
 import pyautogui
 import win32gui
+import win32process
 
 
 def _guarded_click(*args, **kwargs):
@@ -1002,6 +1003,10 @@ def _window_obscured_ratio(hwnd: int, samples: int = 5) -> Optional[float]:
         except Exception:
             root_owner = hwnd
         try:
+            _, target_pid = win32process.GetWindowThreadProcessId(hwnd)
+        except Exception:
+            target_pid = 0
+        try:
             # Win8+ 需进程声明 DPI 感知，否则 WindowFromPoint 返回的是缩放后坐标
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
         except Exception:
@@ -1023,6 +1028,17 @@ def _window_obscured_ratio(hwnd: int, samples: int = 5) -> Optional[float]:
                     continue
                 total += 1
                 if hit == hwnd or hit == root_owner:
+                    continue
+                # 目标进程自己的顶层弹窗（模态更新提醒等，独立 HWND 但同 PID）
+                # 不算遮挡：2026-11-18 鸣潮启动器 krupdatereminderdlg 盖住主窗口，
+                # 采样比例恒为 100% → OCR 拒绝识别 → 「等待进入游戏」空转 40 分钟。
+                # 点击防护（_foreground_click_block_reason）早已同口径放行同 PID
+                # 窗口，OCR 侧补齐，否则自己的弹窗永远无法被 OCR 点掉。
+                try:
+                    _, hit_pid = win32process.GetWindowThreadProcessId(hit)
+                except Exception:
+                    hit_pid = 0
+                if target_pid and hit_pid == target_pid:
                     continue
                 # 子窗口（控件）不算遮挡
                 try:

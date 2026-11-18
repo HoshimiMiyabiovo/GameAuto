@@ -274,6 +274,60 @@ class SkEndfieldClient:
 # 对外接口
 # ---------------------------------------------------------------------------
 
+def extract_token_from_browser(browser_name: str = "edge") -> Dict[str, str]:
+    """从浏览器登录态读取森空岛 Token（不需账号密码/设备指纹）。
+
+    森空岛网页登录后，``web-api.skland.com/account/info/hg`` 用 ``ACCOUNT``
+    Cookie 就能换到鹰角通行证 token（即本模块签到用的 token）。这条路径等价于
+    用户在官方页面正常登录，避免自建密码/短信/扫码登录时的数美设备指纹与
+    Geetest 风控。
+    """
+    import browser_cookie3
+
+    browser_name = str(browser_name or "edge").strip().lower()
+    loader = {
+        "edge": getattr(browser_cookie3, "edge", None),
+        "chrome": getattr(browser_cookie3, "chrome", None),
+        "brave": getattr(browser_cookie3, "brave", None),
+    }.get(browser_name)
+    if loader is None:
+        raise SkEndfieldSignError(f"暂不支持浏览器：{browser_name}")
+
+    account = ""
+    for domain in ("skland.com", "hypergryph.com"):
+        try:
+            jar = loader(domain_name=domain)
+        except Exception:  # noqa: BLE001
+            continue
+        for cookie in jar:
+            if str(getattr(cookie, "name", "")).upper() == "ACCOUNT":
+                value = str(getattr(cookie, "value", "") or "").strip().strip('"')
+                if value:
+                    account = value
+                    break
+        if account:
+            break
+    if not account:
+        raise SkEndfieldSignError(
+            f"没有在 {browser_name} 里找到森空岛登录 Cookie，"
+            "请先在打开的森空岛网页完成登录后再抓取"
+        )
+
+    resp = _request(
+        "GET",
+        "https://web-api.skland.com/account/info/hg",
+        headers={"Cookie": f"ACCOUNT={account}"},
+    )
+    if resp.get("code") != 0:
+        raise SkEndfieldSignError(
+            f"读取森空岛账号信息失败: {resp.get('message', resp.get('msg', resp))}"
+        )
+    token = str((resp.get("data") or {}).get("content") or "").strip()
+    if not token:
+        raise SkEndfieldSignError("森空岛账号信息里没有 token（登录态可能已过期）")
+    return {"token": token, "browser": browser_name}
+
+
 def perform_sign(token: str, server: str = "cn") -> Dict[str, Any]:
     client = SkEndfieldClient(token=token, server=server)
     try:
