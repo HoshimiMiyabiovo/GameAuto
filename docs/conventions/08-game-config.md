@@ -266,7 +266,8 @@
   `data/backups/app_config_before_okww383_20261115.json`）。
   **回滚** = 把四字段改回 `D:\Program Files\mc\ok-ww-v1.4.81\ok-ww\...`
   （D 盘安装全程未动，随时可切回）。
-- **验证**：壳冒烟通过——pythonw 引擎窗口标题 `OK-WW v3.8.3 China`，
+- **验证**：壳冒烟通过——pythonw 引擎窗口标题 `OK-WW v3.8.3 China`
+  （2026-11-19 本地补丁后原生标题为 `python`，见下条），
   启动日志确认从 working/main.py 起跑且 custom_tabs 生效。唯一报错是
   UpdateCard 版本列表查询失败（手工 repo/ 无壳期望的 git 元数据）——
   **预期且有益**：MANUAL_UPDATE 下自更新链路本来就应瘫痪，防补丁被冲。
@@ -285,3 +286,9 @@
   拉引擎（cd working → ..\python\pythonw.exe main.py），非提权、无弹窗、
   已实测出窗可杀；bat 内容必须纯 ASCII（cmd 按 GBK 读，UTF-8 中文注释
   会变乱码命令）。一条龙 `-t 1 -e` 任务模式不走管理器，不受影响。
+- **窗口标题改名 python（2026-11-19 用户要求）**：working 树两处本地补丁——
+  `config.py` 的 `gui_title` 改 `python`（同日志/托盘/通知的应用名），
+  `ok/ui/qt/MainWindow.py` 的 `setWindowTitle` 只传 title（版本/档案仍显示在
+  标题栏徽章）。改前备份 `config.py.bak_20261119`、`MainWindow.py.bak_20261119`；
+  原生窗口标题实测为纯 `python`。**重装/换血会冲掉，按此重打**；不影响进程名
+  （任务管理器仍是 pythonw.exe）与一条龙监控。

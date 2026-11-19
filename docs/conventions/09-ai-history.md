@@ -69,9 +69,10 @@ kilo/teleagent/codearts 等）以 `~` 相对或客观安装位置为准，属机
    摘要（600），返回全文进 output（20 万帽）。**Copilot 例外**：存档只有
    invocationMessage 展示消息、无返回字段。
 3. **模型名**：有逐条/会话级 modelID 字段的来源按**原值**记录（不臆测映射，
-   2026-11-17 用户纠偏；TeleAgent 的 `chat-flash`、码道的
-   `deepseek-v4.1-flash-1017` 同此口径）；客户端内部代号/无字段来源才进
-   `MODEL_ALIASES` 或 `TRAE_FIXED_MODEL`（用户拍板表，ai_history_model_recover.py）。
+   2026-11-17 用户纠偏；码道的 `deepseek-v4.1-flash-1017` 是真实 ID 同此口径）；
+   客户端内部代号/无字段来源才进 `MODEL_ALIASES` 或 `TRAE_FIXED_MODEL`
+   （用户拍板表，ai_history_model_recover.py；TeleAgent 的 `chat-flash` 属内部
+   路由名，2026-11-19 拍板 = deepseek-v4.1-flash-1017，原值留 raw 可追溯）。
    会话 note 的模型标注两种格式都认：「模型：xxx」（Hermes/WorkBuddy/妙手）与
    「· 模型 xxx」无冒号（Kilo/TeleAgent/码道 fetch）。
 4. **正文本地不存在的来源不上库**：码道桌面端 chatSessions jsonl 曾被误判

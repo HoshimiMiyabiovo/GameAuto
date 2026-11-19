@@ -107,6 +107,11 @@ MODEL_ALIASES = {
     "dfmodel": "deepseek-v4.1-flash-1017",
     "qfmodel": "qwen3.8-flash",
     "lmodel": "qwen4-max-preview (qoduck)",   # qoduck = qwen4-max-preview 匿名内测版
+    # TeleAgent 的 chat-flash 是客户端内部路由名（非公开模型 ID），底层模型
+    # 2026-11-19 用户拍板 = deepseek-v4.1-flash-1017（天翼词元平台公开列该模型，
+    # 与码道内核记录的真实 ID 一致）；原值留在 models_raw / model_raw /
+    # note_model_raw 可追溯。
+    "chat-flash": "deepseek-v4.1-flash-1017",
     # 注意：Kilo 的 modelID（particle-ai/particle-1:free）**不在映射表**——它有
     # 真实逐条字段，按原值记（2026-11-17 用户纠正：手工指定模型只给没有字段的
     # 来源，如 Trae；有字段的来源用真实字段，不许臆测映射）。

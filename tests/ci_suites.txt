@@ -35,6 +35,7 @@ suite_wuwa_launcher_cleanup_20261115.py
 suite_wuwa_launcher_update_modal_20261118.py
 suite_baijing_update_prompt_20261105.py
 suite_bridge_batch_email_20261021.py
+suite_builtin_okww_gui_20261119.py
 suite_cj_script_update_20261107.py
 suite_click_guard_20261117.py
 suite_catpaw_capture_20261117.py
@@ -141,3 +142,4 @@ suite_zzz_shop_entry_20261105.py
 !suite_nikki_page_matrix_20261104.py  # 硬依赖 data/artifacts 未入库的 17 张实机截图矩阵（2026-11-16 CI 首轮实锤：全新 checkout 无此文件）
 !suite_zzz_monthly_main_screen_20261021.py  # 硬依赖本机 app_config.json 的 exe_from_app 解析（同上探针实锤）
 !suite_zzz_shop_templates_20261021.py  # 模板质量对比读用户个人目录 C:/Users/admin/Pictures/Screenshots 的真实截图（真机专用）
+suite_baijing_echo_allclaimed_cleared_20261119.py

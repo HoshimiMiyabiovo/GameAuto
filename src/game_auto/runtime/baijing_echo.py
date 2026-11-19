@@ -28,6 +28,7 @@ import pyautogui
 from ..settings.paths import TEMPLATES_DIR, WORKFLOW_DB_PATH
 from .baijing_common import (
     MAX_CLOSE_ATTEMPTS,
+    TEMPLATE_REFERENCE_WIDTH,
     _abs_region,
     _capture_daily_list_snapshot,
     _click_ratio,
@@ -235,6 +236,15 @@ ECHO_AUTOFORM_TEXTS = ("编队成员数量不足",)
 
 ECHO_AUTOFORM_CONFIRM_FALLBACK = (0.623, 0.632)   # 弹窗「确认」（实测 (1196,683)）
 
+
+# 节点已清 ✅ 标记（绿色双勾图标，2026-11-18 失败截图裁剪，1920 参考分辨率）。
+# OCR 只见「纯净回声·X」文字不见图标；已清节点（用户手动清的 marks 不知道）
+# 点开照样有「开始收录」，不拦住就是白白重打一场还可能战败误报（#427 实锤：
+# E 已 ✅ 仍补打 → 缺轻卫/铁御几十秒即败 → 报失败）。
+ECHO_NODE_CLEARED_TEMPLATE = str(TEMPLATES_DIR / "白荆回廊-回声猎区节点已清.png")
+ECHO_NODE_CLEARED_THRESHOLD = 0.75    # 实测命中 0.81~1.0（奖励页/无关区噪声 ≤0.48）
+# ✅ 相对标签中心的探区（1920 口径 px）：x +30~+130、y ±60；随窗宽缩放
+ECHO_NODE_CLEARED_PROBE = (30, 130, 60)
 
 # 地图左下「猎区累计分贝奖励」页：入口 OCR 定位（禁盲点），「一键领取」幂等
 ECHO_MAP_REWARD_ENTRY = ("猎区累计分贝奖励",)
@@ -514,6 +524,38 @@ def _echo_pick_label(labels: List[Dict], letter: str) -> Optional[Dict]:
     if len(labels) == len(ECHO_NODE_LETTERS):
         return labels[ECHO_NODE_LETTERS.index(letter)]
     return None
+
+
+def _echo_node_cleared(logger: logging.Logger, hwnd, label: Dict) -> bool:
+    """节点标签右侧 ✅（绿色双勾）模板命中 = 该节点已收录。
+
+    已清节点点开详情面板照样有「开始收录」（可重打），OCR 无法区分「待打」
+    和「已清」，不拦住就是白白重打一场、还可能像 #427 那样战败误报。探区取
+    标签中心右侧一条带（偏移按 1920 参考随窗宽缩放）。模板缺失/窗口失效/
+    标签出界一律返回 False——fail-open 退回原「按 marks 补打」行为，宁可多打
+    一场也不能因图标识别失败漏奖励。
+    """
+    if not hwnd:
+        return False
+    rect = _abs_region(hwnd, (0.0, 0.0, 1.0, 1.0))
+    if not rect:
+        return False
+    ax, ay, aw, ah = rect
+    if not aw or not ah:
+        return False
+    cx, cy = label.get("center") or (0, 0)
+    if not (ax <= cx <= ax + aw and ay <= cy <= ay + ah):
+        return False
+    k = aw / float(TEMPLATE_REFERENCE_WIDTH)
+    dx0, dx1, dy = ECHO_NODE_CLEARED_PROBE
+    lx, ly = cx - ax, cy - ay
+    frac = ((lx + dx0 * k) / aw, (ly - dy * k) / ah,
+            (lx + dx1 * k) / aw, (ly + dy * k) / ah)
+    hit = _template_center(
+        logger, hwnd, ECHO_NODE_CLEARED_TEMPLATE,
+        frac_region=frac, threshold=ECHO_NODE_CLEARED_THRESHOLD,
+    )
+    return hit is not None
 
 
 
@@ -971,12 +1013,26 @@ def _echo_boss_claim_ladder(logger: logging.Logger, hwnd, stop_check=None) -> Tu
 
 
 
+def _echo_reward_page_state(has_title: bool, has_claim_all: bool, n_claimed: int) -> str:
+    """奖励页判定（纯函数，可桩测）：返回 claim_all / claimed / unknown。
+
+    双证据防地图本体同名入口字样误判（单标题必误判）；第二证据「一键领取」或
+    ≥1 行「已领取」都行——#428 实锤领齐后「一键领取」按钮隐藏、只剩逐档
+    「已领取」，此时是幂等成功不是失败。仅标题（地图本体）→ unknown。
+    """
+    if not has_title:
+        return "unknown"
+    if has_claim_all:
+        return "claim_all"
+    return "claimed" if n_claimed > 0 else "unknown"
+
+
 def _echo_map_rewards_claim(logger: logging.Logger, hwnd, stop_check=None) -> Tuple[bool, str]:
     """领地图左下「猎区累计分贝奖励」：入口 OCR 定位 → 一键领取 → 关 X 回地图。
 
-    入口禁比例盲点（活动改版入口可能消失）；奖励页双证据 = 标题「猎区累计
-    分贝奖励」+「一键领取」（地图本体也有同名入口字样，单标题必误判）；
-    「一键领取」幂等（已领齐时无操作）。返回 (是否完成, detail)。
+    入口禁比例盲点（活动改版入口可能消失）；奖励页判定走 _echo_reward_page_state
+    （标题 +「一键领取」或「已领取」）。领齐后「一键领取」隐藏（#428 实锤）→
+    直接幂等收尾关页返回成功，不再误报失败。返回 (是否完成, detail)。
     """
     hit = _ocr_best_match(logger, ECHO_MAP_REWARD_ENTRY, hwnd, min_conf=0.55)
     if not hit:
@@ -986,37 +1042,46 @@ def _echo_map_rewards_claim(logger: logging.Logger, hwnd, stop_check=None) -> Tu
     time.sleep(2.0)
     items = _scene_results(logger, hwnd)
     texts = [_normalize_text(str(it.get("text") or "")) for it in items]
-    if not (
-        any("猎区累计分贝奖励" in t for t in texts if t)
-        and any("一键领取" in t for t in texts if t)
-    ):
+    has_title = any("猎区累计分贝奖励" in t for t in texts if t)
+    has_claim_all = any("一键领取" in t for t in texts if t)
+    n_claimed = sum(1 for t in texts if "已领取" in t)
+    page = _echo_reward_page_state(has_title, has_claim_all, n_claimed)
+    if page == "unknown":
         _record_step_failure(
-            logger, hwnd, "俱乐部回声猎区:分贝奖励页", "点入口后未见奖励页（标题+一键领取双证据不满足）")
+            logger, hwnd, "俱乐部回声猎区:分贝奖励页", "点入口后未见奖励页（标题缺失，或仅标题无一键领取/已领取证据）")
         return False, "分贝奖励页未确认，不盲点"
-    claim = _ocr_best_match(
-        logger, ECHO_MAP_REWARD_CLAIM_ALL, hwnd,
-        frac_region=(0.5, 0.75, 1.0, 1.0), min_conf=0.55,
-    )
-    if claim:
-        _pyautogui_click_guarded(*claim["center"])
+    if page == "claimed":
+        logger.info(
+            f"[白荆回廊·俱乐部] 回声猎区：分贝奖励已领齐（{n_claimed} 行「已领取」、无「一键领取」）→ 幂等收尾"
+        )
     else:
-        _click_ratio(logger, hwnd, ECHO_MAP_REWARD_CLAIM_ALL_FALLBACK, "猎区分贝奖励一键领取(比例兜底)")
-    logger.info("[白荆回廊·俱乐部] 回声猎区：已点「一键领取」")
-    time.sleep(2.0)
-    for _ in range(3):  # 领取弹窗收尾
-        items = _scene_results(logger, hwnd)
-        cont = next(
-            (it for it in items if "点击屏幕继续" in str(it.get("text") or "")), None)
-        if not cont:
-            break
-        _pyautogui_click_guarded(*cont["center"])
-        time.sleep(1.2)
+        claim = _ocr_best_match(
+            logger, ECHO_MAP_REWARD_CLAIM_ALL, hwnd,
+            frac_region=(0.5, 0.75, 1.0, 1.0), min_conf=0.55,
+        )
+        if claim:
+            _pyautogui_click_guarded(*claim["center"])
+        else:
+            _click_ratio(logger, hwnd, ECHO_MAP_REWARD_CLAIM_ALL_FALLBACK, "猎区分贝奖励一键领取(比例兜底)")
+        logger.info("[白荆回廊·俱乐部] 回声猎区：已点「一键领取」")
+        time.sleep(2.0)
+        for _ in range(3):  # 领取弹窗收尾
+            items = _scene_results(logger, hwnd)
+            cont = next(
+                (it for it in items if "点击屏幕继续" in str(it.get("text") or "")), None)
+            if not cont:
+                break
+            _pyautogui_click_guarded(*cont["center"])
+            time.sleep(1.2)
     _click_ratio(logger, hwnd, ECHO_MAP_REWARD_CLOSE_FALLBACK, "猎区分贝奖励页关闭")
     time.sleep(1.5)
     ok, _items, _exp = _echo_wait_map(logger, hwnd, stop_check, timeout=10.0)
     if not ok:
         return False, "关闭奖励页后未回猎区地图"
-    return True, "猎区累计分贝奖励已一键领取"
+    return True, (
+        "猎区累计分贝奖励已领齐（无可领）" if page == "claimed"
+        else "猎区累计分贝奖励已一键领取"
+    )
 
 
 
@@ -1221,6 +1286,16 @@ def _echo_zone_run_content(logger: logging.Logger, hwnd, stop_check=None) -> Dic
                 logger, hwnd, f"俱乐部回声猎区:节点{letter}定位", out["detail"]
             )
             break
+        if _echo_node_cleared(logger, hwnd, label):
+            # 地图 ✅ = 已收录（用户手动清的 marks 不知道，#427 实锤重打既无收益
+            # 还可能战败误报）：跳过 + 补记已清标记，后续周期直接走 marks 跳过
+            logger.info(
+                f"[白荆回廊·俱乐部] 回声猎区：节点 {letter} 地图已带 ✅（已收录）→ 跳过，补记已清标记"
+            )
+            cleared = sorted(set(cleared) | {letter})
+            _echo_save_marks(logger, expiry, cleared)
+            out["skipped"] = sorted(set(out["skipped"]) | {letter})
+            continue
         _pyautogui_click_guarded(*label["center"])
         logger.info(f"[白荆回廊·俱乐部] 回声猎区：点击节点 {letter} 标签 @ {label['center']}")
         claim = _echo_panel_claim(logger, hwnd, stop_check)

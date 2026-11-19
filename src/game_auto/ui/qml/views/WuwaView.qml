@@ -18,6 +18,12 @@ Item {
     property var dailyData: ({})
     property bool dailyLoading: false
 
+    // 内置 ok-ww（项目 data/okww 副本）GUI 启停状态
+    property var okwwGui: ({})
+    readonly property bool okwwGuiInstalled: !!okwwGui.installed
+    readonly property bool okwwGuiRunning: !!okwwGui.running
+    readonly property bool okwwGuiBusy: !!okwwGui.busy
+
     // 库街区凭据状态：token/did 已加密存入数据库，界面不回填明文
     property bool tokenConfigured: false
     property bool didConfigured: false
@@ -25,20 +31,43 @@ Item {
     // 页面激活标志：仅在页面可见时创建 delegate，避免 width=0 时创建后不更新
     readonly property bool pageActive: bridge.currentView === "wuwa"
 
+    function refreshBuiltinOkww() {
+        var raw = bridge.getBuiltinOkwwState()
+        try { root.okwwGui = JSON.parse(raw || "{}") } catch(e) { root.okwwGui = ({}) }
+        // 启动/关闭过程中不要被中间态把开关拨回去，结束后再同步真实状态
+        if (!root.okwwGuiBusy) builtinOkwwSwitch.checked = root.okwwGuiRunning
+    }
+
+    function toggleBuiltinOkww(on) {
+        if (!bridge.setBuiltinOkwwEnabled(on)) refreshBuiltinOkww()
+    }
+
     Component.onCompleted: {
         bridge.loadWuwaGacha()
         bridge.loadCredentials()
         bridge.loadWuwaDailyCache()
+        refreshBuiltinOkww()
     }
 
     property double _lastVisibleTs: 0
     // 视图从隐藏→显示时按需灌凭据/缓存，30s 节流
     onVisibleChanged: {
-        if (visible && Date.now() - _lastVisibleTs > 30000) {
-            _lastVisibleTs = Date.now()
-            bridge.loadCredentials()
-            bridge.loadWuwaDailyCache()
+        if (visible) {
+            refreshBuiltinOkww()
+            if (Date.now() - _lastVisibleTs > 30000) {
+                _lastVisibleTs = Date.now()
+                bridge.loadCredentials()
+                bridge.loadWuwaDailyCache()
+            }
         }
+    }
+
+    Timer {
+        id: builtinOkwwTimer
+        interval: 2500
+        repeat: true
+        running: root.visible
+        onTriggered: root.refreshBuiltinOkww()
     }
 
     Connections {
@@ -101,6 +130,63 @@ Item {
         ColumnLayout {
             width: parent.width
             spacing: 14
+
+            // 内置 ok-ww GUI 启停（直启引擎，跳过 ok-ww.exe 管理器）
+            HusCard {
+                Layout.fillWidth: true
+                title: "内置 ok-ww"
+                padding: 16
+
+                contentItem: ColumnLayout {
+                    spacing: 10
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+
+                        HusSwitch {
+                            id: builtinOkwwSwitch
+                            text: root.okwwGuiRunning ? "已启动" : "启动"
+                            checked: false
+                            loading: root.okwwGuiBusy
+                            enabled: root.okwwGuiInstalled && !bridge.isRunning && !root.okwwGuiBusy
+                            onClicked: root.toggleBuiltinOkww(checked)
+                        }
+
+                        HusText {
+                            text: {
+                                if (!root.okwwGuiInstalled) return "未找到内置安装"
+                                if (root.okwwGuiBusy) return "正在处理..."
+                                if (root.okwwGuiRunning)
+                                    return "运行中" + (root.okwwGui.pid ? "（PID " + root.okwwGui.pid + "）" : "")
+                                return "未运行"
+                            }
+                            font.pixelSize: Math.round(12 * root.fs)
+                            color: root.okwwGuiRunning ? "#16a34a" : "#71717a"
+                        }
+
+                        Item { Layout.fillWidth: true }
+
+                        HusText {
+                            visible: !!root.okwwGui.root
+                            text: root.okwwGui.root || ""
+                            font.pixelSize: Math.round(11 * root.fs)
+                            color: "#a1a1aa"
+                            elide: Text.ElideMiddle
+                            Layout.maximumWidth: Math.round(420 * root.fs)
+                        }
+                    }
+
+                    HusText {
+                        text: "直接拉起内置副本的 GUI 引擎（跳过 ok-ww.exe 管理器，不触发 UAC 与自动更新）；" +
+                              "关闭开关即结束该引擎进程。一条龙运行中不可操作。"
+                        font.pixelSize: Math.round(12 * root.fs)
+                        color: "#71717a"
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+                }
+            }
 
             // Kujiequ sign section
             HusCard {

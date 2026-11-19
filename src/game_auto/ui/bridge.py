@@ -205,6 +205,7 @@ class UiBridge(
         self._tool_install_json = "{}"
         self._tool_install_running = False
         self._tool_install_cancel = None
+        self._okww_gui_busy = False
         # ── 磁盘管理页：扫描任务状态（全局同时一个）──
         self._disk_scan_running = False
         self._disk_scan_cancel = None

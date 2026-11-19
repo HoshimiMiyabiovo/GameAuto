@@ -258,9 +258,11 @@ def test_recover_opencode_raw_and_note_model():
             check("逐条级，user 不算建模（2 assistant）",
                   r.get("level") == "per_message" and r.get("n_modeled") == 2
                   and r.get("n_records") == 3, (r.get("level"), r.get("n_modeled")))
-            check("TeleAgent 内部路由名 chat-flash 按原值，不臆测映射",
+            check("TeleAgent chat-flash 是内部路由名 → 恢复器存原值，"
+                  "canonical 走别名（2026-11-19 用户拍板 = deepseek-v4.1-flash-1017）",
                   r.get("models") == {"chat-flash": 2}
-                  and rec.canonical_model("chat-flash") == "chat-flash", r.get("models"))
+                  and rec.canonical_model("chat-flash") == "deepseek-v4.1-flash-1017",
+                  (r.get("models"), rec.canonical_model("chat-flash")))
             check("turn ts 用 time.created 毫秒",
                   [t[0] for t in r.get("turns", [])] == ["2000", "2000"], r.get("turns"))
 

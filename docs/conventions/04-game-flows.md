@@ -334,6 +334,12 @@ This file mirrors important repository-level development notes inside the projec
   后台 python 形态一直挂着。现 `AutomationController.shutdown_module_runtime()`
   （停当前会话 + 扫杀孤儿）由 `gui._cleanup_on_quit` 显式调用；回归
   `tests/suite_module_runtime_shutdown_20261117.py`。
+- **GUI 内置 ok-ww 开关（2026-11-19）**：鸣潮专项页顶部「内置 ok-ww」开关用内置副本的
+  `data/apps/ok-ww/python/pythonw.exe main.py` 直启 GUI 引擎（同 `start-ok-ww-direct.bat`，
+  不走 ok-ww.exe 管理器、不触发 UAC/自动更新），关闭开关结束该 pythonw 进程。只认
+  项目 `data/` 下的副本（当前 `data/okww/ok-ww-v3.8.3`；外置安装被忽略）；一条龙运行中禁用；子进程
+  PYTHONPATH 剥离项目 `src`（沿用 2026-11-16 的 onnxocr 坑护栏）。回归
+  `tests/suite_builtin_okww_gui_20261119.py`。
 - **收尾必须清理官方启动器（2026-11-15 事故固化）**：官方启动器 launcher.exe
   （主进程 launcher_main.exe，装**独立目录**）在鸣潮任务收尾后残留，会自我
   激活拉到前台遮挡下一个游戏——09:27 鸣潮收尾杀漏 → 09:35:20 暖暖启动时

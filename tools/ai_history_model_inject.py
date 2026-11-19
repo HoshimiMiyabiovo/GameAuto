@@ -63,7 +63,7 @@ TL_LIMIT = 40          # 每会话注入的逐条时间线上限（明细面板�
 # 渲染逻辑锚点：确认目标页面确实是带模型字段/别名替换的新模板
 RENDER_ANCHORS = ("const MODELS =", "modelbox", "s.model_kind", "const ALIAS =")
 # 页面主显示里不该再出现的内部代号（raw 字段里保留不算）
-FORBIDDEN_DISPLAY = ("dfmodel", "qfmodel", "lmodel", "copilot/")
+FORBIDDEN_DISPLAY = ("dfmodel", "qfmodel", "lmodel", "copilot/", "chat-flash")
 
 
 def load_index() -> Tuple[Dict[str, dict], dict, Dict[str, str]]:

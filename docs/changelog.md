@@ -10,6 +10,13 @@
 
 ## 2026-11-19
 
+- feat: 鸣潮专项页新增「内置 ok-ww」开关：直启 `data/okww` 内置副本的 `pythonw main.py` 引擎（跳过 ok-ww.exe 管理器，避免 UAC 与自动更新），关闭即结束该引擎进程；只认项目 `data/` 下的副本，一条龙运行中禁用，子进程环境剥离项目 `src` 的 PYTHONPATH；回归 `tests/suite_builtin_okww_gui_20261119.py`。
+- chore: 内置 ok-ww 窗口标题改为纯 `python`（working 树补丁：`config.py` gui_title + `MainWindow.setWindowTitle` 只传 title，版本留在标题栏徽章；改前备份 `.bak_20261119`，重装后需重打，08-game-config 已记）。任务管理器进程名仍是 pythonw.exe，一条龙监控不受影响。
+- fix: 排查 Qoder/码道签到失败（#436/#437/#441，失败截图+Qoder 主日志实锤）——① Qoder 官方每日领积分活动当天起下线：主日志 `hasClaimableCampaign` 自启动起=false（11-16/17/18 均为 true→领取后 false 的正常闭环），权益中心只剩「首购订阅加赠 Credits」推广页、无领取按钮，流程步骤1 找不到「领取/已领取」模板而误报；用户确认禁用 QODER 流程（enabled=false + _comment 留恢复指引）。② 码道冷启动恢复上次会话详情页（页内无「Agent Space」字样）+版本更新待重启弹窗，3 轮等待主界面全败；签到操作的是标题栏右上角、不依赖主界面，步骤1 target_text 加「新建会话」「CodeArts Agent」兜底特征（OCR smart 子串可命中「④新建会话」「Space - CodeArts Agent」，任一出现即视为窗口就绪）；走真实 `_load_flow_config` 验证 10 项 ALL PASS（改动仅 flow_configs.json 数据，未动代码）。
+
+- fix: 回声猎区双误报修复（用户贴 11-18 10:23 两张失败截图）——#428 分贝奖励页领齐后游戏隐藏「一键领取」（页内只剩逐档「已领取」）被误报「未见奖励页」，判定抽成 `_echo_reward_page_state` 三态（标题+一键领取|≥1已领取=页开，仅已领取=幂等收尾关页成功）；#427 节点 E 用户手动已清（✅）但 marks 不知道，已清节点面板照样有「开始收录」→ 流程白白重打、缺轻卫/铁御几十秒即败还报失败，新增 `_echo_node_cleared` 模板匹配标签右侧 ✅（模板从失败截图裁剪，实拍命中 0.81~1.0/噪声≤0.48 阈值 0.75）命中即跳过并补记 marks；回归 suite_baijing_echo_allclaimed_cleared_20261119（16 检查）+ club_activity 回放 18 passed。另确认 WuwaLauncher 12:17「游戏启动确认」失败截图即 ec4588f 已修事故的原始现场（套件 3 passed，无新改动）
+
+- feat: TeleAgent 模型口径落地——`chat-flash` 认定为客户端内部路由名，`MODEL_ALIASES` 映射 = deepseek-v4.1-flash-1017（2026-11-19 用户拍板；天翼词元平台公开列该模型佐证，与码道内核真实 ID 一致，原值留 models_raw 可追溯）+ inject 主显示护栏 FORBIDDEN_DISPLAY 收编 chat-flash + 重跑 scan/inject 回填 F: 展示页（582 会话 577 有模型字段）
 - fix: AI 对话史 TeleAgent/码道最终页模型列空——model_recover 补 `recover_teleagent`/`recover_codearts`（opencode 变体 raw 逐条 modelID 按原值：chat-flash / deepseek-v4.1-flash-1017）+ `note_model` 兼容「· 模型 xxx」无冒号格式 + 重跑 scan/inject 回填 F: 展示页（577/582 有模型字段）；铁律 5 立「新抓取器必带模型恢复器」防第三次复发（11-17 用户「每次新导入都不加模型字段」同类问题）+ 套件补 [6] 桩测
 
 ## 2026-11-18
@@ -322,3 +329,5 @@
 - TRAE「评估项目规模与质量」P2 逐条验真后修复：① `games/baijing.py` 模板 launcher 从硬编码 `D:\…\Seed_OB_Prod.1.1.7\…` 改空串（与其他 7 个游戏模板一致，版本号目录游戏更新即失效）——迁移先把现路径持久化进 app_config.apps.BaiJing（本机行为不变，_extract_overrides 此前把与模板相同的值剔除了没落盘）；② `automation_controller._launch_special` 去掉 `shell=True + cmd /c start `——路径里的 `&`/`^` 等 cmd 元字符（Windows 目录名合法）会被 shell 解释，改与 `_launch_normal` 同款分叉（exe→CreateProcess 列表参数、其余→ShellExecuteW）+ MOTW 清理；③ 退出丢日报（11-03 12:41 事故）：`_finalize_run_actions` 把发信线程句柄存 `bridge._active_email_thread`，gui `_cleanup_on_quit` 有界 join（≤150s，覆盖 120s 进度刷新+SMTP，平时立即返回）；④ 版本口径对齐实测：pyproject target-version py310→py313、README「Python 3.10+」→「3.13+（lock 冻结于 3.13）」；⑤ ruff select 扩入 W292/W293/F541 并 --fix 清零（64 处），F401（206 处动态导入需逐个核）/E501/E741 等列进 pyproject 路线图注释，mypy/bandit 单独立项。注解实测 75%（2389 函数 1809 有返回注解）与 TRAE 报的 63% 口径有差但方向属实，全库补注解不合本批范围。顺带修 11-17 收口的回归缺口：前台点击硬闸（suite_click_guard_20261117 有专属覆盖）没更新 `suite_zzz_click_hold` 的 patch 面——补 `_foreground_click_block_reason` 放行桩。快回归绿（唯一红是 rag_index 指纹校验撞上并行会话正在重建 data/ai_history 的中间态，直跑两次全绿、构建完成自愈）。
 - 薅羊毛集合新增「秒悟每日登录送积分」（MEOO，首个 **CLI 型**子流程，无窗口无进程）：`meoo whoami` 触发当日登录 + `meoo account --json` 读 `points.totalGranted` 做证据门控（每日到账 +2,000 时该数递增；`daily_login.used` 是配额消耗口径不代表领取——实测 2026-11-18）；workflow.sqlite3 `meoo_login_bonus:last` 记最近值，增长→✅、持平→❌ fail-closed（批次重试自动补）。⚠️ 触发方式未实锤：注册当天无法判别 whoami 是否算登录（注册即首次登录，当日赠送疑似已随注册入账——model_credits quota 7000=默认 5000+2000），连续多日持平即校准信号。`meoo login --token` 实测不收 OAuth refresh token（要网页签发凭证），无法静默重登。接线：WOOL_FLOW_KEYS 末位、run_wool_flow_background 新增 runner 分发（runner=meoo 走专属 runner 且跳过关进程收尾）、双份配置 + flow_exe_paths（便携 Node 的 meoo.cmd，子进程 PATH 前置其目录——GUI 进程早于 PATH 变更启动）+ 两处显示名 + catalog。环境侧：便携 Node v22.20.0 装至 %LOCALAPPDATA%\Programs
 odejs（npmmirror，免 UAC），meoo CLI 0.5.8 已登录（OAuth）。回归 tests/suite_meoo_daily_login_20261118.py（到账判定六态/解析/双份配置/接线）ALL PASS。顺带修 ci 清单 weekly 重复行（前次 Edit 误插致 manifest 闸门红）。
+
+> AI生成
