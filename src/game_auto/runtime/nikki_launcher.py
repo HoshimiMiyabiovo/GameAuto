@@ -35,6 +35,16 @@ INSTANCE_CONFIRM_TEXTS = ("确认返回", "返回书外", "是否要返回")
 INSTANCE_EXIT_TEMPLATE = str(TEMPLATES_DIR / "暖暖-副本退出图标.png")
 INSTANCE_CONFIRM_BUTTON = "确认"
 
+# 2026-11-21 实机：新版启动器（v1.3.3.1）开局弹「有新版本」模态框（立即更新/退出）。
+# 底下「启动游戏」按钮还在但模态框挡住点不动，旧逻辑会当成已启动 → 300s 等不到游戏窗口。
+# 只认实机文案，绝不点「退出」（点了启动器直接退，等于放弃本次任务）。
+UPDATE_PROMPT_MARKERS = ("有新版本", "版本更新说明")
+UPDATE_PROMPT_BUTTONS = ("立即更新",)
+UPDATE_BUSY_MARKERS = ("下载中", "更新中", "校验中", "正在更新", "正在下载", "安装中", "解压中")
+LAUNCHER_TITLE_KEYWORDS = ("无限暖暖", "Infinity Nikki", "InfinityNikki")
+
+_last_prompt_warn = {"ts": 0.0, "hwnd": 0}
+
 
 def _stop(stop_check: Optional[Callable[[], bool]]) -> bool:
     return bool(stop_check and stop_check())
@@ -123,6 +133,160 @@ def _press_esc() -> None:
     press_key_scancode("esc")
 
 
+def _compact(text) -> str:
+    """去掉 OCR 文本里的空白（「立即更 新」也能命中）。"""
+    return "".join(str(text or "").split())
+
+
+def _confidence(item) -> float:
+    try:
+        return float(item.get("confidence") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _update_prompt_state(items):
+    """返回 (marker, button)：marker 为「有新版本」提示条目，button 为最近距离的「立即更新」。
+
+    没有弹窗时返回 (None, None)。只做识别，不点击。
+    """
+    marker = None
+    marker_conf = 0.0
+    for item in items or []:
+        text = _compact(item.get("text"))
+        if not text:
+            continue
+        if _confidence(item) < 0.35:
+            continue
+        if any(key in text for key in UPDATE_PROMPT_MARKERS):
+            conf = _confidence(item)
+            if conf > marker_conf:
+                marker, marker_conf = item, conf
+    if marker is None:
+        return None, None
+
+    mx, my = marker.get("center") or (0, 0)
+    button = None
+    best_dist = None
+    for item in items or []:
+        if _compact(item.get("text")) not in UPDATE_PROMPT_BUTTONS:
+            continue
+        if _confidence(item) < 0.45:
+            continue
+        center = item.get("center")
+        if not center:
+            continue
+        # 弹窗里「立即更新」在标题下方；限定几何范围，避免误点页面别处（广告/
+        # 公告里）同名的「立即更新」。
+        dx = center[0] - mx
+        dy = center[1] - my
+        if dy < 0 or abs(dx) > 400 or dy > 600:
+            continue
+        dist = abs(dx) + abs(dy)
+        if button is None or dist < best_dist:
+            button, best_dist = item, dist
+    # 「版本更新说明」也可能出现在公告/新闻面板里；只有「有新版本」是弹窗标题。
+    # 只命中正文标题而没有同行「立即更新」时，不当成弹窗，免得挡住正常启动。
+    if button is None and "有新版本" not in _compact(marker.get("text")):
+        return None, None
+    return marker, button
+
+
+def _items_busy(items) -> bool:
+    for item in items or []:
+        text = _compact(item.get("text"))
+        if not text or _confidence(item) < 0.4:
+            continue
+        if any(key in text for key in UPDATE_BUSY_MARKERS):
+            return True
+    return False
+
+
+def _handle_update_prompt(logger, hwnd: int, step, stop_check=None):
+    """识别并点掉启动器「有新版本」模态框的「立即更新」。
+
+    返回：
+      "clicked" —— 弹窗已处理（点击过，或点击后弹窗已消失）；
+      "present" —— 弹窗在，但 OCR 没认出「立即更新」，调用方别去点底下的启动游戏；
+      None      —— 当前帧没有更新弹窗。
+    """
+    try:
+        items = _ocr(logger, hwnd) or []
+    except Exception:  # noqa: BLE001 - 识别失败按"没弹窗"处理，不拖死启动
+        logger.debug("[暖暖] 检查启动器更新弹窗失败", exc_info=True)
+        return None
+    marker, button = _update_prompt_state(items)
+    if marker is None:
+        return None
+    if _items_busy(items):
+        # 弹窗自己已经在显示「下载中/更新中」：更新已开始，别重复点「立即更新」
+        return "clicked"
+
+    if button is None:
+        now = time.time()
+        if now - _last_prompt_warn["ts"] > 30 or _last_prompt_warn["hwnd"] != hwnd:
+            _last_prompt_warn["ts"] = now
+            _last_prompt_warn["hwnd"] = hwnd
+            logger.error(
+                "[暖暖] 启动器弹出更新提示「%s」，但 OCR 没找到「立即更新」按钮；"
+                "不会点「退出」，继续重试识别",
+                marker.get("text"),
+            )
+        return "present"
+
+    center = button.get("center")
+    if not center:
+        logger.error("[暖暖] 「立即更新」按钮没有中心坐标，无法点击")
+        return "present"
+    _click(center)
+    logger.warning(
+        "[暖暖] 启动器提示有新版本，已点「立即更新」@ %s（不点退出）", center
+    )
+
+    wait_sec = float(step.get("update_prompt_wait_sec", 30))
+    end = time.time() + max(1.0, wait_sec)
+    while time.time() < end:
+        if _stop(stop_check):
+            return "clicked"
+        time.sleep(1.5)
+        try:
+            latest = _ocr(logger, hwnd) or []
+        except Exception:  # noqa: BLE001
+            return "clicked"
+        if _update_prompt_state(latest)[0] is None:
+            logger.info("[暖暖] 更新提示已关闭，等待更新完成")
+            return "clicked"
+    logger.warning(
+        "[暖暖] 点「立即更新」后 %ss 弹窗仍在（可能在校验/下载），继续等待",
+        int(wait_sec),
+    )
+    return "clicked"
+
+
+def _launcher_busy(logger, hwnd: int) -> bool:
+    """启动器是否还在下载/校验/安装（点过「立即更新」后防「启动游戏」提前恢复文案）。"""
+    try:
+        return _items_busy(_ocr(logger, hwnd) or [])
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _find_launcher_window(logger):
+    """按进程名/标题重新找一个启动器窗口（启动器自更新会重建 HWND）。"""
+    from .foreground_flow_runner import _find_window_by_filters
+
+    try:
+        found = _find_window_by_filters(
+            title_keywords=list(LAUNCHER_TITLE_KEYWORDS),
+            process_names=sorted(LAUNCHER_PROCESSES),
+            logger=logger,
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("[暖暖] 重新查找启动器窗口失败", exc_info=True)
+        return None
+    return found[0] if found else None
+
+
 def _launcher_button(logger, hwnd: int):
     """返回 (类型, OCR条目)；类型为 启动游戏/进入游戏/启动/更新/运行中。
 
@@ -184,10 +348,18 @@ def _wait_game_window(step, stop_check):
     return None, None
 
 
-def _wait_update_done(logger, hwnd: int, step, stop_check):
+def _wait_update_done(logger, hwnd: int, step, stop_check, after_prompt: bool = False):
+    """等更新完成并点「启动游戏」。
+
+    2026-11-21：新版启动器弹「有新版本」模态框后点「立即更新」，启动器可能自我
+    重启（旧 HWND 失效），这里按进程名重新接管；after_prompt=True 表示这次更新是
+    弹窗触发的，要防「资源还在下载、主按钮已提前恢复成『启动游戏』」的假完成。
+    """
     timeout = int(step.get("update_timeout_sec", 3600))
     end = time.time() + max(1, timeout)
+    restart_timeout = float(step.get("launcher_restart_timeout_sec", 300))
     last_log = 0.0
+    missing_since = None
     while time.time() < end:
         if _stop(stop_check):
             return False, "用户请求停止"
@@ -195,10 +367,39 @@ def _wait_update_done(logger, hwnd: int, step, stop_check):
         if not _window_alive(hwnd):
             if _find_game_process():
                 return True, "更新完成，游戏已启动"
-            return False, "启动器窗口已关闭"
+            new_hwnd = _find_launcher_window(logger)
+            if new_hwnd and new_hwnd != hwnd:
+                logger.info(
+                    "[暖暖] 启动器在更新中重建窗口，已重新接管: HWND=%s → %s",
+                    hwnd, new_hwnd,
+                )
+                hwnd = new_hwnd
+                missing_since = None
+                continue
+            if missing_since is None:
+                missing_since = time.time()
+            if time.time() - missing_since >= restart_timeout:
+                return False, "启动器窗口已关闭且未重新出现"
+            if time.time() - last_log > 30:
+                logger.info("[暖暖] 启动器窗口暂不可见（更新/重启中），继续等待…")
+                last_log = time.time()
+            continue
+        missing_since = None
         _focus(hwnd)
+        prompt = _handle_update_prompt(logger, hwnd, step, stop_check)
+        if prompt == "clicked":
+            after_prompt = True
+            last_log = time.time()
+            continue
+        if prompt == "present":
+            continue
         found = _launcher_button(logger, hwnd)
         if found and found[0] in ("启动游戏", "进入游戏", "启动"):
+            if after_prompt and _launcher_busy(logger, hwnd):
+                if time.time() - last_log > 30:
+                    logger.info("[暖暖] 更新资源仍在下载/校验，等主按钮恢复")
+                    last_log = time.time()
+                continue
             _click(found[1]["center"])
             logger.info("[暖暖] 更新完成，已点击启动游戏")
             return True, "更新完成并启动"
@@ -213,10 +414,28 @@ def _wait_update_done(logger, hwnd: int, step, stop_check):
 def _launch_game_from_launcher(logger, hwnd: int, step, stop_check):
     button_timeout = int(step.get("launcher_timeout_sec", 60))
     end = time.time() + max(1, button_timeout)
+    prompt_seen = False
     while time.time() < end:
         if _stop(stop_check):
             return False, "用户请求停止"
+        if not _window_alive(hwnd):
+            new_hwnd = _find_launcher_window(logger)
+            if new_hwnd and new_hwnd != hwnd:
+                logger.info("[暖暖] 启动器窗口已重建，重新接管: HWND=%s → %s", hwnd, new_hwnd)
+                hwnd = new_hwnd
+            else:
+                time.sleep(2.0)
+                continue
         _focus(hwnd)
+        # 2026-11-21：新版启动器开局弹「有新版本」模态框，必须先点「立即更新」，
+        # 否则底下的「启动游戏」点不动（点完还会误判成功）。
+        prompt = _handle_update_prompt(logger, hwnd, step, stop_check)
+        if prompt == "clicked":
+            return _wait_update_done(logger, hwnd, step, stop_check, after_prompt=True)
+        if prompt == "present":
+            prompt_seen = True
+            time.sleep(2.0)
+            continue
         found = _launcher_button(logger, hwnd)
         if not found:
             time.sleep(1.0)
@@ -236,6 +455,8 @@ def _launch_game_from_launcher(logger, hwnd: int, step, stop_check):
         if kind == "更新":
             return _wait_update_done(logger, hwnd, step, stop_check)
         return True, f"已点击{kind}"
+    if prompt_seen:
+        return False, "启动器仍停在「有新版本」弹窗（未识别到「立即更新」）"
     return False, "未找到启动器按钮"
 
 
@@ -470,7 +691,21 @@ def enter_main_interface(
             return False, message, None, None
         game_hwnd, game_pid = _wait_game_window(step, stop_check)
         if not game_hwnd:
-            return False, "游戏窗口未出现", None, None
+            # 2026-11-21：窗口没出现时留证据。若是「有新版本」弹窗还在，明确写出来，
+            # 别再只报「游戏窗口未出现」让人猜。
+            message = "游戏窗口未出现"
+            try:
+                if _update_prompt_state(_ocr(logger, hwnd) or [])[0] is not None:
+                    message = "游戏窗口未出现：启动器仍显示「有新版本」更新弹窗"
+            except Exception:  # noqa: BLE001
+                pass
+            _record_failure(
+                logger,
+                str(step.get("name") or "进入无限暖暖主界面"),
+                message,
+                hwnd,
+            )
+            return False, message, None, None
     logger.info("[暖暖] 游戏窗口就绪: HWND=%s PID=%s", game_hwnd, game_pid)
 
     for _ in range(2):

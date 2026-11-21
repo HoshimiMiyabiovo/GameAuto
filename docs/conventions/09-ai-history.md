@@ -21,6 +21,10 @@
 
 GUI 开关：**「每日进度」页底部「AI 对话史」卡片**（`services/ai_history_refresh.py`
 编排上述全链，单飞闸 + 双锁；不做定时自动化——2026-11-18 用户拍板）。
+链内本地抓取器 = 妙手 / Kilo / TeleAgent / 码道 / DSH 五个（2026-11-20 补齐
+后三个——此前只串了妙手+Kilo，三源导出一直靠手动跑、数据停在 11-18，用户发现后修）；
+这些抓取器失败只降级（沿用上次聚合），不阻断 build/拷回/RAG。Grok（CDP 连
+浏览器）与 Trae（官方分享页）有外部条件，仍手动跑。
 
 ## 配置（环境变量，2026-11-18 knob 化；全部可选，缺省=本机现值）
 
@@ -36,7 +40,7 @@ GUI 开关：**「每日进度」页底部「AI 对话史」卡片**（`services
 kilo/teleagent/codearts 等）以 `~` 相对或客观安装位置为准，属机器事实不算
 可配置项；build.py 里残留的 `C:\Users\admin` 用户名硬编码已改 `expanduser`。
 
-## 来源清单（19 个 do_*，8 个本地抓取器）
+## 来源清单（20 个 do_*，9 个本地抓取器）
 
 | 来源 | do_* | 正文位置 | 抓取器 |
 |---|---|---|---|
@@ -57,6 +61,7 @@ kilo/teleagent/codearts 等）以 `~` 相对或客观安装位置为准，属机
 | Kilo Desktop | do_kilo | 内核 HTTP API（Basic kilo:KILO_SERVER_PASSWORD） | tools/kilo_capture |
 | TeleAgent | do_teleagent | `~/.local/share/TeleAgent/users/*/teleagent.db` | tools/teleagent_capture |
 | 码道 CodeArts | do_codearts | `~/.codeartsdoer/codearts-data/opencode.db` | tools/codearts_capture |
+| DSH NEXT | do_dsh | `~/.dsh/sessions/**/session.v4.jsonl.zstd`（逐行 zstd 帧拼接） | tools/dsh_capture |
 | Copilot 网页 | （并入 DeepSeek 同目录） | markdown 导出 | — |
 | QClaw / cc-switch | NOTES 声明无正文/仅元数据 | — | — |
 
@@ -74,7 +79,11 @@ kilo/teleagent/codearts 等）以 `~` 相对或客观安装位置为准，属机
    （用户拍板表，ai_history_model_recover.py；TeleAgent 的 `chat-flash` 属内部
    路由名，2026-11-19 拍板 = deepseek-v4.1-flash-1017，原值留 raw 可追溯）。
    会话 note 的模型标注两种格式都认：「模型：xxx」（Hermes/WorkBuddy/妙手）与
-   「· 模型 xxx」无冒号（Kilo/TeleAgent/码道 fetch）。
+   「· 模型 xxx」无冒号（Kilo/TeleAgent/码道 fetch）。**Qoder 1.1.86-hotfix.5.2 起
+   逐条 `message.model` 只写选择器档位 `auto`**（≤1.1.79 写真实内部代号）：
+   恢复器遇 auto 用同文件当时生效的 `runtime-config.model` 解析（user 行
+   `businessModelKey`、IDE 库 `chat_sessions.model` 同值可交叉验证），这是同文件
+   真实字段、不算臆测映射；无 runtime-config 时 auto 原样保留（2026-11-20）。
 4. **正文本地不存在的来源不上库**：码道桌面端 chatSessions jsonl 曾被误判
    「无正文可接」——真相源是内核数据目录（AgentKernel=opencode 变体，
    `~/.codeartsdoer/codearts-data/opencode.db`）。**找对话正文先找应用的
@@ -94,3 +103,7 @@ kilo/teleagent/codearts 等）以 `~` 相对或客观安装位置为准，属机
 - Kilo 内核重启轮换密码/端口 → 管理员重跑 `tools/kilo_capture/kilo_env_dump.py`。
 - 提权应用（码道/TeleAgent）进程 cmdline/env 普通权限读不到 → 提权探针
   （UAC 一次），读完删探针脚本。
+- DSH 会话文件是「每行 JSON 单独压一个 zstd 帧、多帧顺序拼接」，单帧 API 只解出
+  第一行（2026-11-20 实锤）→ 用 `backports.zstd.open(path,"rb")` 跨帧流式读；
+  Python 3.13 无 stdlib `compression.zstd`（3.14 才内置），依赖走 requirements.txt
+  的 `backports.zstd` + dependency_manager 的 import 名例外。

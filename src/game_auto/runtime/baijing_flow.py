@@ -1502,6 +1502,67 @@ def _maybe_run_fitting_weekly(
         return f"  🎯 白荆回廊拟合回归: ❌ 异常: {e}"
 
 
+def _maybe_run_trial_periodic(
+    logger: logging.Logger, hwnd: Optional[int], stop_check=None
+) -> Optional[str]:
+    """「角色试玩（试玩关卡）」周期活动（2026-11-19 用户截图接入）。
+
+    用户口述约 14 天刷新 → 独立日期门控（meta=periodic_flow:BAIJING_TRIAL，
+    存上次成功 ISO 日期）；失败不写标记，下一批按门控重试。链路与目标见
+    `runtime/baijing_trial.py`（活动中心 → 试玩关卡 → 逐槽开战，战斗段复用
+    拟合回归）。与俱乐部商店/拟合回归/联合训练场各自独立门控，互不连坐。
+    """
+    try:
+        import datetime as _dt
+
+        from ..storage.workflow_db import WorkflowDB
+        from .baijing_trial import TRIAL_META_KEY, run_trial_activity, trial_due
+
+        db = WorkflowDB(str(WORKFLOW_DB_PATH))
+        last = db.get_task_meta(TRIAL_META_KEY)
+        if not trial_due(last):
+            _record_baijing_task(
+                logger, "trial_periodic", "角色试玩（14天）", "already",
+                f"周期未到（上次 {last}）", extra={"last": last},
+            )
+            return None
+
+        game_hwnd = _ensure_baijing_window_valid(logger, hwnd) or _resolve_baijing_window(logger)
+        if not game_hwnd:
+            _record_baijing_task(
+                logger, "trial_periodic", "角色试玩（14天）", "failed", "找不到游戏窗口",
+            )
+            return "  🎭 白荆回廊角色试玩: ❌ 找不到游戏窗口（下次运行重试）"
+
+        result = run_trial_activity(logger, game_hwnd, stop_check=stop_check)
+        ok = bool(result.get("ok"))
+        detail = str(result.get("detail") or "无结果")
+        if ok:
+            try:
+                db.set_task_meta(TRIAL_META_KEY, _dt.date.today().isoformat())
+            except Exception as e:
+                logger.warning(f"[白荆回廊] 写入角色试玩周期标记失败: {e}")
+        _record_baijing_task(
+            logger, "trial_periodic", "角色试玩（14天）",
+            "success" if ok else "failed", detail,
+            extra={
+                "fought": result.get("fought"),
+                "slots": result.get("slots"),
+                "last": last,
+            },
+        )
+        logger.info(
+            f"[白荆回廊] 角色试玩{'执行成功，本周期不再重复' if ok else '执行失败，下次重试'}: {detail}"
+        )
+        return f"  🎭 白荆回廊角色试玩: {'✅' if ok else '❌'} {detail}"
+    except Exception as e:
+        logger.warning(f"[白荆回廊] 角色试玩阶段异常: {e}", exc_info=True)
+        _record_baijing_task(
+            logger, "trial_periodic", "角色试玩（14天）", "failed", f"异常: {e}",
+        )
+        return f"  🎭 白荆回廊角色试玩: ❌ 异常: {e}"
+
+
 def _maybe_run_monthly(logger: logging.Logger, hwnd: Optional[int], stop_check=None) -> Optional[str]:
     """每月执行一次：有猫零售「有猫兑换」按清单购买（2026-10-25 新增）。
 
@@ -1736,7 +1797,18 @@ def run_baijing_full_flow(config: dict, logger: logging.Logger, controller=None)
         except Exception as e:
             logger.warning(f"[白荆回廊] 拟合回归阶段异常: {e}")
 
-        # 4.6) 联合训练场（2026-11-15 入口层）：只读侦察——外勤 → 联合训练场 →
+        # 4.6) 角色试玩（约 14 天周期，2026-11-19 用户截图接入）：活动中心 →
+        #      试玩关卡 → 逐槽开战（战斗段复用拟合链）；独立日期门控。
+        #      放在联合训练场之前：试玩退场停在哪页不确定，后面 joint 的
+        #      _ensure_main_ui 多做一轮恢复兜底。
+        try:
+            trial_line = _maybe_run_trial_periodic(logger, hwnd, stop_check=stop_check)
+            if trial_line:
+                logger.info(trial_line)
+        except Exception as e:
+            logger.warning(f"[白荆回廊] 角色试玩阶段异常: {e}")
+
+        # 4.7) 联合训练场（2026-11-15 入口层）：只读侦察——外勤 → 联合训练场 →
         #      防区状态识别取证；摆队（队长不可重复）/每周结算领取等实机取证
         #      后接入（phase 2）。分支失败不连坐（同回声猎区口径）。
         try:

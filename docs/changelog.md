@@ -8,8 +8,22 @@
 > （2025-02 萌芽 → 前身项目 → ok-* 脚本群 → 重构）归档到
 > [notes/ai-dev-history-202611.md](notes/ai-dev-history-202611.md)。
 
+## 2026-11-21
+
+- fix: 无限暖暖启动器「有新版本」模态框（用户截图 v1.3.3.1）——旧逻辑只认右下「启动游戏」，弹窗挡住时点空却当成功，300s 等不到游戏窗口后 prelaunch 失败、整条任务中止；`nikki_launcher` 现整窗识别「有新版本/版本更新说明」并按几何范围点「立即更新」（绝不点退出），点击后等弹窗消失、按「更新」链路等完成；启动器自更新重建窗口时按进程名重新接管（300s），点过弹窗后 `_launcher_busy` 未消失前不点「启动游戏」；新增 `tests/suite_nikki_update_prompt_20261121.py` 并登记 CI，04 分篇补记。
+- fix: 鸣潮内置 ok-ww 战斗轴「每场不重开」（用户实机怒斥：每次结束战斗再打下一场，不是从头开始而是从上一次不知道什么时候开始）——根因不在安装，在 ok-ww 只有「在战斗/不在战斗」两态：配队脚本一整轮 30-60 秒还开着 `skip_combat_check`，框架看不见这一场何时结束，下一场从上一轮中段接着跑；加上 爱达千 轴自带的 `OPENER_MIN_GAP=60s` 把启动轴挡在门外。working 树打四处补丁（备份 `*.bak_20261121`）：`CombatCheck` 脱战够 3s 再进战斗即判新一场并重建角色实例（等价作者 Tips 的「开关一次自动战斗」），`on_executor_tick` 借执行器节拍在宏期间做脱战探针（目标锁+血条消失 4s 掐断本轮，解放键后 7s 免判、深塔重开全程闭嘴），`TaskExecutor.check_enabled` 与 `BaseChar.send_liberation_key` 接线；探针掐断前先 `reset_to_false()` 收回 `_in_combat`（否则任务 `sleep_check` 会在 `combat_once` 外再抛一次），探针读目标时跳过 `has_target` 的 ESC 纠错分支（探针不能发按键）；回归 `tests/suite_okww_battle_boundary_20261121.py`（10 项：5 个源码锚点 + 6 个行为桩测）+ ci 登记，08 分篇记重打方式。**首版接线错已修**：`check_enabled` 只 tick `current_task`，而一条龙里 current_task 是 DailyTask、真正在打的 DomainTask 是 `run_task_by_class` 嵌套跑的，探针在宏期间一次都不会执行——改为同时遍历 `onetime_tasks`/`trigger_tasks` 里 `skip_combat_check` 已打开的战斗实例（其它任务不付探针代价），套件补 1 项嵌套节拍桩测（共 10 项）。**未实机验证**：需重启内置 ok-ww 后看 `new battle #N after Xs out of combat` 与 `macro combat probe` 两类日志。
+
+## 2026-11-20
+
+- fix: Qoder 最新两会话模型错显 Auto（用户发现）——客户端 1.1.86-hotfix.5.2 起把选择器档位 `auto` 写进逐条 `message.model`（旧版 ≤1.1.79 写真实内部代号），恢复器逐条优先口径把会话级 dfmodel 压掉；`recover_qoder` 遇 auto 改用同文件当时生效的 `runtime-config.model` 解析回真实代号（真实字段非臆测映射，原值留原始 jsonl，解析计数 auto_resolved），重跑 scan + 暂存注入拷回 F: 展示页（590 会话 585 有模型字段，两会话回显 deepseek-v4.1-flash-1017）；套件补 [7] 桩测，09 分篇铁律 3 补记。
+
+- fix: AI 对话史全链刷新补 TeleAgent/码道抓取器——`services/ai_history_refresh.py` 此前只串妙手+Kilo，两源导出一直停在 11-18 靠手动跑（用户发现「为什么不刷新」）；②b 并入两个本地 SQLite 抓取器（失败同 Kilo 降级、msg 注明沿用旧数据），09 分篇同步链内抓取器清单。本轮刷新后总库 590 会话（TeleAgent 3/码道 2）、RAG 108,459 块/索引 271MB，三件套已拷回 F:；套件 [3b] 补调用顺序/脚本路径/单源降级断言。
+
+- feat: AI 对话史新增 DSH NEXT 源（用户问「DSH NEXT 对话数据能抓到吗」）——正文在 `~/.dsh/sessions/**/session.v4.jsonl.zstd`，格式是**每行 JSON 单独压一个 zstd 帧、多帧顺序拼接**（单帧 API 只解出第一行，474KB 实测 314 帧）；`tools/dsh_capture/dsh_fetch.py` 用 `backports.zstd.open` 跨帧读 → `data/dsh_capture/export/dsh.json`（add() 同构，user/think/ai/tool/output，tool 摘要 600 / output 20 万帽），team 模式 inbox 消息按 id 去重兜底；刷新链 ②b 并入（失败同 Kilo 降级）、model_recover 补 `recover_dsh`（逐条 `source.model` 原值，铁律 3）、build.py 补 `do_dsh`；`backports.zstd` 进 requirements.txt + dependency_manager import 名例外（包名带点）；新增套件 `suite_dsh_capture_20261120`（编造数据现造多帧文件，不碰真实会话）并登记 ci，refresh 套件 [3b] 补五抓取器顺序/降级/路径断言。本轮 2 会话 / 400 条入库。
+
 ## 2026-11-19
 
+- feat: 白荆回廊接入「角色试玩（试玩关卡）」周期活动（用户截图驱动）——主界面活动中心 → 左列试玩关卡 → 5 槽位逐槽「开始试玩」→ 战斗段复用拟合链 → 结算/领奖回页；周期按用户口述 14 天（独立日期门控 meta periodic_flow:BAIJING_TRIAL，成功才写、失败下批重试），挂一条龙拟合回归之后/联合训练场之前；「获取同调者」抽卡入口禁点防呆。**v1 未实机验证**：完成态 UI/试玩结算文案待取证，槽位不满足双证据即跳过不盲点；回归 `tests/suite_baijing_trial_20261119.py`（文本快照+实机截图矩阵+门控+打桩全流程）+ 页面判定登记表补 2 条；实机帧 `data/artifacts/ref_baijing_trial_20261119.png`。
 - feat: 鸣潮专项页新增「内置 ok-ww」开关：直启 `data/okww` 内置副本的 `pythonw main.py` 引擎（跳过 ok-ww.exe 管理器，避免 UAC 与自动更新），关闭即结束该引擎进程；只认项目 `data/` 下的副本，一条龙运行中禁用，子进程环境剥离项目 `src` 的 PYTHONPATH；回归 `tests/suite_builtin_okww_gui_20261119.py`。
 - chore: 内置 ok-ww 窗口标题改为纯 `python`（working 树补丁：`config.py` gui_title + `MainWindow.setWindowTitle` 只传 title，版本留在标题栏徽章；改前备份 `.bak_20261119`，重装后需重打，08-game-config 已记）。任务管理器进程名仍是 pythonw.exe，一条龙监控不受影响。
 - fix: 排查 Qoder/码道签到失败（#436/#437/#441，失败截图+Qoder 主日志实锤）——① Qoder 官方每日领积分活动当天起下线：主日志 `hasClaimableCampaign` 自启动起=false（11-16/17/18 均为 true→领取后 false 的正常闭环），权益中心只剩「首购订阅加赠 Credits」推广页、无领取按钮，流程步骤1 找不到「领取/已领取」模板而误报；用户确认禁用 QODER 流程（enabled=false + _comment 留恢复指引）。② 码道冷启动恢复上次会话详情页（页内无「Agent Space」字样）+版本更新待重启弹窗，3 轮等待主界面全败；签到操作的是标题栏右上角、不依赖主界面，步骤1 target_text 加「新建会话」「CodeArts Agent」兜底特征（OCR smart 子串可命中「④新建会话」「Space - CodeArts Agent」，任一出现即视为窗口就绪）；走真实 `_load_flow_config` 验证 10 项 ALL PASS（改动仅 flow_configs.json 数据，未动代码）。

@@ -369,6 +369,17 @@ This file mirrors important repository-level development notes inside the projec
   登录页 OCR「点击进入游戏/确认/登录」→ 加载小月卡/道具弹窗 →
   左下角聊天气泡模板 `assets/templates/暖暖-主界面.png` 连续 2 次命中；第二步 `action=nikki_calendar`
   （2026-11-01 新增，见下节）。
+- **启动器「有新版本」模态框（2026-11-21 实机截图）**：新版启动器（v1.3.3.1）开局弹
+  「有新版本 / 立即更新 / 退出」，弹窗在窗口中央、底下的「启动游戏」按钮还在但点不动。
+  旧逻辑只扫右下角主按钮，点完直接当「已启动」→ 300s 等不到游戏窗口 → prelaunch 失败
+  → 整条暖暖任务中止。现在 `_launch_game_from_launcher` / `_wait_update_done` 先整窗 OCR
+  认「有新版本/版本更新说明」→ 按几何范围（标题下方 `dy∈[0,600]`、`|dx|≤400`，取最近）
+  精确点「立即更新」→ 等弹窗消失 → 复用「更新」链路等更新完成；**绝不点「退出」**
+  （点了启动器直接退）。启动器自更新会重建 HWND，按 `xstarter/launcher*` 进程名重新接管
+  （`launcher_restart_timeout_sec` 默认 300s）；点过弹窗后主按钮若提前恢复成「启动游戏」，
+  `_launcher_busy`（下载中/更新中/校验中…）没消失前不点，防假完成。回归
+  `tests/suite_nikki_update_prompt_20261121.py`。风险：启动器自更新若弹 UAC，安全桌面
+  OCR/点击都够不到，只能人工放行一次。
 - 模板来源：whimbox 2.5.6 `IconPageMainFeature` 二值化裁剪（GPL-3.0 本地自用）；
   36x30，左下角 (48,989)@1920x1080，合成背景匹配 0.99，阈值 0.8。
 - `close_process_on_finish/fail=false`：游戏要留给 whimbox；whimbox 的
@@ -517,7 +528,9 @@ This file mirrors important repository-level development notes inside the projec
   `baijing_scene.py`（登记表 + recover_scene + _ensure_main_ui）、任务列表
   `baijing_tasklist.py`（扫描/找行/领取/目录）、专项任务 `baijing_task_handlers.py`
   （研发室/烙痕/茶憩/叶脉/阶段战斗/好友）、俱乐部+回声猎区 `baijing_echo.py`
-  （每日任务领取 + 节点链/boss/阶梯/分贝奖励）、主流程胶水 `baijing_daily.py`
+  （每日任务领取 + 节点链/boss/阶梯/分贝奖励）、周活动 `baijing_fitting.py`
+  （拟合回归战斗链）/`baijing_joint_training.py`（联合训练场侦察）/
+  `baijing_trial.py`（角色试玩）、主流程胶水 `baijing_daily.py`
   （零售礼包 + process_task_list + run_baijing_daily_vision_flow，尾部有过渡性
   re-export facade）。**mock 必须打在符号实际所属模块**，patch baijing_daily 对
   已迁符号不生效。下文历史条目里出现的 `baijing_daily.py` 路径按此映射。
@@ -900,7 +913,7 @@ This file mirrors important repository-level development notes inside the projec
   不点击**）→ 防区页双证据判定 `_is_joint_zone_page`（标题含「联合训练」AND
   body 独有词「防区未完成/防区推演进度」≥1——hub 的「联合训练场」是标题超集
   但永无 body 词）→ 状态解析（未完成防区数/进度/结束与解锁文案）→ 快照 →
-  左上返回 → `_ensure_main_ui`。挂 `baijing_flow` 4.6 步（拟合回归之后），
+  左上返回 → `_ensure_main_ui`。挂 `baijing_flow` 4.7 步（拟合回归/角色试玩之后），
   失败不连坐；活动过期（EVENT_END=2026-12-21）直接 skip。**入口点击先点标签
   再按比例点图标兜底**（echo boss 同款，每次点击后都有页面验证）。实机帧
   `data/artifacts/ref_baijing_joint_{center,zones}_20261115.png` + OCR 转录
@@ -923,6 +936,22 @@ This file mirrors important repository-level development notes inside the projec
   （A~D 绿勾、E 无勾）——结构化记录明确「节点 E 战败（任务失败），未收录」；
   战败页双词判定按 11-14 口径正常工作，未写已清标记（下次自动重打）。E 仍需
   人工看编队/刻印（自动化只负责开打与如实回报）。
+- **角色试玩（试玩关卡）周期活动（2026-11-19 用户截图接入，`runtime/baijing_trial.py`）**：
+  入口：主界面「活动中心」（OCR，底栏区域 (0.55,0.86,0.45,0.14)）→ 活动页左列
+  「试玩关卡」→ 试玩页双证据 `_is_trial_page`（「开始试玩」AND「体验角色完成关卡
+  领取奖励」；左列菜单与 hub 同词，只认按钮+正文）。角色缩略图条 5 槽（NEW 徽标
+  y≈0.233 下方，x=0.674/0.738/0.798/0.861/0.924），逐槽点选后「开始试玩」进编队页，
+  战斗段**复用拟合链**（作战开始 → [布阵] → 开始战斗 → 挂机 → 结算点空白；
+  未见布阵页按「直接进战斗」兼容，结算后可能有「新物品已存入」领奖弹窗，点
+  「点击屏幕继续」回试玩页）。周期：用户口述约 14 天刷新 → `baijing_flow` 4.6 步
+  独立日期门控（meta `periodic_flow:BAIJING_TRIAL`，成功才写日期、失败下批重试）；
+  挂拟合回归之后、联合训练场之前（试玩退场停哪页不确定，joint 的 `_ensure_main_ui`
+  兜底恢复）。**v1 边界（未实机验证）**：已完成/已领状态 UI 未取证——槽位点开
+  不满足双证据或点「开始试玩」原地不动即跳过该槽，绝不盲点；**「获取同调者」是
+  抽卡入口，任何情况下不点**（FORBIDDEN_TEXTS 防呆 + 套件断言）。实机帧
+  `data/artifacts/ref_baijing_trial_20261119.png`；回归
+  `tests/suite_baijing_trial_20261119.py`（文本快照+截图矩阵+门控+打桩全流程）。
+  **待实机校正**：完成态 UI、试玩结算页文案是否同拟合、超过 5 个角色时的滚动。
 - **有猫兑换每月购买**（`runtime/baijing_cat_exchange.py`，2026-10-25 用户新增需求）：
   「有猫零售 → 有猫兑换」页每月刷新，可以每月买点小东西；清单做成配置
   `app_config.json → baijing.cat_exchange.items`（2026-10-25 时待定；**2026-11-01 用户

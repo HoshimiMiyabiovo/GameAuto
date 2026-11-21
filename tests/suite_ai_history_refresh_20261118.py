@@ -10,6 +10,8 @@ RAG 重建），编排逻辑在 services/ai_history_refresh.py。
 [2] 失败收口：任一步 RuntimeError → last_ok=False、running 复位、
     msg 带「步骤[名]」、暂存目录被清理；
 [3] Kilo 降级：②失败其余成功 → 整链仍成功、msg 注明「Kilo 沿用旧数据」；
+[3b] TeleAgent/码道/DSH 并入抓取链（2026-11-20）：调用顺序含五抓取器、脚本路径
+    指向 tools/<src>_capture/<src>_fetch.py、单源失败降级不阻链；
 [4] 成功路径：build stdout 的 sessions 数与 RAG stdout 的切块/索引数解析进
     msg；COPY_FILES 逐个经 _copy_to_f（shutil 直写——管理员 GUI 直写 F:，
     2026-11-18 提权探针实锤，非管理员全被拦）；
@@ -162,6 +164,50 @@ def test_kilo_degrade(tmp_path):
     _reset()
 
 
+def test_teleagent_codearts_in_chain(tmp_path):
+    print("[3b] TeleAgent/码道/DSH 并入抓取链（路径 + 顺序 + 降级）")
+    _reset()
+    mk = Monkey()
+    mk.setattr(ahr, "STAGE_DIR", str(tmp_path / "stage"))
+    labels, paths = [], {}
+
+    def fake_py(args, timeout, logger, label, emit, env_extra=None):
+        labels.append(label)
+        if label in ("TeleAgent", "码道", "DSH"):
+            paths[label] = args[-1]
+        if label in ("TeleAgent", "DSH"):
+            raise RuntimeError(f"{label} 抓取失败")
+        if label == "重导":
+            for name in ahr.COPY_FILES:
+                open(os.path.join(ahr.STAGE_DIR, name), "w").close()
+            return '"sessions": 7'
+        if label == "RAG":
+            return "切块：10 块 / 约 1 万字\n索引：100 词项 / index.bin 1MB（1s）"
+        return ""
+
+    mk.setattr(ahr, "_py", fake_py)
+    mk.setattr(ahr, "_copy_to_f", lambda s, d: None)
+    out = ahr.run_refresh(logging.getLogger("suite"), lambda s: None)
+    check("TeleAgent/DSH 失败整链仍成功", out["last_ok"] is True, out)
+    check("msg 注明 TeleAgent 沿用旧数据", "TeleAgent 沿用旧数据" in out["last_msg"],
+          out["last_msg"])
+    check("msg 注明 DSH 沿用旧数据", "DSH 沿用旧数据" in out["last_msg"],
+          out["last_msg"])
+    check("五抓取器都在链上且顺序正确",
+          labels == ["妙手", "Kilo", "TeleAgent", "码道", "DSH", "重导", "RAG"], labels)
+    check("TeleAgent 抓取脚本路径正确",
+          paths.get("TeleAgent", "").replace("\\", "/").endswith(
+              "tools/teleagent_capture/teleagent_fetch.py"), paths)
+    check("码道抓取脚本路径正确",
+          paths.get("码道", "").replace("\\", "/").endswith(
+              "tools/codearts_capture/codearts_fetch.py"), paths)
+    check("DSH 抓取脚本路径正确",
+          paths.get("DSH", "").replace("\\", "/").endswith(
+              "tools/dsh_capture/dsh_fetch.py"), paths)
+    mk.undo()
+    _reset()
+
+
 def test_timeout_collect(tmp_path):
     print("[4] 超时收口")
     _reset()
@@ -194,6 +240,7 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         test_failure_collect(Path(td))
         test_kilo_degrade(Path(td))
+        test_teleagent_codearts_in_chain(Path(td))
         test_timeout_collect(Path(td))
         test_copy_helper(Path(td))
     print("-" * 60)

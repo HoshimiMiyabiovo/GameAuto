@@ -61,6 +61,10 @@ REGISTRY = {
     ("baijing_fitting.py", "_is_item_popup_page"): "物品详情浮层「获取方式」AND「库存」双证据（结构词不随物品名变；2026-11-08 实锤帧 ref_baijing_fitting_item_popup_20261108.jpg）",
     # 2026-11-15 白荆「联合训练场」入口层：实机帧 ref_baijing_joint_{center,zones}_20261115.png
     ("baijing_joint_training.py", "_is_joint_zone_page"): "防区页：标题含「联合训练」AND body 独有词（防区未完成/防区推演进度）≥1；外勤 hub 页的「联合训练场」是标题超集但永无 body 词，互斥成立（防区全领后「防区未完成」消失、「防区推演进度」仍在）",
+    # 2026-11-19 白荆「角色试玩」：用户截图 ref_baijing_trial_20261119.png + 文本快照
+    # 见 tests/suite_baijing_trial_20261119.py
+    ("baijing_trial.py", "_is_trial_page"): "试玩页：「开始试玩」AND「体验角色完成关卡领取奖励」双证据（活动页 hub 同带左列菜单但无按钮/正文，互斥成立）",
+    ("baijing_trial.py", "_is_hub_page"): "活动中心 hub：左列菜单专属标记 ≥3（荣耀巡航/叶脉联结/分进合击战/成长投资/新手教学/烙痕限时满级）；不用「联合训练场」（外勤页同词），且先排除试玩页本体",
 }
 
 FAILURES = []

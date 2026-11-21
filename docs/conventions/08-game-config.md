@@ -292,3 +292,24 @@
   标题栏徽章）。改前备份 `config.py.bak_20261119`、`MainWindow.py.bak_20261119`；
   原生窗口标题实测为纯 `python`。**重装/换血会冲掉，按此重打**；不影响进程名
   （任务管理器仍是 pythonw.exe）与一条龙监控。
+- **战斗边界与宏脱战探针（2026-11-21，用户实机反馈驱动）**：ok-ww 自带判定只有
+  "在战斗 / 不在战斗"两态，而配队脚本（自定义角色代码）一整轮 30-60 秒、期间把
+  `skip_combat_check` 打开，框架看不见这一场什么时候结束——于是下一场从上一轮中段
+  接着跑、启动轴永远轮不到。working 树四处补丁（改前备份 `*.bak_20261121`）：
+  ① `src/combat/CombatCheck.py` 新增 `combat_id` / `_last_in_combat_at`，进战斗时
+  脱战够 `BATTLE_REBUILD_GAP=3.0s` 就算"下一场"，把 `self.chars` 置空后重读——
+  自定义类的 `__init__` 重跑，等价于作者 Tips 里的"开关一次自动战斗"
+  （`reset_combat_state`）；读屏没认全时退回旧实例。深塔强制进战斗同样走这条。
+  ② 同文件 `on_executor_tick()`：宏跑在 `time.sleep` 里时，执行器每 0.1 秒还会调
+  `check_enabled`，借它做便宜探针（目标锁 + 血条，0.7 秒一次），两者一起消失
+  `COMBAT_LOST_TIME=4.0s` 抛 `NotInCombatException` 掐断这一轮；解放键发出后
+  `LIBERATION_BLIND_TIME=7.0s` 免判（大招演出会藏 HUD，脚本作者被这个坑过），
+  深塔重开挑战流程用 `_combat_probe_suspended` 全程闭嘴。抛之前先
+  `reset_to_false()` 把 `_in_combat` 收回 False——否则 `combat_once` 捕获后任务里的
+  `sleep_check` 会再判一次脱战，在战斗循环外再抛一次异常、把整段任务打断。
+  探针读 `has_target()` 时 `_combat_probe_running` 会让它跳过「熊回声」ESC 纠错
+  分支（那是会真发按键的，探针不能有副作用）。
+  ③ `ok/task/TaskExecutor.py` 的 `check_enabled` 接上 `on_executor_tick`，并且**不只 tick `current_task`**：一条龙（DailyTask）用 `run_task_by_class` 原地跑 DomainTask/NightmareNestTask，executor.current_task 只指向最外层，战斗实例（`_in_combat`/`skip_combat_check` 都在它身上）躺在 `onetime_tasks` 里。只 tick current_task 的话，宏跑在 `time.sleep` 里的那几十秒探针一次都不执行；所以额外遍历 `onetime_tasks` + `trigger_tasks` 中 `skip_combat_check` 已打开的任务实例。
+  ④ `src/char/BaseChar.py` 的 `send_liberation_key` 调 `task.mark_liberation_sent()`。
+  **重装/换血会冲掉，按此重打**；锚点 + 5 个行为桩测（共 9 项）由
+  `tests/suite_okww_battle_boundary_20261121.py` 锁住。

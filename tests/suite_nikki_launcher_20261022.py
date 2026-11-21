@@ -132,6 +132,7 @@ def test_launcher_to_main():
         _window_rect=lambda hwnd: (320, 156, 1280, 720),
         _focus=lambda hwnd: None,
         _click=lambda center: clicks.append(center),
+        _ocr=lambda *a, **k: [],
         _launcher_button=lambda logger, hwnd: ("启动游戏", {"center": (1379, 798)}),
         _wait_game_window=lambda step, stop: (456, 300),
         _window_alive=lambda hwnd: True,
@@ -159,6 +160,7 @@ def test_update_then_launch():
         _window_alive=lambda hwnd: True,
         _find_game_process=lambda: None,
         _click=lambda center: clicks.append(center),
+        _ocr=lambda *a, **k: [],
         _launcher_button=lambda logger, hwnd: next(buttons, None),
     ), patch.object(nl.time, "sleep", lambda *_: None):
         ok, msg = nl._wait_update_done(

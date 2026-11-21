@@ -285,6 +285,68 @@ def test_recover_opencode_raw_and_note_model():
           "prose words leaked")
 
 
+def test_recover_qoder_auto_resolve():
+    print("[7] Qoder 1.1.86 起 message.model=auto → 用 runtime-config 解析回真实代号"
+          "（2026-11-20 补：新版把选择器档位写进逐条字段，最终页错显 Auto）")
+    old_root = rec.QODER_ROOT
+    old_db = rec.QODER_DB
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td) / "projects" / "E--demo"
+            proj.mkdir(parents=True)
+            sid_new = "aaaaaaaa-0000-0000-0000-000000000001"
+            sid_old = "bbbbbbbb-0000-0000-0000-000000000002"
+            sid_bare = "cccccccc-0000-0000-0000-000000000003"
+
+            def jl(rows):
+                return "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n"
+
+            # 新版：runtime-config=dfmodel，逐条全 auto；中途换 qfmodel 后 auto 跟随
+            (proj / f"{sid_new}.jsonl").write_text(jl([
+                {"type": "runtime-config", "model": "dfmodel", "timestamp": 1000},
+                {"type": "assistant", "timestamp": "1100",
+                 "message": {"role": "assistant", "model": "auto"}},
+                {"type": "assistant", "timestamp": "1200",
+                 "message": {"role": "assistant", "model": "auto"}},
+                {"type": "runtime-config", "model": "qfmodel", "timestamp": 1300},
+                {"type": "assistant", "timestamp": "1400",
+                 "message": {"role": "assistant", "model": "auto"}},
+            ]), encoding="utf-8")
+            # 旧版：逐条真实代号，不受影响
+            (proj / f"{sid_old}.jsonl").write_text(jl([
+                {"type": "runtime-config", "model": "lmodel", "timestamp": 2000},
+                {"type": "assistant", "timestamp": "2100",
+                 "message": {"role": "assistant", "model": "lmodel"}},
+            ]), encoding="utf-8")
+            # 无 runtime-config：auto 原样保留（不臆测）
+            (proj / f"{sid_bare}.jsonl").write_text(jl([
+                {"type": "assistant", "timestamp": "3100",
+                 "message": {"role": "assistant", "model": "auto"}},
+            ]), encoding="utf-8")
+            rec.QODER_ROOT = Path(td)
+            rec.QODER_DB = Path(td) / "nope.sqlite"   # 不建库，隔离会话级兜底
+            got = rec.recover_qoder()
+    finally:
+        rec.QODER_ROOT = old_root
+        rec.QODER_DB = old_db
+
+    r = got.get("qoder:" + sid_new[:8]) or {}
+    check("auto 按当时生效 runtime-config 解析（dfmodel×2 + qfmodel×1）",
+          r.get("models") == {"dfmodel": 2, "qfmodel": 1}, r.get("models"))
+    check("解析计数 auto_resolved=3、逐条级",
+          r.get("auto_resolved") == 3 and r.get("level") == "per_message",
+          (r.get("auto_resolved"), r.get("level")))
+    check("canonical 后是拍板映射而非 Auto",
+          rec.canonical_model(r.get("primary_model", "")) == "deepseek-v4.1-flash-1017",
+          rec.canonical_model(r.get("primary_model", "")))
+    r2 = got.get("qoder:" + sid_old[:8]) or {}
+    check("旧版真实代号原样保留", r2.get("models") == {"lmodel": 1}, r2.get("models"))
+    r3 = got.get("qoder:" + sid_bare[:8]) or {}
+    check("无 runtime-config → auto 原样保留不臆测",
+          r3.get("models") == {"auto": 1} and r3.get("auto_resolved") == 0,
+          (r3.get("models"), r3.get("auto_resolved")))
+
+
 def main():
     test_pick_rec()
     test_load_existing_roundtrip()
@@ -292,6 +354,7 @@ def main():
     test_recover_catpaw_session_model()
     test_recover_kilo_and_trae()
     test_recover_opencode_raw_and_note_model()
+    test_recover_qoder_auto_resolve()
     print("-" * 60)
     if FAILURES:
         print(f"FAILED {len(FAILURES)}: {FAILURES}")

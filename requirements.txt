@@ -37,3 +37,6 @@ numpy>=1.26
 ruamel.yaml>=0.18
 # 脚本管理页：BetterGI/March7th 的 release 只发 7z 包，zip 用 stdlib
 py7zr>=0.21
+# DSH NEXT 会话抓取（tools/dsh_capture）：会话正文是逐行 zstd 帧，
+# Python 3.13 无 stdlib compression.zstd（3.14 才内置），故用 backports
+backports.zstd>=1.8

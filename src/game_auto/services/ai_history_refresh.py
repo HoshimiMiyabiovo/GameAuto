@@ -6,6 +6,10 @@
   ① catpaw_fetch   妙手 SQLite → catpaw.json（tools/catpaw_capture）
   ② kilo_fetch     Kilo 内核 API → kilo.json（tools/kilo_capture；内核没开/
                     密码过期时干净失败 → 跳过并沿用上一次聚合，不阻塞整链）
+  ②b teleagent_fetch / codearts_fetch / dsh_fetch  TeleAgent / 码道 / DSH NEXT →
+                    teleagent.json / codearts.json / dsh.json（2026-11-20 并入：
+                    此前链里只有妙手+Kilo，三源导出一直靠手动跑、数据停在 11-18，
+                    用户发现后补链；失败同 Kilo 降级）
   ③ build.py       重导总库（F:/data/_ai_organize_tools，AI_ORGANIZE_OUTDIR
                     指到 data/cache/ai_history_stage 暂存；串链内含 recover
                     scan → length scan → 模型报告 → inject）
@@ -19,7 +23,7 @@
 （refresh 中再次触发直接拒绝）与最近一次结果状态（bridge getAiHistoryStatus
 读取）。每步 subprocess 隔离（超时/编码统一处理），进度经回调逐行外抛。
 失败语义：①②③④⑤ 任一核心步骤失败 → 整链报失败（F: 旧页面/旧索引保留，
-不半新半旧）；② 特殊，失败只降级为警告。
+不半新半旧）；②/②b 三个外部抓取器特殊，失败只降级为警告（沿用上次聚合）。
 """
 
 from __future__ import annotations
@@ -153,7 +157,7 @@ def run_refresh(logger: logging.Logger, emit: Callable[[str], None]) -> Dict:
             _FETCH_TIMEOUT, logger, "妙手", emit)
 
         # ② Kilo（可降级）
-        kilo_ok = True
+        degraded: list = []
         try:
             _set({"step": "Kilo 抓取"})
             emit(json.dumps(_snapshot(), ensure_ascii=False))
@@ -161,9 +165,28 @@ def run_refresh(logger: logging.Logger, emit: Callable[[str], None]) -> Dict:
                  os.path.join(PROJECT_ROOT, "tools", "kilo_capture", "kilo_fetch.py")],
                 _FETCH_TIMEOUT, logger, "Kilo", emit)
         except (RuntimeError, subprocess.TimeoutExpired, OSError) as exc:
-            kilo_ok = False
+            degraded.append("Kilo")
             logger.warning("[AI对话史] Kilo 抓取失败（沿用上次聚合继续）: %s", str(exc)[:300])
             emit(f"[Kilo] 抓取失败，沿用上次聚合：{str(exc)[:120]}")
+
+        # ②b 本地抓取器：TeleAgent / 码道 / DSH（2026-11-20 并入——此前链里
+        #    只有妙手+Kilo，三源导出一直靠手动跑，用户发现数据停在 11-18）
+        for _label, _sub in (
+            ("TeleAgent", ("teleagent_capture", "teleagent_fetch.py")),
+            ("码道", ("codearts_capture", "codearts_fetch.py")),
+            ("DSH", ("dsh_capture", "dsh_fetch.py")),
+        ):
+            try:
+                _set({"step": f"{_label} 抓取"})
+                emit(json.dumps(_snapshot(), ensure_ascii=False))
+                _py([sys.executable, "-X", "utf8",
+                     os.path.join(PROJECT_ROOT, "tools", *_sub)],
+                    _FETCH_TIMEOUT, logger, _label, emit)
+            except (RuntimeError, subprocess.TimeoutExpired, OSError) as exc:
+                degraded.append(_label)
+                logger.warning("[AI对话史] %s 抓取失败（沿用上次聚合继续）: %s",
+                               _label, str(exc)[:300])
+                emit(f"[{_label}] 抓取失败，沿用上次聚合：{str(exc)[:120]}")
 
         # ③ build.py 重导（串链内含 recover/length/report/inject）
         _set({"step": "重导总库"})
@@ -198,7 +221,7 @@ def run_refresh(logger: logging.Logger, emit: Callable[[str], None]) -> Dict:
 
         msg = (f"{n_sessions} 会话 · RAG {n_blocks} 块 / 索引 {idx_mb}MB · "
                f"耗时 {int(time.time() - started)}s"
-               + ("" if kilo_ok else " · Kilo 沿用旧数据"))
+               + "".join(f" · {name} 沿用旧数据" for name in degraded))
         _set({"running": False, "step": "", "last_ok": True,
               "last_ts": time.time(), "last_msg": msg})
         logger.info("[AI对话史] 全链刷新完成: %s", msg)

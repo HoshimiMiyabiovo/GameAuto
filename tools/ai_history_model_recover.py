@@ -84,6 +84,9 @@ KILO_RAW = PROJECT_ROOT / "data" / "kilo_capture" / "raw"
 # HTTP API 的另一形状，走 recover_kilo 自己的 raw 格式）。raw/<ses_id>/messages.json
 TELEAGENT_RAW = PROJECT_ROOT / "data" / "teleagent_capture" / "raw"
 CODEARTS_RAW = PROJECT_ROOT / "data" / "codearts_capture" / "raw"
+# DSH NEXT 的 raw 是另一形状：dsh_fetch 落 {session, records:[原记录]}，
+# 模型在 records 里 assistant/message 的 data.message.source.model
+DSH_RAW = PROJECT_ROOT / "data" / "dsh_capture" / "raw"
 # 来源固定模型（2026-11-17 用户拍板）：Trae 分享接口不带模型字段、本地正文加密，
 # 但用户明确该来源跑的就是 deepseek-v4.1-flash——整源记账。只适用于**没有**
 # 模型字段的来源；有字段的（如 Kilo 的逐条 modelID）一律用真实字段。
@@ -313,12 +316,21 @@ def recover_workbuddy() -> Dict[str, dict]:
 
 
 def recover_qoder() -> Dict[str, dict]:
-    """Qoder：CLI jsonl 的 message.model 逐条；IDE DB 的 chat_sessions.model 兜底。"""
+    """Qoder：CLI jsonl 的 message.model 逐条；IDE DB 的 chat_sessions.model 兜底。
+
+    1.1.86-hotfix.5.2 起（2026-11-19 实测）message.model 只写选择器档位 "auto"，
+    真实生效模型在同文件 runtime-config.model（user 行 businessModelKey 同值）。
+    逐条遇到 auto 时按「当时生效的 runtime-config」解析回真实代号——这是同文件
+    的真实字段，不违反「有字段不臆测映射」铁律；解析条数记 auto_resolved，
+    原值 auto 留在原始 jsonl 可追溯。没有 runtime-config 时 auto 原样保留。
+    """
     out: Dict[str, dict] = {}
     for fp in sorted(QODER_ROOT.glob(r"projects\**\*.jsonl")):
         sid = fp.stem
         turns: List[Tuple[str, str]] = []
         n_lines = 0
+        cfg_model = ""      # 顺序扫描：始终是该条消息之前最近一次 runtime-config
+        n_auto = 0
         for line in fp.open(encoding="utf-8", errors="replace"):
             n_lines += 1
             try:
@@ -326,14 +338,21 @@ def recover_qoder() -> Dict[str, dict]:
             except (ValueError, TypeError):
                 continue
             if o.get("type") == "runtime-config":
+                m = _clean_model(o.get("model"))
+                if m:
+                    cfg_model = m
                 continue
             msg = o.get("message")
             if isinstance(msg, dict) and msg.get("role") in ("assistant", "ai"):
-                turns.append((str(o.get("timestamp") or ""), _clean_model(msg.get("model"))))
+                m = _clean_model(msg.get("model"))
+                if m.lower() == "auto" and cfg_model:
+                    m = cfg_model
+                    n_auto += 1
+                turns.append((str(o.get("timestamp") or ""), m))
         if turns:
             _put(out, "qoder:" + sid[:8],
                  _rec("per_message", "qoder:message.model", turns, n_lines,
-                      {"assistant_rows": len(turns)}))
+                      {"assistant_rows": len(turns), "auto_resolved": n_auto}))
     if QODER_DB.exists():
         c = _ro(QODER_DB)
         try:
@@ -882,6 +901,41 @@ def recover_codearts() -> Dict[str, dict]:
     return _recover_opencode_raw(CODEARTS_RAW, "codearts", "codearts:message.modelID")
 
 
+def recover_dsh() -> Dict[str, dict]:
+    """DSH NEXT：raw=data/dsh_capture/raw/，每会话 messages.json 含原始记录序列。
+
+    assistant/message 的 `data.message.source.model` 是真实模型字段，按原值逐条
+    记录（口径铁律 3：有真实字段不臆测映射、不进 MODEL_ALIASES，同 Kilo）。
+    时间在记录顶层 time（epoch 毫秒，turn_models 口径）。
+    """
+    out: Dict[str, dict] = {}
+    if not DSH_RAW.exists():
+        return out
+    for ses_dir in sorted(DSH_RAW.iterdir()):
+        fp = ses_dir / "messages.json"
+        if not fp.is_file():
+            continue
+        try:
+            with fp.open(encoding="utf-8") as f:
+                dump = json.load(f)
+        except (ValueError, OSError):
+            continue
+        recs = dump.get("records") if isinstance(dump, dict) else dump
+        recs = recs or []
+        turns: List[Tuple[str, str]] = []
+        for r in recs:
+            if not isinstance(r, dict) or r.get("type") != "assistant/message":
+                continue
+            msg = (r.get("data") or {}).get("message") or {}
+            model = _clean_model(msg.get("source") or {})
+            if model:
+                turns.append((str(r.get("time") or 0), model))
+        if turns:
+            _put(out, "dsh:" + ses_dir.name,
+                 _rec("per_message", "dsh:source.model", turns, len(recs)))
+    return out
+
+
 def recover_trae() -> Dict[str, dict]:
     """Trae：分享接口不带模型字段、本地正文加密，无逐条证据可恢复——
     按 TRAE_FIXED_MODEL（用户拍板 2026-11-17）整源记会话级模型。
@@ -930,6 +984,7 @@ RECOVERERS = (
     ("Kilo", recover_kilo),
     ("TeleAgent", recover_teleagent),
     ("码道", recover_codearts),
+    ("DSH", recover_dsh),
     ("Trae", recover_trae),
 )
 

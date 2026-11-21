@@ -40,6 +40,9 @@ IMPORT_NAME_BY_PACKAGE: Dict[str, str] = {
     "windows-capture": "windows_capture",
     "onnxruntime-gpu": "onnxruntime",
     "ruamel.yaml": "ruamel",
+    # 包名带点、import 名是子模块（backports.zstd），PEP503 规范化会拼成
+    # backports_zstd 而 find_spec 失败——必须显式例外（DSH 抓取用）
+    "backports.zstd": "backports.zstd",
 }
 
 # requirements.txt 不可读时的兜底（打包/裁剪环境）。正常源码运行不会走到。
