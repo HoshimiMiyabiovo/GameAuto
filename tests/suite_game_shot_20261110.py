@@ -14,6 +14,11 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+# 沙箱兼容：tempfile 目录创建改默认权限（0700 受保护 DACL 在沙箱里写不进）
+from sandbox_temp import install as _install_sandbox_temp
+
+_install_sandbox_temp()
+
 from game_auto.services import game_shot_service as gss  # noqa: E402
 from game_auto.settings import manager  # noqa: E402
 from game_auto.settings.defaults import DEFAULT_GAME_SHOT  # noqa: E402

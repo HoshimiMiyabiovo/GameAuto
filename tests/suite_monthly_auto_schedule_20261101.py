@@ -25,6 +25,11 @@ from unittest.mock import patch
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+# 沙箱兼容：tempfile 目录创建改默认权限（0700 受保护 DACL 在沙箱里写不进）
+from sandbox_temp import install as _install_sandbox_temp
+
+_install_sandbox_temp()
+
 import game_auto.clients.daily_checker as dc  # noqa: E402
 import game_auto.runtime.background_template_runner as btr  # noqa: E402
 import game_auto.runtime.foreground_flow_runner as ffr  # noqa: E402

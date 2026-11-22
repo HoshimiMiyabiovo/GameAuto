@@ -68,6 +68,28 @@ SCAN_CHARS = 24000         # 关键词扫描每会话正文前缀。2026-11-17 �
                            # token/did 抓取后端，该会话就是为它调试手机的）。
                            # 关键词扫描是纯字符串 find，24000 对 552 会话总开销
                            # 增加 ~2s，无性能顾虑。
+
+# Code2Api 网关执行器副本（2026-11-21）：标题固定 `code2api <gatewaySessionId>`，
+# 工作目录属于网关 workspace；正常完成会被网关删除，中断残留会与本机 DSH 客户端
+# 会话重复。build.py 抓取侧已过滤，这里兜底旧 data.json（源数据不删）。标题前缀
+# 只对 OpenCode 源生效，避免误伤用户自己起名的 DSH 会话；目录对任意源生效。
+GATEWAY_WORKSPACES = tuple(
+    os.path.normcase(os.path.normpath(p.strip()))
+    for p in (os.environ.get("CODE2API_WORKSPACES")
+              or r"E:\GithubProject\Code2Api\workspace;E:\GithubProject\Code2Api\workspace-kilo").split(";")
+    if p.strip()
+)
+
+
+def is_gateway_exec_session(sess: dict) -> bool:
+    """命中网关执行器副本 → build 跳过（只过滤入库，不删源数据）。"""
+    ws = os.path.normcase(os.path.normpath(str(sess.get("ws") or "")))
+    if any(ws == w or ws.startswith(w + os.sep) for w in GATEWAY_WORKSPACES):
+        return True
+    return (str(sess.get("src") or "") == "OpenCode"
+            and str(sess.get("title") or "").strip().lower().startswith("code2api "))
+
+
 KEYWORD_THRESHOLD = 5      # 纯关键词入选线（标题强词 3/词、正文 2/词、游戏名 1/词）
 WS_BONUS = 30              # 工作区命中加分；需再凑 ≥1 内容分才入选（合计 ≥31）
 WS_GATE = WS_BONUS + 1     # 双门控：工作区会话 (score≥31) 与纯关键词会话 (score≥5) 各走各的线
@@ -192,9 +214,12 @@ def cmd_build(args: argparse.Namespace) -> int:
     kept: List[Dict] = []
     stats = Counter()
     for sess in sessions:
+        stats["total"] += 1
+        if is_gateway_exec_session(sess):
+            stats["skipped_gateway"] += 1
+            continue
         score, reason = session_score(sess)  # 只算一次，meta 里直接复用（审计 P3）
         sess["_score"] = score
-        stats["total"] += 1
         ws_hit = "workspace" in reason
         # 双门控：纯关键词线 KEYWORD_THRESHOLD；工作区会话需再凑内容分（防
         # "开在 game_auto 工作区的无关会话"，2026-11-08 LaTeX 会话实锤）
@@ -236,6 +261,9 @@ def cmd_build(args: argparse.Namespace) -> int:
                 pass
     print(f"筛选：{stats['total']} 会话 → 入库 {stats['kept']}"
           f"（工作区命中 {stats['kept_by_ws']}，关键词命中 {stats['kept'] - stats['kept_by_ws']}）")
+    if stats["skipped_gateway"]:
+        print(f"过滤网关执行器副本：{stats['skipped_gateway']} 个"
+              f"（code2api 标题前缀 / 网关 workspace）")
     print(f"来源分布：{ {k[4:]: v for k, v in stats.items() if k.startswith('src:')} }")
     print(f"切块：{n_chunks} 块 / 约 {n_chars // 10000} 万字 → {OUT_DIR}")
     # 倒排索引（2026-11-10）：build 顺带生成，query 走"候选精确复评"快速路径

@@ -10,6 +10,9 @@
     .venv\\Scripts\\python.exe tools\\flow_failure_report.py --json     # 机器可读
     .venv\\Scripts\\python.exe tools\\flow_failure_report.py --flow BaiJing --verbose
     .venv\\Scripts\\python.exe tools\\flow_failure_report.py --purge 90   # 顺手清 90 天前记录
+    .venv\\Scripts\\python.exe tools\\flow_failure_report.py --purge-stub-rows
+        # 清掉测试套件留下的假失败（按失败时的假 hwnd 过滤，默认 1,1234）：
+        # 这些记录截图必然为空，只会把"最近失败记录"和聚合统计带歪。
 """
 
 import argparse
@@ -33,7 +36,14 @@ def main() -> int:
     ap.add_argument("--verbose", action="store_true", help="明细里带当帧 OCR 文字")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
     ap.add_argument("--purge", type=int, default=0, help="清理 N 天前的失败记录（0=不清理）")
-    ap.add_argument("--yes", action="store_true", help="跳过 --purge 的交互确认（供脚本调用）")
+    ap.add_argument("--yes", action="store_true", help="跳过 --purge / --purge-stub-rows 的交互确认（供脚本调用）")
+    ap.add_argument(
+        "--purge-stub-rows",
+        nargs="?",
+        const="1,1234",
+        default="",
+        help="清理测试套件写进来的假失败记录（按失败时的假 hwnd 过滤，默认 1,1234）",
+    )
     ap.add_argument("--output", default="", help="报告写入文件（默认打印到控制台）")
     args = ap.parse_args()
 
@@ -52,6 +62,32 @@ def main() -> int:
             purge_old_records(None, keep_days=args.purge)
 
     db = WorkflowDB(str(WORKFLOW_DB_PATH))
+
+    if args.purge_stub_rows:
+        try:
+            stubs = [int(x) for x in str(args.purge_stub_rows).split(",") if str(x).strip()]
+        except ValueError:
+            print(f"--purge-stub-rows 参数不是 hwnd 列表: {args.purge_stub_rows}")
+            return 2
+        rows = db.query_flow_failures(days=0, limit=1000000)
+        picked = [r for r in rows if int(r.get("hwnd") or 0) in stubs]
+        print(f"将删除 {len(picked)} 条测试桩失败记录（hwnd in {stubs}，截图恒为空）：")
+        agg: dict = {}
+        for r in picked:
+            key = (r.get("flow_key") or "?", r.get("step") or "?")
+            agg[key] = agg.get(key, 0) + 1
+        for (flow_key, step), count in sorted(agg.items(), key=lambda kv: -kv[1]):
+            print(f"  {count:4d}  {flow_key} / {step}")
+        if picked and not args.yes and sys.stdin.isatty():
+            reply = input("确认删除？[y/N] ").strip().lower()
+            if reply not in ("y", "yes"):
+                print("已取消清理")
+                picked = []
+        if picked:
+            removed = db.delete_flow_failures_by_hwnd(stubs)
+            print(f"已删除 {removed} 条")
+        args.purge_stub_rows = ""
+
     summary = db.summarize_flow_failures(days=args.days, group_limit=args.top)
     recent = db.query_flow_failures(
         days=args.days, limit=args.limit, flow_key=args.flow, game_key=args.game

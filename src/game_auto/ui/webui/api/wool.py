@@ -13,7 +13,7 @@ def flows():
     from game_auto.runtime.background_template_runner import WOOL_FLOW_KEYS
     from game_auto.settings import manager as cm
     overrides = cm.load().get("flow_exe_paths") or {}
-    meta = {"MINIMAX":"MiniMax Code 每日签到","WORKBUDDY":"WorkBuddy 每日领取","TRAE":"TRAE SOLO 每日签到","QODER":"Qoder 每日积分领取","TELEAGENT":"TeleAgent 每日签到","CODEARTS":"码道Agent Space 每日领取","ASTUDIO":"AStudio 每日福利领取","DUMATE":"DuMate 每日福利"}
+    meta = {"MINIMAX":"MiniMax Code 每日签到","WORKBUDDY":"WorkBuddy 每日领取","TRAE":"TRAE SOLO 每日签到","QODER":"Qoder 每日积分领取","TELEAGENT":"TeleAgent 每日签到","CODEARTS":"码道Agent Space 每日领取","ASTUDIO":"AStudio 每日福利领取","DUMATE":"DuMate 每日福利","RACCOON":"商汤小浣熊 每日打开"}
     out=[]
     for key in WOOL_FLOW_KEYS:
         cfg = _load_flow_config(key) or {}

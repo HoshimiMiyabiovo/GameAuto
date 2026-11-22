@@ -24,6 +24,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+# 沙箱兼容：tempfile 目录创建改默认权限（0700 受保护 DACL 在沙箱里写不进）
+from sandbox_temp import install as _install_sandbox_temp
+
+_install_sandbox_temp()
+
 from game_auto.runtime import foreground_flow_runner as ffr  # noqa: E402
 
 FAILURES = []

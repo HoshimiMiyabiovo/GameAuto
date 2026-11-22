@@ -144,6 +144,10 @@ class TeaFocusEnv:
             # 候选，两条候选表共享成员，必须按调用身份分派，否则轮询会误命中
             # 下面的 invite_hit 把道具名点掉）
             return None
+        if tuple(texts) == tuple(bd.TEA_SUMMARY_MARKERS) and self.summary:
+            # 2026-11-22：摘要在轮询里就认（不再只靠 _wait_page_markers 纯等），
+            # 有摘要的用例不该再留"未轮询到喝茶"卡点记录
+            return {"text": "茶憩结束", "confidence": 0.90, "center": (960, 540)}
         if any(t in bd.REST_ROOM_MARKERS for t in texts):
             if self.in_rest:
                 return {"text": "拜访他人", "confidence": 0.80, "center": (1338, 1004)}
@@ -199,8 +203,9 @@ def test_focus_stuck_fails_honestly():
     env = TeaFocusEnv(focus=True, scene=False, summary=False, role_page=False, in_rest=True)
     ok = env.run()
     check("返回 False", ok is False, ok)
-    check("落了「未检测到茶憩场景/结束摘要」证据",
-          any("未检测到茶憩场景/结束摘要" in d for _, d in env.failures), env.failures)
+    check("落了失败证据（未等到摘要/画面冻结）",
+          any("未等到「茶憩结束」摘要" in d or "未变化" in d for _, d in env.failures),
+          env.failures)
     check("点过「退出关注」", FOCUS_XY in env.clicks, env.clicks)
     dialogue = [label for _, label in env.ratios if "对话框" in label]
     check("特写在场时不盲点对话框", dialogue == [], dialogue)
@@ -214,7 +219,7 @@ def test_no_focus_unchanged():
     check("无特写时同样诚实失败", ok is False, ok)
     check("不点「退出关注」", FOCUS_XY not in env.clicks, env.clicks)
     check("失败信息口径不变",
-          any("未检测到茶憩场景/结束摘要" in d for _, d in env.failures), env.failures)
+          any("未等到「茶憩结束」摘要" in d for _, d in env.failures), env.failures)
     dialogue = [label for _, label in env.ratios if "对话框" in label]
     check("场景未确认时绝不盲点对话框（11-06 根因收口）", dialogue == [], dialogue)
 

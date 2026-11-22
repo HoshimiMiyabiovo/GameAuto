@@ -11,8 +11,8 @@
 - When a task changes Python imports, module boundaries, or startup/runtime wiring, do at least one focused static validation beyond visual inspection.
 ## Dependency Rules
 
-- When adding a new Python dependency, update both requirements.txt and dependency_manager.py.
-- Specifically, dependency_manager.py -> REQUIRED_PYTHON_PACKAGES must include the import name to pip package mapping, otherwise startup dependency checks will not auto-install the package.
+- When adding a new Python dependency, update **requirements.txt only**（唯一人工清单，2026-10-29 起）。
+- dependency_manager.py 运行时解析 requirements.txt 生成 import 名映射（`REQUIRED_PYTHON_PACKAGES` 是推导值，不要手改）；只有「包名与 import 名不同」的例外才登记 `IMPORT_NAME_BY_PACKAGE`。启动**只检查不安装**，安装统一走 setup_deps.bat——详见下文「工程化基线」，旧的双登记/自动安装口径已废弃。
 ## Logging Rules
 
 - New UI flows and new data/task flows should write logs to the GameAutomation logger.
@@ -63,6 +63,41 @@
   迁入，文件名日期后缀不变；本文旧段里出现的 `artifacts/test_xxx_日期.py` 按此映射到
   `tests/suite_xxx_日期.py`）。`tests/test_suites.py` 逐个子进程跑，隔离各套件的
   monkeypatch；新增套件按 `suite_*.py` 命名即自动纳入，并必须登记 `tests/ci_suites.txt`。
+  - **套件禁写生产库（2026-11-22 起）**：套件用假 hwnd（`1`/`1234`）调流程时，
+    失败取证要自己打桩（`mock.patch.object(模块, "_record_failure")`）；代码侧另有
+    兜底——`is_test_process() and is_production_data_path(目标路径)` 同时成立才
+    拒写（目标改成临时库照写，套件自建库测 DB 是合法用法）。已铺三处：
+    `flow_diagnostics.record_failure`（不截图不写库）、`DailyProgressTracker.record_task`
+    （假进度：`wuwa/script_script` 就是这么进日报的）、`WorkflowDB.set_task_meta`
+    （月度/周常门控）。起因：白荆套件往生产库写了 138 条 hwnd 假的"没有截图的
+    失败"，用户对着 GUI「最近失败记录」问「这是什么情况，也不留证据」。
+  - **沙箱临时目录垫片（2026-11-22 起）**：DSH workspace-write 沙箱下
+    `tempfile.mkdtemp/TemporaryDirectory` 的 mode=0700 会建出受保护 DACL，
+    受限令牌写不进自己建的目录（WinError 5，约 40 套件假红；默认权限
+    `os.mkdir` 正常——不是工作区 ACL 缺陷）。`tests/sandbox_temp.py` 把
+    `tempfile.mkdtemp` 换成默认权限版；**新套件用到 tempfile 目录 API 时**，
+    在 `sys.path.insert` 后加 `from sandbox_temp import install; install()`
+    （conftest 已覆盖 pytest 路径，直跑路径靠套件自己装）。临时库/夹具一律
+    放 `.temp` 或系统 temp，**别放 `data/`**（生产目录，会被"测试进程不写
+    生产库"守卫拦，见 05-daily-progress）。
+
+    **实测矩阵（2026-11-22，受限令牌、工作区内，venv 3.13 与内置 3.12 双解释器
+    同结果；.temp / data/cache / 系统 temp 三处位置同结果）**：
+
+    | 建目录方式 | 建目录 | 往里写文件 | 能读它的权限 |
+    |---|---|---|---|
+    | `os.makedirs(p)` / `os.mkdir(p)` / `os.mkdir(p, 0o755)` | ✅ | ✅ | ✅ |
+    | `os.mkdir(p, 0o700)` | ✅ | ❌ PermissionError | ❌ 连 icacls 都 Access is denied |
+    | `tempfile.mkdtemp()` / `TemporaryDirectory()` | ✅ | ❌ WinError 5 | ❌ |
+
+    机制：带 mode=0700 建目录写出的是**受保护 DACL**（丢掉继承），沙箱受限
+    令牌（CodexSandboxUsers / S-1-4-* 能力组）拿不到任何授权——目录建完自己
+    立刻进不去，也删不掉；不带 mode 则继承父目录授权，一切正常。文件类
+    `tempfile.mkstemp / NamedTemporaryFile` 不受影响（实测可写）。
+    **推论**：① 沙箱里建目录永远别带 mode；② 0700 目录一旦建出来就是死目录，
+    沙箱内无解，只能沙箱外 `rmdir /s /q`；③ 这不是工作区 ACL 缺陷，跑 ACL
+    修复脚本没用（diagnose-windows-sandbox-acl 流程已走过，审批无应答未执行，
+    结论以本矩阵为准）。
   - **默认快回归（2026-11-16 起）**：`.venv\Scripts\python.exe -m pytest tests -q`
     跑 `GAMEAUTO_TEST_TIER=fast`，即 ci 清单减去 `LOCAL_HEAVY_SUITES`（真机 OCR /
     >30s / 依赖会被改写的本机文件），约 2 分钟；结尾打印最慢 10 个套件耗时。
@@ -78,21 +113,23 @@
   离屏实例化 + `findChild` 验证，不 grep `.qml` 文本。
 - **artifacts/ 留什么**：截图证据 + 依赖本机日志/游戏配置/真实屏幕的真机脚本
   （如 wool_claim_logs、wool_flow_fixes、stamina_configs、genshin/starrail_launcher 的
-  app_config 断言）。纯逻辑测试不要再往 artifacts 放。
+  app_config 断言）。纯逻辑测试不要再往 artifacts 放；**套件夹具尤其不许写
+  `data/artifacts`**——2026-11-22 审计在这里捡到一个套件留下的 0 字节
+  `_minimax_fake_api.log`，夹具该写 `data/cache/` 或临时目录，收尾删掉。
 - **依赖单一来源**：`requirements.txt` 是唯一人工清单，`services/dependency_manager.py`
   运行时解析它（import 名例外表 `IMPORT_NAME_BY_PACKAGE`），**不要再硬编码第二份包列表**。
   新增依赖只改 requirements.txt，然后在本机验证并运行
   `.venv\Scripts\python.exe tools\refresh_requirements_lock.py` 刷新 `requirements.lock`。
 - **锁文件**：`requirements.lock` 是已验证环境的精确快照（含 `onnxruntime-gpu`，
-  **绝不含 CPU 版 onnxruntime**——会让 RapidOCR 静默降级）。安装必须 `--no-deps` 回放。
+  **绝不含 CPU 版 onnxruntime**——会让 onnxocr 静默降级）。安装必须 `--no-deps` 回放。
 - **安装入口**：统一 `setup_deps.bat`（普通权限；检测到管理员会用 explorer 降权重启）。
   GUI/CLI 启动**只检查不安装**，缺包提示运行 setup_deps.bat。**禁止**恢复启动时提权
   pip install（`run_full_dependency_check` 已无 auto_install 参数）。
-- **静态检查**：`pyproject.toml` 配 ruff 窄规则（E9/F821/F822/F823/E722），
+- **静态检查**：`pyproject.toml` 配 ruff 窄规则（E9/F821/F822/F823/E722/W292/W293/F541，2026-11-18 扩入后三个零噪音类），
   开发工具在 `requirements-dev.txt`；`pyproject.toml` 不放运行时依赖，避免第三份清单。
 - **Bridge 拆分**：`ui/bridge.py` 只保留核心状态、Qt 属性/信号与事件分发；各视图的
   `@Slot` 实现在 `ui/bridge_views/`（click_sequence / setup / automation / scheduler /
-  daily / gacha 六个 mixin，PySide6 会把 mixin 里的 Slot/Property/Signal 注册进最终
+  daily / gacha / disk_manager / tool_manager 八个 mixin，PySide6 会把 mixin 里的 Slot/Property/Signal 注册进最终
   QObject），后台领域逻辑仍在 `ui/bridge_backends/`。**新逻辑按视图放对应 mixin 或 backend，
   不要再往 bridge.py 堆**；单文件目标 <1000 行。
 - **run_flow 拆分**：内建动作分发 `_dispatch_step_action`、失败取证

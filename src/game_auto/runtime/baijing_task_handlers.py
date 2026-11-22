@@ -241,6 +241,44 @@ TEA_SCENE_TIMEOUT_SEC = 25.0
 
 REST_ROOM_TEA_ENTRY = (0.883, 0.830)             # 右下「午后茶憩」立牌卡中心 (848,448)
 
+# ── 午后茶憩：卡点取证 / 气泡推进 / 冻结判定（2026-11-22） ──
+# 实锤链（11-08 12:34）：点「再来一杯」→ 13s 后弹出「选择话题」→ 点第一个话题 →
+# 12:34:55 出现「怎么了？」气泡 @ (1438,508)，之后连续 14 次点底部对话框
+# (0.50,0.92) 画面一字不变；11-09 起每天进茶憩第一帧都是同一句「怎么了？」
+# （会话被游戏持久化）——代码只会点底部对话框，所以天天卡在同一帧。
+# 旧实现三处漏洞：① 一进场景看到「茶憩纪念函」就算成功证据（11-08 因此没落
+# 任何茶憩证据，只落了退出链的 #222）；② 每杯没命中只记 warning 不取证；
+# ③ 摘要等 45s 是纯等待（_wait_page_markers 不点击），卡在气泡上永远等不到。
+TEA_TOPIC_MENU_MARKERS = ("选择话题",)        # 话题菜单标题（「结束茶憩」不算）
+
+
+# 角色气泡/短句限定区：11-22 实锤「怎么了？」@(1438,508) → (0.749,0.470)。
+# 排除左下侧栏（茶憩纪念函/角色名，x≈0.12）和底部对话框（y≈0.92）——这两处
+# 也有短文本，点它们等于乱点。
+TEA_BUBBLE_REGION = (0.55, 0.30, 0.92, 0.68)
+
+
+TEA_BUBBLE_MAX_CHARS = 12
+
+
+TEA_BUBBLE_EXCLUDE = (
+    "返回", "退出关注", "茶憩纪念函", "位阶", "今日可邀份额", "默契值",
+    "同调者位阶", "选择话题", "结束茶憩", "喝茶", "再来一杯", "请喝茶",
+    "干杯", "点击屏幕继续", "点击退出",
+)
+
+
+# 场景内同一帧 OCR 文字 30s 不变（且期间一直在点）→ 判卡死。只在非空帧上计时，
+# 避免 OCR 抖动/空帧误判。
+TEA_FREEZE_SEC = 30.0
+
+
+# 点过「喝茶/再来一杯」后 12s 内画面推进到话题菜单/摘要，记为"这杯被受理"。
+# 注意：受理 ≠ 完成——11-08 那一下受理了，但当天 workflow.sqlite3 的
+# daily_progress 里 tea_break 仍是 0/1，所以它只作诊断证据，成功门槛是摘要。
+TEA_CUP_CONFIRM_SEC = 12.0
+
+
 
 
 # ── 显影行动任务（2026-10-18 用户截图实测） ──
@@ -992,6 +1030,181 @@ def _retry_tea_entry_after_focus(logger: logging.Logger, hwnd, stop_check=None) 
 
 
 
+def _tea_texts(results) -> List[str]:
+    """当帧 OCR 文本（规范化后），供冻结判定使用。"""
+    texts: List[str] = []
+    for r in results or []:
+        text = _normalize_text(str(r.get("text") or "")).strip()
+        if text:
+            texts.append(text)
+    return texts
+
+
+class _TeaFreezeTracker:
+    """茶憩场景冻结判定：同一帧文字不变累计到 TEA_FREEZE_SEC 即判卡死。"""
+
+    def __init__(self, seconds: float = TEA_FREEZE_SEC):
+        self.seconds = float(seconds)
+        self._sig: Optional[Tuple[str, ...]] = None
+        self._since: Optional[float] = None
+
+    def reset(self) -> None:
+        self._sig = None
+        self._since = None
+
+    def feed(self, texts) -> bool:
+        sig = tuple(sorted(texts))
+        if not sig:
+            return False
+        now = time.time()
+        if sig != self._sig or self._since is None:
+            self._sig = sig
+            self._since = now
+            return False
+        return (now - self._since) >= self.seconds
+
+
+def _tea_bubble_hit(hwnd, results) -> Optional[Dict]:
+    """在茶憩画面中右侧找角色气泡/短句（11-22 实锤的「怎么了？」），返回可点项。"""
+    if not results:
+        return None
+    try:
+        wx, wy, ww, wh = _window_region(hwnd)
+    except Exception:
+        return None
+    if not ww or not wh:
+        return None
+    x0 = wx + TEA_BUBBLE_REGION[0] * ww
+    y0 = wy + TEA_BUBBLE_REGION[1] * wh
+    x1 = wx + TEA_BUBBLE_REGION[2] * ww
+    y1 = wy + TEA_BUBBLE_REGION[3] * wh
+    for r in results:
+        text = _normalize_text(str(r.get("text") or "")).strip()
+        if not text or len(text) > TEA_BUBBLE_MAX_CHARS:
+            continue
+        if text.isdigit():
+            continue
+        if any(word in text for word in TEA_BUBBLE_EXCLUDE):
+            continue
+        center = r.get("center")
+        if not center:
+            continue
+        cx, cy = center
+        if x0 <= cx <= x1 and y0 <= cy <= y1:
+            return dict(r)
+    return None
+
+
+def _tea_pick(logger, hwnd, results, markers, min_conf: float = 0.55) -> Optional[Dict]:
+    """优先复用当帧 OCR 结果，空结果再退回独立识别（保留既有套件的函数缝）。"""
+    if results:
+        return _pick_result(logger, hwnd, results, markers, min_conf=min_conf)
+    return _ocr_best_match(logger, markers, hwnd, min_conf=min_conf)
+
+
+def _tea_advance_once(logger, hwnd, results, scene_seen: bool) -> str:
+    """推进一次茶憩：场景未确认什么都不点；确认后优先点气泡，其次点对话框。
+
+    2026-11-22 实锤：11-08 起画面停在「怎么了？」气泡上，底部对话框连点 14 次
+    毫无反应——气泡要自己点，点对话框等于没点。返回动作标签供调用方计数。
+    """
+    in_scene = scene_seen or bool(_tea_pick(logger, hwnd, results, TEA_SCENE_MARKERS))
+    if not in_scene:
+        time.sleep(2.0)
+        return "idle"
+    bubble = _tea_bubble_hit(hwnd, results)
+    if bubble:
+        _pyautogui_click_guarded(*bubble["center"])
+        logger.info(
+            f"[白荆回廊·日常] 点击茶憩气泡 {bubble.get('text')!r} @ {bubble['center']}"
+        )
+        time.sleep(2.0)
+        return "bubble"
+    _click_ratio(logger, hwnd, TEA_DIALOGUE_CLICK, "对话框（推进对话）")
+    time.sleep(2.5)
+    return "dialogue"
+
+
+def _drive_tea_summary(
+    logger: logging.Logger,
+    hwnd,
+    scene_seen: bool,
+    timeout: float = 45.0,
+    stop_check=None,
+    freeze: Optional[_TeaFreezeTracker] = None,
+) -> Tuple[bool, bool]:
+    """边推进边等「茶憩结束」摘要，返回 (summary_seen, frozen)。
+
+    旧实现是纯 _wait_page_markers(45s)（只等不点）：11-08 实锤画面卡在
+    「怎么了？」气泡上时这 45 秒等于白等，摘要永远不会自己出来。现在每轮：
+    短等摘要(≤4s) → 有就点掉返回；否则依次处理 结束茶憩 / 又冒出的喝茶按钮 /
+    话题菜单 / 气泡/对话框推进。
+    """
+    deadline = time.time() + float(timeout)
+    tracker = freeze or _TeaFreezeTracker()
+    while time.time() < deadline:
+        if _stopped(stop_check):
+            return False, False
+        hwnd = _ensure_window(logger, hwnd)
+        if not hwnd:
+            return False, False
+        remaining = max(0.5, deadline - time.time())
+        if _wait_page_markers(
+            logger, hwnd, TEA_SUMMARY_MARKERS,
+            timeout=min(4.0, remaining), stop_check=stop_check,
+        ):
+            _click_ratio(logger, hwnd, TEA_SUMMARY_CLICK, "摘要区域（点击退出）")
+            time.sleep(1.5)
+            return True, False
+        results = _scene_results(logger, hwnd)
+        if tracker.feed(_tea_texts(results)):
+            return False, True
+        end_hit = _tea_pick(logger, hwnd, results, ("结束茶憩",))
+        if end_hit:
+            _pyautogui_click_guarded(*end_hit["center"])
+            logger.info(f"[白荆回廊·日常] 摘要等待期点「结束茶憩」@ {end_hit['center']}")
+            time.sleep(1.5)
+            continue
+        drink_hit = _tea_pick(logger, hwnd, results, TEA_DRINK_TEXTS)
+        if drink_hit:
+            _pyautogui_click_guarded(*drink_hit["center"])
+            logger.info(
+                f"[白荆回廊·日常] 摘要等待期又出现 {drink_hit['text']!r}，先点掉"
+                f" @ {drink_hit['center']}"
+            )
+            time.sleep(2.0)
+            continue
+        if _tea_pick(logger, hwnd, results, TEA_TOPIC_MENU_MARKERS):
+            _click_ratio(logger, hwnd, TEA_FIRST_TOPIC, "第一个话题")
+            time.sleep(1.5)
+            continue
+        _tea_advance_once(logger, hwnd, results, scene_seen)
+    return False, False
+
+
+def _tea_cup_confirmed(logger, hwnd, stop_check=None) -> bool:
+    """点过「喝茶/再来一杯」后确认画面推进（话题菜单/摘要）——只作诊断证据。
+
+    11-08 实锤：点了「再来一杯」，13s 后弹出「选择话题」，说明游戏受理了；
+    但当天任务行仍是 0/1（workflow.sqlite3 daily_progress），所以它不能当
+    完成证据，只能说明"这一下点对了"。
+    """
+    deadline = time.time() + TEA_CUP_CONFIRM_SEC
+    while time.time() < deadline:
+        if _stopped(stop_check):
+            return False
+        hwnd = _ensure_window(logger, hwnd)
+        if not hwnd:
+            return False
+        results = _scene_results(logger, hwnd)
+        if _tea_pick(logger, hwnd, results, TEA_TOPIC_MENU_MARKERS):
+            return True
+        if _tea_pick(logger, hwnd, results, TEA_SUMMARY_MARKERS):
+            return True
+        time.sleep(1.0)
+    return False
+
+
 def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> bool:
     """午后茶憩任务：前往→确定→任选角色→喝茶→再来一杯→摘要→返回→确定→主界面。
 
@@ -1000,7 +1213,9 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
     等待一段时间后再来一杯；茶憩结束出摘要，随意点击关闭；回到休息室后点左上
     「返回」，在「将离开休息室」确认框点「确认」，回到主界面。
     喝茶/再来一杯是场景内动态出现的交互（截图未捕捉到按钮形态），用 OCR 轮询
-    文字点击；若轮询不到只记录警告，不盲点 3D 场景。
+    文字点击；轮询不到不盲点 3D 场景，改为当场落证据（2026-11-22）。
+    完成证据只有「茶憩结束」摘要：看见茶憩纪念函/点中喝茶按钮都不算完成
+    （10-25 假成功、11-08 点中「再来一杯」仍 0/1 两次实锤）。
     """
     # 点角色卡后的补脚结果：True=已进场景/已点邀请，False=两样都没有，None=没走角色卡分支
     nudge_ok = None
@@ -1093,6 +1308,13 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
         scene_seen = _retry_tea_entry_after_focus(logger, hwnd, stop_check=stop_check)
     if not scene_seen:
         logger.warning("[白荆回廊·日常] 未检测到茶憩场景（茶憩纪念函）")
+    freeze = _TeaFreezeTracker()
+    summary_seen = False
+    frozen = False
+    cup_confirmed = False
+    drink_clicks = 0
+    bubble_clicks = 0
+    dialogue_clicks = 0
     topic_clicked = False
     for rnd in range(1, TEA_DRINK_ROUNDS + 1):
         if _stopped(stop_check):
@@ -1101,12 +1323,16 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
         if not hwnd:
             return False
         # 4a) 话题菜单兜底：出现则点第一个话题（每次茶憩仅能选一项，只点一次）
-        if not topic_clicked and _ocr_best_match(logger, TEA_TOPIC_MARKERS, hwnd, min_conf=0.6):
+        if not topic_clicked and _ocr_best_match(
+            logger, TEA_TOPIC_MENU_MARKERS, hwnd, min_conf=0.6
+        ):
             _click_ratio(logger, hwnd, TEA_FIRST_TOPIC, "第一个话题")
             topic_clicked = True
             time.sleep(1.0)
-        # 4b) 推进对话（点对话框区域），同时轮询喝茶按钮
+        # 4b) 推进对话（点对话框区域），同时轮询喝茶按钮；一轮只截一次屏
+        #     （饮料/摘要/气泡/冻结共用当帧结果）
         drink_hit = None
+        summary_in_round = False
         deadline = time.time() + TEA_DRINK_POLL_SEC
         while time.time() < deadline:
             if _stopped(stop_check):
@@ -1114,11 +1340,13 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
             hwnd = _ensure_window(logger, hwnd)
             if not hwnd:
                 return False
-            drink_hit = _ocr_best_match(logger, TEA_DRINK_TEXTS, hwnd, min_conf=0.55)
+            results = _scene_results(logger, hwnd)
+            drink_hit = _tea_pick(logger, hwnd, results, TEA_DRINK_TEXTS)
             if drink_hit:
                 break
             # 摘要已出现 → 不用再喝
-            if _ocr_best_match(logger, TEA_SUMMARY_MARKERS, hwnd, min_conf=0.55):
+            if _tea_pick(logger, hwnd, results, TEA_SUMMARY_MARKERS):
+                summary_in_round = True
                 break
             if _exit_focus_if_present(logger, hwnd, stop_check=stop_check):
                 continue    # 特写镜头里不盲点对话框（点了只会乱聚焦/进出特写）
@@ -1127,52 +1355,74 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
             # 11-06 实锤之后 100 秒在错误页面每 2.5s 盲点一次，12 次失败 10 次
             # 死在休息室、2 次点中场景里的角色/家具停在「关注特写」
             in_scene = scene_seen or bool(
-                _ocr_best_match(logger, TEA_SCENE_MARKERS, hwnd, min_conf=0.55)
+                _tea_pick(logger, hwnd, results, TEA_SCENE_MARKERS)
             )
             if not in_scene:
                 time.sleep(2.5)
                 continue
-            _click_ratio(logger, hwnd, TEA_DIALOGUE_CLICK, "对话框（推进对话）")
-            time.sleep(2.5)
+            # 2026-11-22：同一帧 30s 不变 → 卡死（11-08 起天天卡在「怎么了？」）
+            if freeze.feed(_tea_texts(results)):
+                frozen = True
+                break
+            action = _tea_advance_once(logger, hwnd, results, scene_seen)
+            if action == "bubble":
+                bubble_clicks += 1
+            elif action == "dialogue":
+                dialogue_clicks += 1
+        if summary_in_round:
+            summary_seen = True
+            _click_ratio(logger, hwnd, TEA_SUMMARY_CLICK, "摘要区域（点击退出）")
+            time.sleep(1.5)
+            break
+        if frozen:
+            break
         if drink_hit:
             _pyautogui_click_guarded(*drink_hit["center"])
-            logger.info(f"[白荆回廊·日常] 第 {rnd} 杯：点击 {drink_hit['text']!r} @ {drink_hit['center']}")
+            drink_clicks += 1
+            logger.info(
+                f"[白荆回廊·日常] 第 {rnd} 杯：点击 {drink_hit['text']!r}"
+                f" @ {drink_hit['center']}"
+            )
             time.sleep(2.0)
+            if _tea_cup_confirmed(logger, hwnd, stop_check=stop_check):
+                cup_confirmed = True
+                logger.info(f"[白荆回廊·日常] 第 {rnd} 杯已被游戏受理（画面推进到话题/摘要）")
         else:
             logger.warning(f"[白荆回廊·日常] 第 {rnd} 杯：未轮询到喝茶按钮（可能按钮形态与文字不符）")
+            # 2026-11-22 用户拍板：轮询没命中就当场取证，别等退出后画面已不是茶憩
+            _record_step_failure(
+                logger, hwnd, "午后茶憩",
+                f"第 {rnd} 杯：{TEA_DRINK_POLL_SEC:.0f}s 内未出现「喝茶/再来一杯」"
+                f"（点气泡 {bubble_clicks} 次、点对话框 {dialogue_clicks} 次）",
+            )
         # 4c) 每杯之间等待一段时间（用户：等待一段时间后再来一杯）
         if rnd < TEA_DRINK_ROUNDS:
             time.sleep(TEA_DRINK_WAIT_SEC)
-    # 5) 等茶憩结束摘要 → 随意点击关闭
-    summary_seen = _wait_page_markers(
-        logger, hwnd, TEA_SUMMARY_MARKERS, timeout=45.0, stop_check=stop_check
-    )
-    if not summary_seen:
-        # 未自动结束则尝试点「结束茶憩」
-        end_hit = _ocr_best_match(logger, ("结束茶憩",), hwnd, min_conf=0.55)
-        if end_hit:
-            _pyautogui_click_guarded(*end_hit["center"])
-            logger.info(f"[白荆回廊·日常] 点击「结束茶憩」@ {end_hit['center']}")
-            if _wait_page_markers(
-                logger, hwnd, TEA_SUMMARY_MARKERS, timeout=15.0, stop_check=stop_check
-            ):
-                summary_seen = True
-    if _ocr_best_match(logger, TEA_SUMMARY_MARKERS, hwnd, min_conf=0.55):
-        summary_seen = True
-        _click_ratio(logger, hwnd, TEA_SUMMARY_CLICK, "摘要区域（点击退出）")
-        time.sleep(2.0)
-    # 6) 回休息室 → 返回 → 确认 → 主界面
-    # 2026-10-25 假成功修复：返回任务面板成功 ≠ 茶憩完成。19:06 那轮「确认」后
-    # 既没见过场景也没见过摘要，仅因 _return_to_task_panel 成功就被上层记成功，
-    # 而游戏内实际仍是 0/1。这里必须用场景/摘要作为证据，失败就返回 False；
-    # 上层也不再乐观写 done，最终以任务列表重扫为准。
-    has_evidence = scene_seen or summary_seen
-    if not has_evidence:
-        logger.warning("[白荆回廊·日常] 茶憩未出现场景/结束摘要，任务状态未确认")
+    # 5) 等「茶憩结束」摘要：边推进边等（旧实现纯等待 45s，卡在气泡上必然超时）
+    if not summary_seen and not frozen:
+        summary_seen, frozen = _drive_tea_summary(
+            logger, hwnd, scene_seen, timeout=45.0,
+            stop_check=stop_check, freeze=freeze,
+        )
+    # 6) 判成功/失败：只有「茶憩结束」摘要算完成证据。
+    # 11-08 实锤：点中「再来一杯」、游戏也受理了（13s 后弹「选择话题」），但当天
+    # workflow.sqlite3 的 daily_progress 里 tea_break 仍是 0/1——点中按钮 ≠ 喝完，
+    # 看见「茶憩纪念函」更不等于完成（10-25 假成功就是这么来的）。
+    if frozen:
+        logger.warning(f"[白荆回廊·日常] 茶憩画面 {TEA_FREEZE_SEC:.0f}s 未变化，判卡死")
         _record_step_failure(
             logger, hwnd, "午后茶憩",
-            "未检测到茶憩场景/结束摘要，任务状态未确认",
+            f"茶憩画面 {TEA_FREEZE_SEC:.0f}s 未变化，疑似卡在对话气泡/未响应交互",
         )
+    elif not summary_seen:
+        logger.warning("[白荆回廊·日常] 未等到「茶憩结束」摘要，任务状态未确认")
+        _record_step_failure(
+            logger, hwnd, "午后茶憩",
+            "未等到「茶憩结束」摘要（场景出现不算完成；"
+            f"本轮点喝茶 {drink_clicks} 次、受理={'是' if cup_confirmed else '否'}；"
+            "11-08 实锤 点了喝茶仍 0/1）",
+        )
+    has_evidence = bool(summary_seen)
     returned = _return_to_task_panel(logger, hwnd, stop_check=stop_check)
     return bool(returned and has_evidence)
 

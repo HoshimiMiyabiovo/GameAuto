@@ -24,7 +24,7 @@ def run_cj_background(
 
 
 # 薅羊毛集合：依次执行的子流程 key（flow_configs.json），新增羊毛任务在此追加
-WOOL_FLOW_KEYS: List[str] = ["MINIMAX", "WORKBUDDY", "TRAE", "QODER", "TELEAGENT", "CODEARTS", "ASTUDIO", "DUMATE"]
+WOOL_FLOW_KEYS: List[str] = ["MINIMAX", "WORKBUDDY", "TRAE", "QODER", "TELEAGENT", "CODEARTS", "ASTUDIO", "DUMATE", "RACCOON"]
 
 
 def _start_ocr_warmup(logger: logging.Logger):

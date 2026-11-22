@@ -34,13 +34,14 @@ GUI 开关：**「每日进度」页底部「AI 对话史」卡片**（`services
 | `AI_ORGANIZE_SOURCE` | 本轮暂存的 data.json（串链内部用，避免读上一轮旧库） | recover/length 的 SOURCE_JSON |
 | `AI_ORGANIZE_TOOLS` | build.py 工具链目录（默认 `F:\data\_ai_organize_tools`） | build TEMPLATE、inject DEFAULT_TEMPLATE、refresh BUILD_PY |
 | `AI_REPO_ROOT` | game_auto 仓库根（默认 `E:\GithubProject\game_auto`） | build.py 内 ai_history_* 工具与各抓取聚合 JSON 路径 |
+| `CODE2API_WORKSPACES` | 网关执行器 workspace 清单（分号分隔；默认 `E:\GithubProject\Code2Api\workspace;E:\GithubProject\Code2Api\workspace-kilo`） | build.py `do_opencode` 与 RAG `build` 的网关副本过滤 |
 
 换盘/换机只改环境变量不动代码。同目录此前在 build/rag/inject/refresh 四处
 独立硬编码（2026-11-18 审计收敛）。各来源的**应用本体路径**（zcode/catpaw/
 kilo/teleagent/codearts 等）以 `~` 相对或客观安装位置为准，属机器事实不算
 可配置项；build.py 里残留的 `C:\Users\admin` 用户名硬编码已改 `expanduser`。
 
-## 来源清单（20 个 do_*，9 个本地抓取器）
+## 来源清单（20 个 do_*，7 个本地抓取器：链内 5 + 手动 Grok/Trae 2）
 
 | 来源 | do_* | 正文位置 | 抓取器 |
 |---|---|---|---|
@@ -94,6 +95,11 @@ kilo/teleagent/codearts 等）以 `~` 相对或客观安装位置为准，属机
    ci_suites 登记、**模型恢复器**（`recover_<src>` + `RECOVERERS` 登记 +
    套件桩测；有真实字段按铁律 3 原值记。漏接恢复器=最终页模型列空，
    2026-11-17/11-19 两次复发后立此规）。
+6. **网关执行器副本不入库**：Code2Api 的 oneshot 会话标题固定
+   `code2api <gatewaySessionId>`，正常完成会被网关删除，中断/崩溃残留会与
+   本机 DSH 客户端会话重复；build.py `do_opencode` 按标题前缀/网关 workspace
+   过滤，RAG `build` 同口径兜底（标题前缀只对 OpenCode 源生效）。只过滤入库，
+   源库数据不删（2026-11-21）。
 
 ## 已知环境坑（详见 01 分篇）
 
@@ -107,3 +113,7 @@ kilo/teleagent/codearts 等）以 `~` 相对或客观安装位置为准，属机
   第一行（2026-11-20 实锤）→ 用 `backports.zstd.open(path,"rb")` 跨帧流式读；
   Python 3.13 无 stdlib `compression.zstd`（3.14 才内置），依赖走 requirements.txt
   的 `backports.zstd` + dependency_manager 的 import 名例外。
+- **DSH 的 `time` 是 epoch 毫秒**（2026-11-21 修复）：抓取导出 `k/sk` 原样保留毫秒，
+  而 build.py 的 `add()` 只认 epoch 秒；`do_dsh` 必须用 `epoch()` 归一。否则
+  `disp()` 溢出成「时间未知」、`sk` 大三个数量级把 DSH 顶到排序最前，消息时间与
+  RAG 块 `[时间]` 头也一起失效。其他源（Kilo/TeleAgent/码道）实测都是秒。

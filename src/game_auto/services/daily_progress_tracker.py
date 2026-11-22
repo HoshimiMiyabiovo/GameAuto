@@ -44,6 +44,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from ..settings.paths import is_production_data_path, is_test_process
+
 from ..storage.workflow_db import WorkflowDB
 
 LOGGER = logging.getLogger("GameAutomation")
@@ -390,6 +392,7 @@ class DailyProgressTracker:
         uid: str = "",
         nickname: str = "",
         extra: Optional[Dict[str, Any]] = None,
+        protect_statuses: Optional[tuple] = None,
     ):
         """记录单个任务状态（UPSERT，后写覆盖先写）。
 
@@ -397,13 +400,25 @@ class DailyProgressTracker:
         extra）——"按最终结果落库"依赖此语义：脚本首轮失败、统一重试成功后，
         最终库里是 success。task_key 命名约定：script_<脚本名> / sign_<类型> /
         其余为数据源自定义（如 活跃度/朝夕心愿）。
+
+        protect_statuses：旧行状态命中该集合时跳过本次更新。签到场景用它挡住
+        "当天已 success/already，后续重复执行 failed 又覆盖回失败"
+        （2026-11-21 事故：本地代理未启动，17:30 的失败覆盖了 08:11 的真实签到成功）。
         """
+        # 测试进程写生产库 = 假进度（2026-11-22）：套件跑 task_batch_runner 时
+        # 走的是函数内 `from ... import get_tracker`，patch 模块属性拦不住，
+        # 于是日报里凭空多出 `wuwa / script_script`。目标库被套件改写成 tmp
+        # （is_production_data_path 为 False）时照写——那是测试自己建的库。
+        if is_test_process() and is_production_data_path(getattr(self.db, "db_path", "")):
+            LOGGER.debug(
+                "[每日进度] 测试进程跳过写生产库: %s/%s → %s",
+                game_key, task_key, getattr(self.db, "db_path", ""),
+            )
+            return
         date_key = _today_key()
         now = time.time()
         extra_json = json.dumps(extra or {}, ensure_ascii=False)
-        with self.db._connect() as conn:
-            conn.execute(
-                """
+        sql = """
                 INSERT INTO daily_progress(
                     date_key, game_key, game_name, uid, nickname,
                     task_key, task_name, source, status, message, extra_json, updated_at
@@ -419,12 +434,17 @@ class DailyProgressTracker:
                     message = excluded.message,
                     extra_json = excluded.extra_json,
                     updated_at = excluded.updated_at
-                """,
-                (
-                    date_key, game_key, game_name, uid, nickname,
-                    task_key, task_name, source, status, message, extra_json, now,
-                ),
-            )
+        """
+        params: list = [
+            date_key, game_key, game_name, uid, nickname,
+            task_key, task_name, source, status, message, extra_json, now,
+        ]
+        if protect_statuses:
+            placeholders = ", ".join("?" for _ in protect_statuses)
+            sql += f" WHERE daily_progress.status NOT IN ({placeholders})"
+            params.extend(protect_statuses)
+        with self.db._connect() as conn:
+            conn.execute(sql, params)
 
     def record_error(self, game_key: str, error_message: str):
         """记录游戏级别的错误。"""
@@ -447,7 +467,12 @@ class DailyProgressTracker:
         message: str = "",
         uid: str = "",
     ):
-        """记录签到结果（source='script'）。"""
+        """记录签到结果（source='script'）。
+
+        当天已有 success/already 时，后续 failed 不覆盖旧行——启动前签到一天会
+        跑多轮，重复轮次撞上本地代理/网络故障不能把当天真实签到成功改判失败
+        （2026-11-21 事故）。失败重试成功后仍允许 success 覆盖 failed。
+        """
         self.record_task(
             game_key=game_key,
             game_name=game_name,
@@ -457,6 +482,7 @@ class DailyProgressTracker:
             source="script",
             message=message,
             uid=uid,
+            protect_statuses=("success", "already") if status == "failed" else None,
         )
 
     def record_script_run(

@@ -46,6 +46,13 @@ def _pin_real_tempdir() -> None:
 
 _pin_real_tempdir()
 
+# 沙箱兼容垫片（2026-11-22）：tempfile 目录创建改默认权限，否则 0700 受保护
+# DACL 让受限令牌写不进自己建的临时目录（约 40 个套件本机假红）。
+# 直跑 python tests/suite_x.py 不经 conftest，由各套件自己 install()。
+from sandbox_temp import install as _install_sandbox_temp  # noqa: E402
+
+_install_sandbox_temp()
+
 
 def pytest_sessionfinish(session, exitstatus) -> None:
     """收工打印最慢 10 个套件，避免"回归突然变慢"只能靠猜。

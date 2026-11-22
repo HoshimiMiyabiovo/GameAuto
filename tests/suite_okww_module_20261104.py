@@ -19,6 +19,11 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+# 沙箱兼容：tempfile 目录创建改默认权限（0700 受保护 DACL 在沙箱里写不进）
+from sandbox_temp import install as _install_sandbox_temp
+
+_install_sandbox_temp()
 sys.path.insert(0, str(PROJECT_ROOT / "tools" / "okww_module"))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 # 2026-11-04：直接单跑本套件（不经 test_suites.py 的子进程 env）时，里面的

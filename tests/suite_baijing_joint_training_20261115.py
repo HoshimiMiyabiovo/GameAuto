@@ -117,7 +117,7 @@ class FakeTime:
 
 
 def _records():
-    return {"guarded": [], "ratio": [], "snapshot": [], "ocr_texts": []}
+    return {"guarded": [], "ratio": [], "snapshot": [], "ocr_texts": [], "failures": []}
 
 
 def _patch_env(frames_for_ocr=None, zone_waits=None, ensure_main=True, ft=None,
@@ -154,6 +154,13 @@ def _patch_env(frames_for_ocr=None, zone_waits=None, ensure_main=True, ft=None,
         rec["snapshot"].append(prefix)
         return "snap.jpg"
 
+    def _record_failure_rec(logger, hwnd, step, detail, items=None):
+        # 失败取证必须打桩：以前漏了这条，套件每跑一次就往生产 workflow.sqlite3
+        # 插一条 hwnd=1234 的假失败（截图必然为空），11-15~11-22 累计 60 条，
+        # 用户看到的「最近失败记录」全是测试噪音（2026-11-22 反馈）。
+        rec["failures"].append((step, detail))
+        return None
+
     def _ocr_rec(logger, texts, hwnd, *a, **kw):
         rec["ocr_texts"].append(tuple(texts))
         if not entry_hit:
@@ -176,6 +183,7 @@ def _patch_env(frames_for_ocr=None, zone_waits=None, ensure_main=True, ft=None,
         mock.patch.object(bjt, "_template_center",
                           return_value=TEMPLATE_HIT_CENTER if template_hit else None),
         mock.patch.object(bjt, "_ratio_point", return_value=JOINT_ICON_CENTER),
+        mock.patch.object(bjt, "_record_failure", side_effect=_record_failure_rec),
     ]
     if frames_for_ocr is not None:
         patches.append(mock.patch.object(bjt, "ocr_window_content",
@@ -307,7 +315,7 @@ def test_icon_fallback():
 
 def test_entry_never_opens():
     print("[8] 三个定位点都进不去 → failed + 现场证据")
-    ev = "；轮询期间见过：「hub帧签名」"
+    ev = "；轮询期间见过：「物资筹备 | 光刻协议 | 自由贸易 | 定向物资保障」"
     patches, rec, _ft = _patch_env(
         frames_for_ocr=None,
         zone_waits=[(False, HUB_FRAME, ev), (False, HUB_FRAME, ev), (False, HUB_FRAME, ev)],
@@ -316,7 +324,11 @@ def test_entry_never_opens():
         res = bjt.run_joint_training_recon(__import__("logging").getLogger("t"), 1234)
     check("status failed", res["status"] == "failed", res["detail"])
     check("detail 带轮询现场证据", "轮询期间见过" in res["detail"], res["detail"])
+    check("现场证据带真实的帧内容", "物资筹备" in res["detail"], res["detail"])
     check("detail 列出尝试过的定位方式", "模板" in res["detail"], res["detail"])
+    check("失败取证落一次（步骤=防区页，且带当帧 OCR）",
+          rec["failures"] and rec["failures"][0][0] == "防区页"
+          and "物资筹备" in rec["failures"][0][1], str(rec["failures"]))
     check("未取证快照（没进页不快照）", not rec["snapshot"], str(rec["snapshot"]))
     check("退回主界面", res["returned_main"] is True)
 

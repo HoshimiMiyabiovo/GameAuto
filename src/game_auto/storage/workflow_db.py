@@ -4,7 +4,9 @@ import os
 import sqlite3
 import time
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Sequence
+
+from ..settings.paths import is_production_data_path, is_test_process
 
 _logger = logging.getLogger("GameAutomation.WorkflowDB")
 
@@ -483,6 +485,23 @@ class WorkflowDB:
             )
             return int(cur.rowcount or 0)
 
+    def delete_flow_failures_by_hwnd(self, hwnds: Sequence[int]) -> int:
+        """按窗口句柄删失败记录，返回删除条数。
+
+        只给"清理套件桩数据"用（2026-11-22）：测试用假句柄跑流程时，
+        record_failure 会留下截图必然为空的假失败。真机 HWND 不会落在
+        1/1234 这种值上，按句柄过滤是精确的。
+        """
+        values = sorted({int(h) for h in (hwnds or [])})
+        if not values:
+            return 0
+        marks = ",".join("?" for _ in values)
+        with self._connect() as conn:
+            cur = conn.execute(
+                f"DELETE FROM flow_failures WHERE hwnd IN ({marks})", tuple(values)
+            )
+            return int(cur.rowcount or 0)
+
     def upsert_workflow(self, workflow: Dict[str, Any]) -> int:
         with self._connect() as conn:
             row = conn.execute("SELECT id FROM workflows WHERE name = ?", (workflow["name"],)).fetchone()
@@ -607,7 +626,16 @@ class WorkflowDB:
             return {row["app_key"]: dict(row) for row in rows}
 
     def set_task_meta(self, key: str, value: str) -> None:
-        """通用任务元数据 kv（如每周任务的最后执行周标识）。"""
+        """通用任务元数据 kv（如每周任务的最后执行周标识）。
+
+        测试进程 + 生产库的组合直接拒写（2026-11-22）：这里存的是月度/周常
+        门控（`monthly_flow:XXX` / `weekly_flow:XXX`），套件若把它写成"本月
+        已完成"，真机当月购买就会被静默跳过。目前没有踩到，但同族漏洞已经
+        在 flow_failures / daily_progress 上各爆过一次，这里先上闸。
+        """
+        if is_test_process() and is_production_data_path(self.db_path):
+            _logger.debug("[WorkflowDB] 测试进程跳过写生产 task_meta: %s", key)
+            return
         with self._connect() as conn:
             conn.execute(
                 """

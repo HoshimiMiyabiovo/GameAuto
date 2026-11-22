@@ -158,6 +158,20 @@ TEA_ROOM_REGISTRY_MARKERS = ("茶憩纪念函", "飞镖", "棒球")
 CAT_RETAIL_MARKERS = ("有猫精选", "精选礼包", "有猫推荐")
 
 
+# ── 邮件/公告面板（2026-11-22 补登记：#447 11-20 10:05:54 / #456 11-21 19:41:36）──
+# 两帧同构：角色试玩 finally 里的盲点 P_BACK=(0.101,0.047)，在主界面上那个
+# 坐标正好是「邮件」图标 (0.095，相差 11px)——面板被自动化自己点开，主界面
+# 模板不再命中、恢复认不出，只能等 _ensure_main_ui 的关闭模板兜底（白烧
+# 6~8s，还落一条假失败）。11-22 12:50 第三次复现，三处一起修。
+# 特征取面板独占文字（#456 当帧 19 个区域实测：已签收×3 / 包裹内容物 /
+# 清理已读 / 全部签收）；要 ≥2 个独有词才判（页面判定铁律：单词不判页，
+# 「已签收」单词也可能出现在别的领取记录里）。
+MAIL_PANEL_MARKERS = ("已签收", "清理已读", "全部签收", "包裹内容物")
+
+
+MAIL_PANEL_CLOSE = (0.938, 0.19)   # 面板右上 X（1800,204）@1919x1079 实测
+
+
 
 
 def _on_memory_detail_page(logger: logging.Logger, hwnd) -> bool:
@@ -477,6 +491,35 @@ def _scene_exit_friend(logger: logging.Logger, hwnd, results, stop_check=None) -
 
 
 
+def _mail_panel_hit(logger: logging.Logger, hwnd, results: List[Dict]) -> Optional[Dict]:
+    """邮件/公告面板 = 独有词 ≥2（「已签收」单词太泛，别的领取记录里也可能出现）。"""
+    texts = [str(r.get("text") or "") for r in (results or [])]
+    hits = [m for m in MAIL_PANEL_MARKERS if any(m in t for t in texts)]
+    if len(hits) < 2:
+        return None
+    return {"text": "邮件/公告面板:" + "+".join(hits), "confidence": 1.0, "center": (0, 0)}
+
+
+
+
+def _scene_exit_mail_panel(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
+    """邮件/公告面板：点面板右上 X 关闭，回主界面。
+
+    X 在列表/详情外框上，没有文字，用实测比例点；_dismiss_overlay 遇到同一个 X
+    会故意跳过（那是任务列表面板自己的关闭钮，点它会把用户正在看的列表关掉），
+    所以邮件面板必须自己登记一条退出，别指望通用兜底。
+    """
+    hit = _mail_panel_hit(logger, hwnd, results)
+    if not hit:
+        return False
+    _click_ratio(logger, hwnd, MAIL_PANEL_CLOSE, "邮件面板右上关闭")
+    logger.info(f"[白荆回廊·日常] 场景退出·邮件面板：点右上 X（命中 {hit['text']}）")
+    time.sleep(1.2)
+    return True
+
+
+
+
 def _loading_screen_hit(logger, hwnd, results: List[Dict]) -> Optional[Dict]:
     """加载过场 = 中央 logo + 进度百分比，两样都在才算。
 
@@ -499,7 +542,7 @@ def _loading_screen_hit(logger, hwnd, results: List[Dict]) -> Optional[Dict]:
 
 # 登记表顺序 = 匹配优先级：遮罩类先清，再清会挡住返回按钮的摘要，最后才是界面本身。
 # 新增界面只要加一行（特征必须挑该界面独占文字，原因见 REST_ROOM_MARKERS 注释），
-# 并在 artifacts/test_baijing_scene_registry_20261026.py 补一条用例锁住顺序。
+# 并在 tests/suite_baijing_scene_registry_20261026.py 补一条用例锁住顺序。
 SCENE_RULES = (
     # 加载过场排最前：加载中点哪都无效，先等它过去，别让真页面在 unknown 里被放弃
     {"name": "加载过场", "markers": LOADING_SCREEN_MARKERS, "min_conf": 0.5,
@@ -517,6 +560,9 @@ SCENE_RULES = (
     {"name": "烙痕列表", "markers": MEMORY_LIST_MARKERS, "min_conf": 0.55, "exit": _scene_exit_memory_list},
     {"name": "茶憩房间", "markers": TEA_ROOM_REGISTRY_MARKERS, "min_conf": 0.55, "exit": _scene_exit_tea_room},
     {"name": "有猫零售", "markers": CAT_RETAIL_MARKERS, "min_conf": 0.55, "exit": _scene_exit_cat_retail},
+    # 邮件/公告面板：2026-11-22 补登记（#447/#456 盲点误开，见 MAIL_PANEL_MARKERS）
+    {"name": "邮件/公告面板", "markers": MAIL_PANEL_MARKERS, "min_conf": 0.55,
+     "detector": _mail_panel_hit, "exit": _scene_exit_mail_panel},
     # 好友页排最后：独有词多页少见，detector ≥2 闸在（2026-11-13 #282 取证驱动）
     {"name": "好友页", "markers": FRIEND_SCENE_MARKERS, "min_conf": 0.55,
      "detector": _friend_page_hit, "exit": _scene_exit_friend},

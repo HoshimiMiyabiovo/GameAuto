@@ -320,6 +320,28 @@ def _read_flow_exe_override(flow_key: str) -> str:
         return ""
 
 
+def _resolve_shortcut_target(path: str) -> str:
+    """把 .lnk 快捷方式解析成真实 exe 路径；解析不了返回原路径。
+
+    2026-11-22 用户给的第一个入口是开始菜单快捷方式（商汤小浣熊.lnk）：
+    `subprocess.Popen` 对 .lnk 直接抛 WinError 193（不是合法 Win32 程序），
+    而且窗口/进程过滤要的是真实进程名，光留着 .lnk 名字对不上。解析成目标
+    exe 后，启动、`window_process_names` 匹配、版本日志三处一次对齐。
+    """
+    if not path or not path.lower().endswith(".lnk"):
+        return path
+    try:
+        import win32com.client  # 延迟导入：只有 .lnk 流程才需要 COM
+
+        shell = win32com.client.Dispatch("WScript.Shell")
+        target = str(shell.CreateShortcut(os.path.abspath(path)).TargetPath or "").strip()
+        if target and os.path.exists(target):
+            return target
+    except Exception as exc:  # noqa: BLE001 - 解析失败退回原路径，由调用方报错
+        _LOGGER.warning("解析快捷方式失败（%s）: %s", path, exc)
+    return path
+
+
 def _resolve_exe_path(cfg: Dict[str, Any], flow_key: str = "", logger: Optional[logging.Logger] = None) -> Optional[str]:
     """解析流程 exe 路径。
 
@@ -2084,6 +2106,7 @@ _BUILTIN_ACTIONS = (
     "qoder_verify_claim",
     "codearts_claim_daily",
     "astudio_claim_daily",
+    "wool_open_close_app",
     "wool_dismiss_update",
     "wool_verify_log",
     "script_checklist_sync",
@@ -2104,11 +2127,15 @@ def _dispatch_step_action(
     scales: List[float],
     confidences: List[float],
     stop_check: Optional[Callable[[], bool]],
+    reused_window: bool = False,
 ) -> Tuple[bool, str, int, Optional[int]]:
     """执行内建动作步骤（采购/兑换/进入主界面/Qoder 领取/日志核验）。
 
     返回 (是否成功, 失败说明, 最新 hwnd, 最新 pid)：进入游戏类动作会把
     窗口切到游戏本体，调用方必须用返回值覆盖本地 hwnd/pid。
+
+    `reused_window`：run_flow 是否复用了执行前就存在的窗口。目前只有
+    `wool_open_close_app` 用它决策「今天已打开过 → 不关，别打断用户」。
     """
     if action == "zzz_shop_buy":
         # 绝区零后勤商店采购：内部完成页签切换 + 逐商品「点商品→确认」循环
@@ -2260,6 +2287,23 @@ def _dispatch_step_action(
         if not claim_ok:
             return False, f"[{flow_key}] 步骤失败: {name} ({claim_msg})", hwnd, pid
         logger.info(f"[{flow_key}] 步骤{step_no}AStudio 每日福利领取完成: {claim_msg}")
+    elif action == "wool_open_close_app":
+        # 「打开一次再关闭」型羊毛任务（商汤小浣熊）：奖励只认当天打开过客户端，
+        # 无需任何点击。停留 + 关闭逻辑集中在 wool_app_session，含三条安全闸
+        # （复用实例不关 / 宿主祖先进程不关 / 非本轮拉起的进程不关）。
+        from .wool_app_session import open_close_app_once
+
+        session_ok, session_msg = open_close_app_once(
+            logger,
+            flow_key,
+            hwnd=hwnd,
+            pid=pid,
+            reused_window=bool(reused_window),
+            step=step,
+        )
+        if not session_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({session_msg})", hwnd, pid
+        logger.info(f"[{flow_key}] 步骤{step_no}打开即关完成: {session_msg}")
     elif action == "wool_dismiss_update":
         # MiniMax：关掉「更新已来」公告弹窗。
         # 2026-11-02 实锤：公告只在**更新后第一次启动**弹（用户 17:05 重开后就没再弹，
@@ -2778,6 +2822,12 @@ def run_flow(
     exe_path = _resolve_exe_path(cfg, flow_key, logger)
     if not exe_path:
         return False, f"[{flow_key}] 未找到可执行文件——请在「路径配置」页填写该流程的程序路径（游戏类流程请填游戏本体 exe）"
+    # 用户可直接填 .lnk（开始菜单快捷方式），这里统一解析成真实 exe 再启动：
+    # Popen 不认 .lnk（WinError 193），进程名字段也要对得上真实进程名。
+    resolved_exe = _resolve_shortcut_target(exe_path)
+    if resolved_exe != exe_path:
+        logger.info(f"[{flow_key}] 快捷方式已解析: {exe_path} -> {resolved_exe}")
+        exe_path = resolved_exe
 
     window_title_keywords = cfg.get("window_title_keywords", []) or []
     window_process_names = cfg.get("window_process_names", []) or []
@@ -3376,6 +3426,7 @@ def run_flow(
                     scales=scales,
                     confidences=confidences,
                     stop_check=stop_check,
+                    reused_window=reused_window,
                 )
                 if not dispatch_ok:
                     if "用户停止" in str(dispatch_msg):

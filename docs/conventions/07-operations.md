@@ -17,7 +17,7 @@
   （`runtime/wool_claim_logs.py`）：只读当天日志，找不到领取记录就 ❌，
   不回退成假成功；MiniMax 额外用「今日已签到」模板兜底（已签到当天不会重复发 claim）。
 - WorkBuddy 默认 `close_process_on_finish/fail=false`；用户显式勾选「完成后关闭」时按其选择执行
-  （2026-10-30 修正，不再硬拦截）。回归 `tests/suite_wool_claim_logs_20261024.py`（本机真机脚本）。
+  （2026-10-30 修正，不再硬拦截）。回归 `data/artifacts/test_wool_claim_logs_20261024.py`（本机真机脚本，留在 artifacts 未迁 tests）。
 ### 薅羊毛 2026-10-25 三连 ❌：UI 确认比实际动作更脆弱
 
 当天 12:40 结果 `MINIMAX ❌ WORKBUDDY ❌ TRAE ❌ QODER ✅`，三家根因都不是"没点"：
@@ -184,6 +184,39 @@
   在此流程里补点击步（参考 ASTUDIO 的左下角卡片点击实现）。回归
   `tests/suite_dumate_wool_20261117.py`（单步 optional 结构/启动等待/close 口径/接线锁）。
 
+### 商汤小浣熊 每日打开（2026-11-22 接入薅羊毛集合）
+
+- **任务事实**：商汤小浣熊桌面端（Electron）。用户给的入口是开始菜单快捷方式
+  `C:\ProgramData\Microsoft\Windows\Start Menu\Programs\商汤小浣熊.lnk`，
+  用户口径「**每天打开一次再关闭就行了**」——奖励只认当天打开过客户端，零点击。
+  WOOL_FLOW_KEYS 追加 RACCOON（排末位）；exe 走 `flow_exe_paths.RACCOON`。
+- **`.lnk` 支持（run_flow 启动段新增）**：`_resolve_shortcut_target` 用
+  WScript.Shell 把快捷方式解析成真实 exe 再启动。Popen 对 .lnk 直接抛
+  WinError 193，且 `window_process_names` 要匹配真实进程名（`商汤小浣熊.exe`），
+  解析一次同时对齐启动、窗口匹配、版本日志三处。非 .lnk 路径原样返回。
+- **实现**：内建动作 `wool_open_close_app`（`runtime/wool_app_session.py`）——
+  停留 `hold_sec`（默认 15s）→ `WM_CLOSE` 优雅退出 → `close_timeout_sec` 内没退
+  再按 pid 精确结束进程树。流程配置单步、OCR/模板全关，`reuse_existing_window=true`，
+  `startup_wait_sec=8`。
+- **⚠ 三条安全闸（本流程的安全核心，改动时不要绕过）**：
+  1. **复用既有实例 → 不打开也不关闭**：`reuse_existing_window` 命中即按「今天已打开过」
+     记成功。用户日常在用这个客户端，关掉等于打断会话。
+  2. **宿主祖先进程 → 不关闭**：目标 PID 在本程序祖先链上时只告警。这不是假想——
+     本自动化（box-agent-acp）的父进程就是 `商汤小浣熊.exe`；而 Electron 单实例
+     会让新拉起的进程把手交回宿主的窗口，`_wait_window_for_flow` 的**陈旧窗口兜底
+     会把宿主 pid 交回来**（2026-11-22 真机复现：`PID 11052 -> 32872`）。
+  3. **年龄闸**：PID 存活超过 `max_process_age_sec`（默认 600s）视为执行前就存在，
+     不关闭。与闸 2 互为兜底（闸 2 依赖祖先链读取成功）。
+- **`close_process_on_finish/fail` 必须为 false**：`_close_wool_flow` 是**按进程名
+  批量**清理（`close_flow_processes` 的 `process_names` 分支），置 true 会把宿主
+  和用户会话一起杀掉。真正的关闭由本步骤按 pid 精确完成。同理**不要**改成
+  `close_reused_window: true`。
+- **成败口径**：无领取日志可核验，成败=本轮进程被拉起并关闭；复用实例/宿主/老进程
+  三种情况都按「今天已打开」记成功（奖励口径是打开过，不是这一段代码关没关）。
+  真机验证：`.lnk → exe` 解析、宿主闸、WM_CLOSE 优雅退出（Tk 探针 exit code 0）、
+  强杀兜底四条路径均实测通过。
+- 回归 `tests/suite_raccoon_wool_20261122.py`（配置契约/三道闸行为/接线锁/.lnk 解析）。
+
 ## 定时任务补跑 (2026-10-21)
 
 - GUI 定时任务保存在 `app_config.json` 的 `scheduled_tasks`，`UiBridge._sched_timer`
@@ -219,13 +252,13 @@
   原神国服 `hk4e_cn`、崩铁 `sg-hkrpg-api.hoyoverse.com/common/hkrpg_global`、
   绝区零 `sg-announcement-static.hoyoverse.com/common/nap_global`，`lang=zh-cn`。
   公告时间为 UTC+8，解析“更新时间 / 更新开始时间 … 06:00 … 预计 N 个小时”，
-  `开服 = 开始 + N 小时`。缓存 `storage/cache/game_update_calendar.json`（6 小时 TTL）。
+  `开服 = 开始 + N 小时`。缓存 `data/cache/game_update_calendar.json`（6 小时 TTL）。
 - 2026-10-21 实测：原神 7.1 2026/09/23 06:00+5h、崩铁 4.6 2026/09/28 06:00+5h、
   绝区零 3.3 2026/10/21 06:00+5h（今天 11:00 开服）。
 - `automation_controller._monitor_game` 给三款米游加 `progress_hint`：公告维护窗口内
   快速跳过（`GAME_UPDATING_SKIP`），不白等 launch 超时。
 - `UiBridge` 动态补跑：维护跳过/失败 → `_handle_update_retry_result` 按公告开服 +5min
-  写入 `storage/cache/update_retries.json`；`_check_update_retries` 到点用
+  写入 `data/cache/update_retries.json`；`_check_update_retries` 到点用
   `force_rerun=False` 补跑（最多 3 次）；补跑成功/已无需补跑/达到上限后自动移除；
   `_unfired_scheduled_today` / 关机顺延包含补跑条目。
 - 维护窗口边界用严格小于：11:00 开服、buffer 5 分钟 → 11:05 视为已开服，
@@ -266,7 +299,7 @@
   `close_process_on_finish=false`，**不许关 Qoder**；定时任务支持任务级
   `email_on_finish=false`，补跑任务不重复发邮件。
 - 定时配置（2026-10-21）：Qoder 10:01（QoderFlow）；固定兜底 11:05 / 11:35 已删除，
-  维护补跑完全由动态队列驱动（`storage/cache/update_retries.json`）。
+  维护补跑完全由动态队列驱动（`data/cache/update_retries.json`）。
 - 改 bridge/QML 后必须重启 GUI 才生效。
 ## WorkBuddy 2026-10-29：验证假失败 + 误关进程
 

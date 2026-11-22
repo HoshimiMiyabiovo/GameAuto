@@ -2200,5 +2200,42 @@
         "_comment": "best-effort 观察步（非判据）：OCR 认出「DuMate」字样就留一条渲染证据日志；认不出（英文拆字/深色皮肤/遮挡）optional_if_missing 直接跳过，流程照常成功。5s 保底等待由 startup_wait_sec 结构性保证，本步只多给渲染一点时间（合计约 5-10s 后收尾关进程，符合「启动五秒后退出即可」）。"
       }
     ]
+  },
+  "RACCOON": {
+    "enabled": true,
+    "_comment": "2026-11-22 用户需求：商汤小浣熊桌面端并入薅羊毛集合。用户给的入口是开始菜单快捷方式（C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\商汤小浣熊.lnk），run_flow 启动段会先把它解析成真实 exe（F:\\Program Files\\商汤\\@raccoonoffice-desktop\\商汤小浣熊.exe）——Popen 不认 .lnk，且进程名字段要对得上真实进程名。用户口径「每天打开一次再关闭就行了」：奖励只认当天打开过客户端，无需点击，唯一步骤是内建动作 wool_open_close_app（停留 hold_sec → WM_CLOSE → 超时强制结束本轮进程树）。**三条安全闸**（runtime/wool_app_session.py）：①执行前已有实例（reuse_existing_window=true 命中）时只记账、不打开也不关闭——今天已经打开过，关掉等于打断用户；②目标 PID 在本程序祖先链上（=宿主应用，本自动化就跑在它里面）时不关闭；③PID 存活超过 max_process_age_sec 视为既有实例，不关闭。**close_process_on_finish/fail 必须保持 false**：用户日常在用这个客户端，而 background_template_runner._close_wool_flow 是**按进程名批量**清理的，置 true 会连宿主/用户会话一起杀掉；真正的关闭由本步骤按 pid 精确完成。",
+    "window_title_keywords": [
+      "商汤小浣熊"
+    ],
+    "window_process_names": [
+      "商汤小浣熊.exe"
+    ],
+    "reuse_existing_window": true,
+    "startup_wait_sec": 8,
+    "ocr_match_mode": "smart",
+    "match_scales": [
+      1.0,
+      1.25,
+      0.8
+    ],
+    "match_confidences": [
+      0.88,
+      0.84
+    ],
+    "close_process_on_finish": false,
+    "close_process_on_fail": false,
+    "steps": [
+      {
+        "name": "打开即关闭",
+        "action": "wool_open_close_app",
+        "app_label": "商汤小浣熊",
+        "hold_sec": 15,
+        "close_timeout_sec": 20,
+        "graceful_close": true,
+        "max_process_age_sec": 600,
+        "on_fail": "fail",
+        "_comment": "内建动作 wool_open_close_app：停留 15s（Electron 冷启动 + 奖励入账留余量）→ 发 WM_CLOSE 走正常退出 → 20s 内没退再按 pid 精确结束进程树。零点击、零 OCR，成败口径=本轮进程被拉起且被关闭；复用既有实例时直接按「今天已打开」记成功。"
+      }
+    ]
   }
 }

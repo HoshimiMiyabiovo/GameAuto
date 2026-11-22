@@ -1013,11 +1013,26 @@ Item {
                                     }
                                 }
 
-                                HusButton {
+                                // 无截图时先把原因写清楚：以前这里只给一个「打开证据目录」按钮，
+                                // 目录里根本没有这张图，看起来像取证丢了（2026-11-22 用户反馈
+                                // 「也不留证据」）。真正原因是失败当刻拿不到窗口画面——
+                                // hwnd 无效（测试桩/窗口已关）或窗口最小化。
+                                RowLayout {
                                     visible: !modelData.image_url
-                                    text: "打开证据目录"
-                                    type: HusButton.Type_Outlined
-                                    onClicked: bridge.openFlowFailureDir()
+                                    spacing: 8
+                                    HusText {
+                                        text: modelData.hwnd
+                                              ? ("无截图：失败当刻窗口句柄 " + modelData.hwnd + " 取不到画面")
+                                              : "无截图：失败当刻没有可用窗口"
+                                        font.pixelSize: Math.round(11 * root.fs)
+                                        color: "#a1a1aa"
+                                        Layout.fillWidth: true
+                                    }
+                                    HusButton {
+                                        text: "打开证据目录"
+                                        type: HusButton.Type_Outlined
+                                        onClicked: bridge.openFlowFailureDir()
+                                    }
                                 }
                             }
                         }

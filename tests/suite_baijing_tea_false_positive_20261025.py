@@ -71,6 +71,7 @@ class TeaEnv:
             "_record_step_failure": bd._record_step_failure,
             "_ensure_window": bd._ensure_window,
             "_window_region": bd._window_region,
+            "_scene_results": bd._scene_results,
             "time": bd.time,
         }
         bd._find_row_button = lambda *a, **k: (1700, 346)
@@ -82,6 +83,9 @@ class TeaEnv:
         bd._record_step_failure = lambda logger, hwnd, step, detail: self.failures.append((step, detail))
         bd._ensure_window = lambda logger, hwnd: hwnd
         bd._window_region = lambda hwnd: (0, 0, 1920, 1080)
+        # 2026-11-22：新链路一轮一次 _scene_results（气泡/冻结判定）；桩里恒空，
+        # 绝不能落到真实现去截 hwnd=1 的屏
+        bd._scene_results = lambda logger, hwnd=None: []
         bd.time = FakeTime()
         # 2026-11-14 拆分：同名桩镜像到符号实际所属模块（common/scene/tasklist）——
         # 各模块函数在自己的模块全局里解析名字，只打 handlers 不生效。
@@ -113,6 +117,9 @@ class TeaEnv:
         return False              # 确认框等
 
     def _ocr(self, logger, texts, hwnd, frac_region=None, min_conf=0.5, exclude=()):
+        if tuple(texts) == tuple(bd.TEA_SUMMARY_MARKERS) and self.summary:
+            # 2026-11-22：摘要轮询里就认，成功用例不留卡点记录
+            return {"text": "茶憩结束", "confidence": 0.90, "center": (960, 540)}
         if any(t in texts for t in bd.REST_ROOM_MARKERS):
             return {"text": "拜访他人", "confidence": 0.80, "center": (1338, 1004)}
         return None
@@ -135,7 +142,7 @@ def run_tea(scene=True, summary=True):
 def test_1_lounge_fallback():
     print("[1] 直接进休息室：点右下「午后茶憩」立牌卡，不点头像也不点旧角色卡位置")
     ok, env = run_tea(scene=True, summary=True)
-    check("返回 True（有场景证据）", ok is True, ok)
+    check("返回 True（有「茶憩结束」摘要）", ok is True, ok)
     check("点了休息室茶憩入口", (bd.REST_ROOM_TEA_ENTRY, "休息室「午后茶憩」立牌卡") in env.ratios, env.ratios)
     check("未点旧角色选择页位置", all(r != bd.TEA_FIRST_CHARACTER for r, _ in env.ratios), env.ratios)
 

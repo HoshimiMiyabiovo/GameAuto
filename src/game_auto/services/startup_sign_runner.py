@@ -28,6 +28,7 @@ from ..clients.skendfield_sign import (
 )
 from .daily_progress_tracker import DailyProgressTracker, get_tracker
 from .credential_store import load_wuwa_kujiequ_profile
+from .network_preflight import make_proxy_guard
 from ..settings.paths import WORKFLOW_DB_PATH
 
 
@@ -41,6 +42,9 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
     LOGGER.info("[启动前签到] 开始检查配置，目标应用：%s", "、".join(sorted(app_keys)) if app_keys else "无")
 
     tracker = get_tracker(WORKFLOW_DB_PATH)
+    # 同一批次只探测一次系统代理：代理没启动时统一抛"系统代理未启动"，
+    # 不要让 urllib 的 WinError 10061 伪装成"外网断了"。
+    proxy_guard = make_proxy_guard()
 
     mihoyo_cfg = config.get(MIHOYO_SIGN_CONFIG_KEY, {})
     if isinstance(mihoyo_cfg, dict) and mihoyo_cfg.get("startup_sign"):
@@ -48,6 +52,7 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
         enabled_games = _resolve_mihoyo_enabled_games(mihoyo_cfg, app_keys)
         if cookie and enabled_games:
             try:
+                proxy_guard()
                 LOGGER.info("[启动前签到] 开始执行米游社签到，目标游戏：%s", "、".join(enabled_games))
                 result = sign_games(cookie, enabled_games)
                 for line in format_sign_report(result):
@@ -71,6 +76,7 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
         profile = load_wuwa_kujiequ_profile(config)
         if profile is not None:
             try:
+                proxy_guard()
                 LOGGER.info("[启动前签到] 开始执行鸣潮库街区签到")
                 result = perform_wuwa_sign(profile)
                 LOGGER.info("[启动前签到] 鸣潮库街区签到结果：%s", result.get("message") or "签到完成。")
@@ -91,6 +97,7 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
         deviceid = str(tajiduo_cfg.get("deviceid") or "").strip()
         if token and deviceid:
             try:
+                proxy_guard()
                 LOGGER.info("[启动前签到] 开始执行塔吉多（异环）签到")
                 result = perform_tajiduo_sign(
                     token=token,
@@ -121,6 +128,7 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
         server = str(skendfield_cfg.get("server") or "cn").strip()
         if token:
             try:
+                proxy_guard()
                 LOGGER.info("[启动前签到] 开始执行森空岛终末地签到 (%s)", server)
                 result = perform_skendfield_sign(token=token, server=server)
                 for line in format_skendfield_sign_report(result):
@@ -147,6 +155,7 @@ def run_startup_sign_tasks(target_app_keys: Iterable[str]) -> List[str]:
         server_id = str(endfield_protocol_cfg.get("server_id") or "1").strip()
         if api_key and framework_token and role_id:
             try:
+                proxy_guard()
                 LOGGER.info("[启动前签到] 开始执行终末地协议终端签到 (role_id=%s)", role_id)
                 result = perform_endfield_protocol_query(
                     api_key=api_key, framework_token=framework_token,
@@ -201,13 +210,29 @@ def _write_sign_status_to_config(section_name: str, status: str, message: str) -
     2026-11-09 收敛：旧实现 load 后绕过 cm.save() 直接 atomic_write_json
     全量落盘——既不走归一化（把全部默认值写进盘），又与 manager 锁外互踩
     （审计 P1-1/P1-2）。现走 cm.update_config 锁内原子读改写。
+
+    2026-11-21 防降级：同一天已有 success/already 时，后续 failed 不覆盖
+    （重复执行的启动前签到撞上本地代理未启动，不能把当天真实签到成功改成失败）。
     """
     try:
+        today = time.strftime("%Y-%m-%d")
+
         def _apply(cfg) -> None:
             section = cfg.get(section_name)
             if not isinstance(section, dict):
                 section = {}
-            section["last_sign_date"] = time.strftime("%Y-%m-%d")
+            prev_date = str(section.get("last_sign_date") or "")
+            prev_status = str(section.get("last_sign_status") or "")
+            if (
+                status == "failed"
+                and prev_date == today
+                and prev_status in ("success", "already")
+            ):
+                LOGGER.info(
+                    "[启动前签到] 保留今日已成功签到状态: section=%s prev=%s",
+                    section_name, prev_status)
+                return
+            section["last_sign_date"] = today
             section["last_sign_status"] = status
             section["last_sign_message"] = message or ""
             cfg[section_name] = section

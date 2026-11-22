@@ -35,6 +35,26 @@ settings / bridge / 批处理 / 更新日历无需再改映射表。
   直连可用、推送成功）。用临时 `-c` 参数，**别动全局代理配置**——代理客户端在线
   时仍走它；空串 `-c http.proxy=` 只覆盖单次命令。
 
+## 沙箱临时目录坑（对所有 AI 会话生效）
+
+DSH workspace-write 沙箱里**建目录永远别带 mode=0700**（2026-11-22 实测，
+venv 3.13 / 内置 3.12 双解释器、.temp / data/cache / 系统 temp 三处位置同结果）：
+
+| 建目录方式 | 建目录 | 往里写文件 | 能读它的权限 |
+|---|---|---|---|
+| `os.makedirs(p)` / `os.mkdir(p)` / `os.mkdir(p, 0o755)` | ✅ | ✅ | ✅ |
+| `os.mkdir(p, 0o700)` | ✅ | ❌ PermissionError | ❌ 连 icacls 都 Access is denied |
+| `tempfile.mkdtemp()` / `TemporaryDirectory()` | ✅ | ❌ WinError 5 | ❌ |
+
+- 机制：0700 建目录写出**受保护 DACL**（丢继承），沙箱受限令牌拿不到授权——
+  建完自己立刻进不去、删不掉；不带 mode 则继承父目录授权，一切正常。
+  文件类 `mkstemp / NamedTemporaryFile` 不受影响。
+- 这不是工作区 ACL 缺陷，跑 ACL 修复脚本没用。0700 死目录只能沙箱外
+  `rmdir /s /q` 清。
+- 测试已铺垫片 `tests/sandbox_temp.py`（替换 mkdtemp 为默认权限版）；新套件
+  用 tempfile 目录 API 要接 `install()`，详见
+  [01-workflow.md](docs/conventions/01-workflow.md) 工程化基线节。
+
 ## 工作区卫生（对所有 AI 会话生效）
 
 **根目录禁止堆临时产物，用完即删。** 一次性脚本/探针/中间产物放系统临时目录

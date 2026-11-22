@@ -27,7 +27,7 @@
   验证延迟窗口、超时释放、切回重建、isRunning 保护、delay=0 关闭）。
 ### PyHuskarUI 兼容性避坑 (重要)
 
-1. **PySide6 版本锁定**: PyHuskarUI 0.6.1 的 QML 文件内 `ParallelAnimation` 直接放在 `Rectangle` 的 `data` 子节点中，在 Qt 6.11 中会报错 `Cannot assign object of type "QQuickParallelAnimation" to list property "data"; expected "QObject"`。必须降级 PySide6: `pip install "PySide6>=6.8,<6.10"`，涉及 PyHuskarUI 库内 7 个文件（HusButton/HusBadge/HusButtonBlock/HusCheckBox/HusRadio/HusRadioBlock/HusSwitch）。
+1. **PySide6 版本锁定**: PyHuskarUI 0.6.1 的 QML 文件内 `ParallelAnimation` 直接放在 `Rectangle` 的 `data` 子节点中，在 Qt 6.11 中会报错 `Cannot assign object of type "QQuickParallelAnimation" to list property "data"; expected "QObject"`。必须锁 PySide6: `pip install "PySide6>=6.8.3,<6.9"`（与 requirements.txt/lock 一致），涉及 PyHuskarUI 库内 7 个文件（HusButton/HusBadge/HusButtonBlock/HusCheckBox/HusRadio/HusRadioBlock/HusSwitch）。
 
 2. **不要同时启用 qrc 资源和文件系统 QML 路径**: PyHuskarUI 的 QML 同时存在于编译资源 (`qml_rc.py` 注册的 `qrc:`) 和文件系统，只能二选一。使用默认的编译资源即可，**禁止**调用 `engine.addImportPath(str(pyhuskarui_qml_dir))`。
 
@@ -44,7 +44,7 @@
   - `EndfieldCenterView.qml` → `bridge.runSkendfieldSign()`（森空岛）
   - `WuwaView.qml` → `bridge.runWuwaKujiequSign()`（库街区）
   - `TajiduoView.qml` → `bridge.runTajiduoSign()`（塔吉多/异环）
-- 对应 backend 都在 `ui/bridge.py`：`_run_skendfield_sign_backend` / `_run_wuwa_kujiequ_sign_backend` / `_run_tajiduo_sign_backend`。每个起 daemon 线程从 `app_config.json` 读凭据、调 `clients/*.perform_sign(...)`、用 `format_sign_report` 写日志、最后 `emit_event("toast", ...)` 推回 QML 弹通知。
+- 对应 backend 都在 `ui/bridge_views/daily.py`：`_run_skendfield_sign_backend` / `_run_wuwa_kujiequ_sign_backend` / `_run_tajiduo_sign_backend`。每个起 daemon 线程从 `app_config.json` 读凭据、调 `clients/*.perform_sign(...)`、用 `format_sign_report` 写日志、最后 `emit_event("toast", ...)` 推回 QML 弹通知。
 - 按钮加 `enabled: !bridge.isRunning` 防双击重入。
 - 视图加 `onVisibleChanged: { if (visible) bridge.loadCredentials() }` 确保切回来时凭据一定从 config 重灌。
 ### 签到返回状态码 (已验证)

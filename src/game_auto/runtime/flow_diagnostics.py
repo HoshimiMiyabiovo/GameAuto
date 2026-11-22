@@ -15,6 +15,11 @@
 2. **不重复识别**：调用方若已经有当帧 OCR 结果，务必传 `ocr_results` 复用，
    一次失败重试动辄几秒，别为了记录再花 1~2s 跑一遍 RapidOCR。
 3. **写库走 WAL 的 WorkflowDB**，与 GUI 多视图并发读不互斥（见 storage/workflow_db.py）。
+
+另有一条 2026-11-22 补的口径：**测试进程不取证**（见 is_test_process）。
+套件用 hwnd=1/1234 之类的假句柄调流程，截图必然取不到，写进生产库就是
+"只有一行没有截图的失败"，把日报的失败卡片和聚合统计全带歪——用户当时
+的原话是"这是什么情况，也不留证据"。
 """
 
 import json
@@ -23,7 +28,13 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..settings.paths import FLOW_FAILURE_DIR, FLOW_FAILURE_KEEP_DAYS, WORKFLOW_DB_PATH
+from ..settings.paths import (
+    FLOW_FAILURE_DIR,
+    FLOW_FAILURE_KEEP_DAYS,
+    WORKFLOW_DB_PATH,
+    is_production_data_path,
+    is_test_process,  # noqa: F401  - 对外仍从本模块导入（既有调用/套件）
+)
 
 # 截图压缩参数（2026-11-07 从 960 提到 1920 原生分辨率：960 半幅会把小字面板
 # 压到 5px，人眼都看不清，事后放大复核全靠原生细节；单张全屏 JPEG 约 150~300KB，
@@ -42,6 +53,9 @@ _logger = logging.getLogger("GameAutomation.Diagnostics")
 _prune_lock = None
 _last_prune_ts = 0.0
 
+
+# is_test_process 的实现搬到 settings/paths（runtime / services / storage 共用），
+# 这里保留同名导入，历史调用方（tests 等）import 路径不变。
 
 def _safe_tag(text: str, limit: int = 24) -> str:
     tag = _UNSAFE_CHARS.sub("_", str(text or "").strip())
@@ -312,6 +326,19 @@ def record_failure(
     ocr_sample : 已整理好的文本样本（优先于 ocr_results）。
     """
     try:
+        if is_test_process() and is_production_data_path(WORKFLOW_DB_PATH):
+            # 桩数据不进生产库（目标路径被套件改成 tmp 时放行——那是合法用法）。测试若想断言"取证有没有被调用"，请自行 patch
+            # 本函数（tests 里的既成惯例：mock.patch.object(模块, "_record_failure")），
+            # 不要靠写生产表来判断。
+            try:
+                if logger is not None:
+                    logger.debug(
+                        "[失败记录] 测试进程跳过取证（不写生产库）: %s/%s %s",
+                        flow_key, step, str(error)[:80],
+                    )
+            except Exception:
+                pass
+            return None
         # 一次取原始结果，同时用于文本样本和 OCR 标注图，避免重复识别
         results = (
             list(ocr_results)[:DEFAULT_OCR_SAMPLE]

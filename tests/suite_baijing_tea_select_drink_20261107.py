@@ -137,6 +137,9 @@ class TeaSelectEnv:
     def _ocr(self, logger, texts, hwnd, frac_region=None, min_conf=0.5, exclude=()):
         if tuple(texts) == bd.TEA_DRINK_TEXTS:
             return None    # 场景内喝茶按钮轮询：桩不提供（两条候选表共享「喝茶」，按调用身份分派）
+        if tuple(texts) == tuple(bd.TEA_SUMMARY_MARKERS) and self.summary:
+            # 2026-11-22：摘要轮询里就认，成功用例不留卡点记录
+            return {"text": "茶憩结束", "confidence": 0.90, "center": (960, 540)}
         if any(t in bd.REST_ROOM_MARKERS for t in texts):
             return None    # 非休息室
         if any(t in bd.TEA_INVITE_TEXTS for t in texts) and self.invite_hit:

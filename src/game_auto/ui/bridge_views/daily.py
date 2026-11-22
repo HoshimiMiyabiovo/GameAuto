@@ -519,23 +519,38 @@ class DailyView:
     # DailyView 在每个游戏卡片里展示"签到"行；该行不参与 is_all_success 计算。
 
     def _update_sign_status(self, section_name: str, status: str, message: str = ""):
-        """在 app_config.json 顶层 {section_name}.last_sign_* 写入本次签到结果。"""
+        """在 app_config.json 顶层 {section_name}.last_sign_* 写入本次签到结果。
+
+        当天已是 success/already 时，后续 failed 不覆盖（与启动前签到同口径，
+        见 services/startup_sign_runner._write_sign_status_to_config）。
+        走 settings.manager 锁内读改写，避免与其它写配置线程互相回滚。
+        """
         try:
-            from ...settings.paths import APP_CONFIG_PATH
-            try:
-                cfg = json.loads(APP_CONFIG_PATH.read_text(encoding="utf-8"))
-            except FileNotFoundError:
-                cfg = {}
-            section = cfg.get(section_name) or {}
-            if not isinstance(section, dict):
-                section = {}
-            section["last_sign_date"] = time.strftime("%Y-%m-%d")
-            section["last_sign_status"] = status
-            section["last_sign_message"] = message or ""
-            cfg[section_name] = section
-            from ...settings.manager import atomic_write_json
-            from ...settings.paths import APP_CONFIG_PATH
-            atomic_write_json(APP_CONFIG_PATH, cfg)
+            from ...settings import manager as cfg_manager
+            today = time.strftime("%Y-%m-%d")
+
+            def _apply(cfg) -> None:
+                section = cfg.get(section_name) or {}
+                if not isinstance(section, dict):
+                    section = {}
+                prev_date = str(section.get("last_sign_date") or "")
+                prev_status = str(section.get("last_sign_status") or "")
+                if (
+                    status == "failed"
+                    and prev_date == today
+                    and prev_status in ("success", "already")
+                ):
+                    logger.info(
+                        "[Bridge] 保留今日已成功签到状态: section=%s prev=%s",
+                        section_name, prev_status,
+                    )
+                    return
+                section["last_sign_date"] = today
+                section["last_sign_status"] = status
+                section["last_sign_message"] = message or ""
+                cfg[section_name] = section
+
+            cfg_manager.update_config(_apply)
             logger.info(
                 "[Bridge] sign 状态已写入: section=%s status=%s",
                 section_name, status,

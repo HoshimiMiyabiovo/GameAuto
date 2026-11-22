@@ -402,6 +402,10 @@ def run_trial_activity(
                  "step": "", "returned_main": None}
     fought: List[str] = out["fought"]
     slot_states: List[Dict] = out["slots"]
+    # 2026-11-22 #447/#456 修：items 只在「起点恢复失败」分支赋值，正常进流程后
+    # 「打开活动中心」失败分支还要拿它当 _fail 的参数 → UnboundLocalError，
+    # _fail 没执行、异常直冲 finally（盲点 P_BACK 连开三天邮件面板）。给空兜底。
+    items: List[Dict] = []
     try:
         if _stopped(stop_check):
             out.update(detail="用户停止", step="起点确认")
@@ -415,6 +419,9 @@ def run_trial_activity(
 
         if not _ocr_click(logger, hwnd, "活动中心", "活动中心",
                           REGION_ACTIVITY_BTN):
+            # 11-20/11-21/11-22 三次「主界面没见到入口」都没留下当帧文字，
+            # 底栏改版/遮挡只能靠猜；这里补一次 OCR 交给 _record_failure 落证据。
+            _, items = _trial_page_now(logger, hwnd)
             return _fail(logger, hwnd, "打开活动中心", "主界面未见「活动中心」入口", items, out)
         ok, page, items = _wait_trial_page(logger, hwnd, "hub", WAIT_HUB, stop_check,
                                            also_ok=("trial",))
@@ -458,8 +465,22 @@ def run_trial_activity(
         logger.info(f"{LOG_TAG} {out['detail']}")
         return out
     finally:
+        # 2026-11-22 #447/#456：收尾「返回」只有确认还在试玩链上才点。主界面左上
+        # (0.101,0.047) 那个坐标就是「邮件」图标 (0.095，差 11px)——盲点会自己
+        # 打开邮件/公告面板，随后场景恢复认不出、白烧 6~8s 还落一条假失败。
+        last_page = "unknown"
         try:
-            _click(logger, hwnd, P_BACK, "试玩页返回")
+            last_page, _items = _trial_page_now(logger, hwnd)
+        except Exception as exc:  # noqa: BLE001 - 判页失败按不在试玩链处理
+            logger.debug(f"{LOG_TAG} 收尾判页异常（按不在试玩链处理）: {exc}")
+        try:
+            if last_page in ("trial", "hub"):
+                _click(logger, hwnd, P_BACK, "试玩页返回")
+            else:
+                logger.info(
+                    f"{LOG_TAG} 收尾页面「{last_page}」不在试玩链，跳过左上「返回」"
+                    "（那个坐标在主界面是邮件图标）"
+                )
             from .baijing_scene import _ensure_main_ui
 
             out["returned_main"] = _ensure_main_ui(

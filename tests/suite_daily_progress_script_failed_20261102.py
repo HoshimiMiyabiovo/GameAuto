@@ -20,6 +20,11 @@ from unittest.mock import patch
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+# 沙箱兼容：tempfile 目录创建改默认权限（0700 受保护 DACL 在沙箱里写不进）
+from sandbox_temp import install as _install_sandbox_temp
+
+_install_sandbox_temp()
+
 import game_auto.services.bettergi_daily_parser as bettergi_parser  # noqa: E402
 import game_auto.services.ok_ef_daily_parser as ok_ef_parser  # noqa: E402
 import game_auto.services.ok_nte_daily_parser as ok_nte_parser  # noqa: E402

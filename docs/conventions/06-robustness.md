@@ -99,7 +99,7 @@
   - **自身保护**：`_protected_pids()` = 当前进程 + 全部祖先 PID，绝不在清理时自杀（WORKBUDDY 流程与 GUI 宿主同名，靠这个保护）。
 - `run_flow` 用 `try/finally` 保证收尾：`close_process_on_finish=true` 时成功/失败都关；`close_process_on_fail=false` 可只在失败时保留进程便于排查。
 - **例外**：`stop_after_step` 提前返回（XM 后台流程跑到"运行中确认"）**不会**关闭进程 —— 挂机类流程要继续跑。
-- 薅羊毛集合（`background_template_runner.run_wool_background`）对每个子流程额外兜底关闭，默认关闭、`close_process_on_finish=false` 才保留，日志尾缀 `（已关闭程序）` / `（程序保留）`。集合清单以代码为准：`WOOL_FLOW_KEYS = MINIMAX / WORKBUDDY / TRAE / QODER / TELEAGENT / CODEARTS / ASTUDIO / DUMATE`（8 来源，2026-11-18 对齐；本行写于 4 来源时代，后续新增见 07 分篇各节）。
+- 薅羊毛集合（`background_template_runner.run_wool_background`）对每个子流程额外兜底关闭，默认关闭、`close_process_on_finish=false` 才保留，日志尾缀 `（已关闭程序）` / `（程序保留）`。集合清单以代码为准：`WOOL_FLOW_KEYS = MINIMAX / WORKBUDDY / TRAE / QODER / TELEAGENT / CODEARTS / ASTUDIO / DUMATE / RACCOON`（9 来源，2026-11-22 对齐；本行写于 4 来源时代，后续新增见 07 分篇各节）。**注意这是按进程名批量清理**——目标应用可能正承载本程序（例如商汤小浣熊流程的宿主就是它自己），这类流程必须 `close_process_on_finish/fail=false` + 内建动作按 pid 精确关闭，见 07 分篇「商汤小浣熊 每日打开」。
 - **假成功事故（2026-10-21 WorkBuddy，用户怒点）**：`optional_if_missing: true` 的步骤找不到元素时**直接跳过并报成功**——WorkBuddy 流程 11 秒没等到「立即领取」按钮（单实例应用，用户旧会话的加油站弹窗早已自动消失）→ 跳过 → 报 ✅ 实际没领。**规则：optional 的点击/等待步后面必须跟一个非 optional 的验证步**（确认达成态，如 MINIMAX 的「今日已签到」二步结构），否则弹窗不在时无法区分"已领取"和"没领到"。
 - **用户正在用的软件：默认不关，但尊重显式勾选**：WorkBuddy 是日常聊天软件（GUI 还常从其进程树外启动，`_protected_pids` 护不住），默认 `close_process_on_finish/fail=false`；TRAE/QODER 是同类 IDE，默认建议 false。**但用户可以在 GUI 薅羊毛页显式勾选「完成后关闭」，勾选后必须执行**——2026-10-30 用户明确要求关 WorkBuddy/Qoder，曾加过 `PROTECTED_CLOSE_FLOWS` 硬保护并锁 QML，已按要求撤掉。禁止再用代码拦截用户的显式关闭选择。
 - **弹窗是自动轮换的展示卡（2026-10-21 用户截图三连修正）**：WorkBuddy「Buddy加油站 每日可领 100 积分」弹窗为左下角**轮换 carousel**，至少三张卡（加油站→积分包购买→做任务赚积分），所以「立即领取」按钮**只有轮到的那个间隙可见**。展示一段时间后会整体退场，**悬停不唤回、二次启动不重弹**（单实例）。靠它领不可靠——用户提的"延迟太高点错"在轮换场景下是真实风险（匹配→点击间隙卡片转走），仅靠确认失败重试兜底不够。
@@ -183,6 +183,14 @@
 - **`stop_check=None` 必须保持旧行为**（向后兼容，勿改成必填）。中断时的收尾仍由既有 `close_on_exit` / `close_on_fail` 决定 —— 不要为"停止"另开一套关进程规则，否则会破坏 CJ 的"禁止自动关闭"。
 - 2026-11-10 补课（审计 P2）：确认策略 `execute_confirm_strategy` / `confirm_disappear` / `confirm_text_change` / `_wait_any_template` 已接 `stop_check`（命中停止返回 `"用户已请求停止"`，由外层步骤循环收尾）；步骤间 `post_delay` 改 `_sleep_interruptible`；controller `_launch_normal` 的 10s 进程发现循环响应停止、`initial_wait`（默认 20s）改 `_interruptible_initial_wait`（分片睡眠 + `_watchdog_beat`）。
 - 仍未接线：`run_wool_background` / `_run_monthly_flow` 内部 `run_flow` 未传 `stop_check`（签名无 controller），其 45s 窗口等待仍不可中断。
+### 本机代理未启动要单独判别（2026-11-21）
+
+- Windows 上 urllib 自动读系统代理；代理软件没开时请求本机 `127.0.0.1:7897`
+  得到 `WinError 10061 目标计算机积极拒绝`，但日志表现像"外网断了"。
+- `services/network_preflight.py`：只探测指向 127.0.0.1/localhost/::1 的代理端口
+  （远程代理不判定，避免误报），不可连时文案直接写「系统代理 X 未启动或无法连接」。
+  启动前签到的五个网络分支共用 `make_proxy_guard()`，整批只探测一次。
+- 区分 10061（端口无监听，先查本机代理）与 10054（连接被重置，可能是代理/上游抖动）。
 ### 失败诊断记录 (重要, 2026-10-18)
 
 **为什么要做**：改动前"步骤没匹配上 / 任务失败"只落 `logs/auto_runner.log` 的 warning
@@ -209,12 +217,25 @@
      几秒，别为了记录再跑一遍 OCR；
   3. **窗口不可用不退化全屏** —— 传了 hwnd 但 `GetWindowRect` 失败就直接不存图，否则会把用户
      桌面截图存进证据目录（与 `ocr_click_tester` 的全屏 OCR 防护同源教训）。
+  4. **测试进程不取证（2026-11-22 补）** —— `is_test_process()` 命中（pytest 用例内 /
+     `GAMEAUTO_TEST_MODE=1` / argv 是 `tests/suite_*.py`）**且目标路径是生产
+     `data/`** 时 `record_failure` 直接返回 None：套件用 hwnd=1/1234 之类的假句柄
+     调流程，截图必然取不到，写进生产库就是"只有一行没有截图的失败"。事故：
+     11-15~11-22 有 138 条（联合训练场 60 + 白荆日常 78）这样的记录，真机同期却
+     天天 success，用户看到的是"失败了一周、一张证据都没有"。套件若要断言取证被
+     调用，patch 自己模块的 `_record_failure` 数调用次数；要把记录写进临时库，
+     改写路径即可（守卫只拦生产路径）。同一守卫已铺到 `daily_progress` 与
+     `task_meta` 门控，见 05-daily-progress。
 - **出报告**：`tools/flow_failure_report.py`（`--days 7 --top 20 --verbose --json --purge 30
-  --flow BaiJing`）。按 (flow_key, step) 聚合次数 → "哪一步最常失败、最该优化"，
+  --flow BaiJing --purge-stub-rows`）。按 (flow_key, step) 聚合次数 → "哪一步最常失败、最该优化"，
   附最近一次时间、是否有证据截图、样例错误、失败当帧屏幕文字与图片路径。
+  `--purge-stub-rows` 按键（默认 `1,1234`）清掉历史测试桩记录（真机 HWND 不会
+  是这两个值，先打印将删条目再 `--yes` 才动）。
 - **GUI/WebUI 入口**：`DailyView.qml` 底部「最近失败记录」卡片（bridge
   `getRecentFlowFailures(days) -> str` JSON，后台线程读库最多等 3s；截图缩略图点击
-  `openFlowFailureImage` 开系统看图片、`openFlowFailureDir` 开证据目录）；WebUI
+  `openFlowFailureImage` 开系统看图片、`openFlowFailureDir` 开证据目录）；
+  没有 `image_path` 时卡片直接写出原因（"失败当刻窗口句柄 X 取不到画面"/
+  "没有可用窗口"），不再只留一个点进去空空如也的目录按钮；WebUI
   `GET /api/daily/failures?days&limit&flow` + `GET /api/daily/failure-image/{name}`
   （`ui/webui/static/app.js` 的 `loadFailures()`）。**`getRecentFlowFailures` 必须写
   `@Slot(int, result=str)`**，漏 `result` 时 QML 拿到 undefined 且不报错。
@@ -243,7 +264,7 @@
 - click_sequence.py 自己管理 FAILSAFE（点击序列暂停期间禁用），不在本约定范围。
 ### 收尾动作必须 finally 兜底 (重要)
 
-- `ui/bridge.py::_run_automation_backend` 的**邮件、自动关机、每日进度刷新、
+- `ui/bridge_views/automation.py::_run_automation_backend` 的**邮件、自动关机、每日进度刷新、
   WebUI 状态复位、finished/running 事件全部放在 finally 里**，禁止移回 try 主体。
 - 原因：任何任务内未捕获异常都会穿透 run_task_batch；写在 try 主体里的收尾
   会被整体跳过 —— 2026-09-29 中午事故：CJ 抛 FailSafeException，

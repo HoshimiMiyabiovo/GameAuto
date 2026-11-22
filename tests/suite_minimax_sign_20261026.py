@@ -64,10 +64,15 @@ def test_config():
     check("没有残留的「立即签到」目标文案", not old, old)
 
 
+FAKE_LOG_PATH = PROJECT_ROOT / "data" / "cache" / "_minimax_fake_api.log"
+
+
 def _log_file(with_claim: bool) -> Path:
-    # 固定路径：Windows 上临时文件句柄释放慢，测试内删除会 PermissionError
-    p = Path(__file__).resolve().parent.parent / "data" / "artifacts" / "_minimax_fake_api.log"
-    # CI 全新 checkout 没有 data/artifacts，写日志先建父目录
+    # 固定路径：Windows 上临时文件句柄释放慢，测试内删除会 PermissionError。
+    # 放 data/cache（容易被接受的临时区），**不要放 data/artifacts**——那是失败
+    # 证据目录，套件留下的假文件会混进证据里（2026-11-22 审计在 artifacts 里
+    # 发现一个 0 字节 _minimax_fake_api.log，就是这里写的）。
+    p = FAKE_LOG_PATH
     p.parent.mkdir(parents=True, exist_ok=True)
     body = ""
     if with_claim:
@@ -129,6 +134,10 @@ def main():
     test_verify_ui_signed()
     test_verify_unsigned_not_false_positive()
     test_verify_no_ocr_no_log()
+    try:
+        FAKE_LOG_PATH.unlink()  # 收拾夹具文件，别在 data/ 里留垃圾
+    except Exception:
+        pass
     print("-" * 60)
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} -> {FAILURES}")

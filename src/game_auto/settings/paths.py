@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+import sys
 from pathlib import Path
 
 LOGGER = logging.getLogger("GameAutomation")
@@ -14,6 +16,59 @@ APP_CONFIG_PATH = BASE_DIR / "app_config.json"
 # 旧版本把 logs/artifacts/workflow.sqlite3/storage/cache 直接放在根目录，
 # 迁移脚本：tools/migrate_data_layout_20261029.py（一次性，迁移后本注释仍有效）。
 DATA_DIR = BASE_DIR / "data"
+
+
+# ── 测试进程 / 生产数据识别（2026-11-22）──────────────────────────────
+# 起因：套件用假 hwnd 跑流程，把假失败写进 flow_failures（138 条没有截图的
+# "失败"）、把假脚本进度写进 daily_progress（日报里凭空多出 wuwa/script_script）。
+# 单元套件里凡是"写生产状态"的入口都按这两句判：
+#     if is_test_process() and is_production_data_path(目标路径): 跳过写
+# 放 paths 是因为 runtime / services / storage 三层都要用，而 paths 是三者唯一
+# 的共同下游（services 不能反向依赖 runtime）。
+_TEST_MODE_ENV_KEYS = ("GAMEAUTO_TEST_MODE", "GAME_AUTO_TEST_MODE")
+_TEST_TRUE_VALUES = ("1", "true", "yes", "on")
+
+
+def is_test_process() -> bool:
+    """当前进程是不是单元套件 / pytest（测试桩的写入不该进生产库）。
+
+    识别三路，任一命中即视为测试进程：
+      ① pytest 用例内（PYTEST_CURRENT_TEST，pytest 自己维护的变量）；
+      ② 显式 GAMEAUTO_TEST_MODE=1（CI / test_suites 子进程可统一设置）；
+      ③ 直接跑套件（argv[0] 在 tests/ 下且文件名以 suite_ / test_ 开头）。
+
+    生产的 GUI / 定时任务 argv[0] 是启动脚本或 exe，不会命中；宁可测试期
+    少记一次，也不让桩数据混进生产库（真机写入由正式进程照常落）。
+    """
+    try:
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return True
+        for key in _TEST_MODE_ENV_KEYS:
+            if str(os.environ.get(key, "")).strip().lower() in _TEST_TRUE_VALUES:
+                return True
+        argv0 = str((sys.argv or [""])[0] or "")
+        if argv0:
+            path = os.path.abspath(argv0)
+            parent = os.path.basename(os.path.dirname(path))
+            name = os.path.basename(path).lower()
+            if parent == "tests" and (name.startswith("suite_") or name.startswith("test_")):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def is_production_data_path(path) -> bool:
+    """path 是否落在生产数据目录（<仓库>/data）下。
+
+    套件把目标路径改写成 tmp 时返回 False —— 那正是我们允许测试写库的方式：
+    "测试进程写**临时**库"合法，"测试进程写**生产**库"一律拦。
+    """
+    try:
+        return Path(str(path)).resolve().is_relative_to(DATA_DIR.resolve())
+    except Exception:
+        return False
+
 LOG_DIR = DATA_DIR / "logs"
 LOG_FILE = LOG_DIR / "auto_runner.log"
 # 看门狗栈转储按故障类型分文件（原先两类硬故障混在一个 watchdog.log，事后没法区分）

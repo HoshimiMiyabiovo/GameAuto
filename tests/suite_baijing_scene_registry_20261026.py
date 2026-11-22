@@ -24,8 +24,10 @@
     主界面/面板）≠ 失败，不落假证据；同名场景卡死仍照旧落证据
 12. 2026-11-13 #282：好友页登记（detector ≥2 独有词 + OCR 截字变体
     「键领取/赠送」），退出点左上「返回」零 ESC
+13. 2026-11-22 #447/#456：邮件/公告面板登记（角色试玩盲点 P_BACK 误开，
+    独有词 ≥2 判页），退出点面板右上 X，零 ESC
 
-跑法：.venv\\Scripts\\python.exe artifacts\\test_baijing_scene_registry_20261026.py
+跑法：.venv\\Scripts\\python.exe tests\\suite_baijing_scene_registry_20261026.py
 """
 
 import logging
@@ -58,6 +60,29 @@ TEA_ENTRY_XY = (1695, 896)     # 休息室右下「午后茶憩」立牌卡（�
 CLAIM_XY = (630, 762)          # 定巡之礼弹窗「可领取」（2026-11-06 09:15 实拍帧 OCR 位置）
 EVENT_CLOSE_XY = (1752, 258)   # 定巡之礼右上 X（比例 0.913,0.239 换算值）
 ANNOUNCE_BLANK_XY = (192, 540)  # 活动公告点空白关闭（比例 0.10,0.50 换算值）
+MAIL_CLOSE_XY = (1800, 205)    # 邮件面板右上 X（比例 0.938,0.19 换算值）
+
+
+# 2026-11-21 19:41:36 #456 生产当帧（19 个文本区域，原样抄录；坐标按 1919x1079）：
+# 角色试玩 finally 盲点 P_BACK=(0.101,0.047) 在主界面正对「邮件」图标 (0.095)，
+# 面板就是这样被自动化自己点开的。
+MAIL_FRAME_TEXTS = {
+    "X": (1800, 205),
+    "X1/300": (200, 195),
+    "11月19日更新结束通知": (500, 242),
+    "VE1∩°s": (820, 290),
+    "来自：系统 2026-11-19": (1000, 305),
+    "已签收": (1700, 300),
+    "尊敬的飘飘：": (830, 350),
+    "闪断更新已完成，感谢监督的耐心等待。": (1020, 383),
+    "闪断更新补偿X晶粒×300已发放，请注意查收。": (1050, 415),
+    "感谢您对《白荆回廊》的关注和支持，祝您游戏愉快。": (1110, 442),
+    "包裹内容物": (800, 750),
+    "删除": (1620, 830),
+    "清理已读": (220, 830),
+    "全部签收": (520, 830),
+    "24919904": (1660, 1068),
+}
 
 
 def check(name, cond, detail=""):
@@ -158,6 +183,8 @@ class Screen:
         elif self.state == "retail":
             # 2026-10-26 20:10 取证帧：有猫零售左侧栏目 + 左上返回
             data = {"有猫精选": (1286, 219), "精选礼包": (202, 234), "有猫推荐": (900, 60), "返回": BACK_XY}
+        elif self.state == "mail":
+            data = MAIL_FRAME_TEXTS
         elif self.state == "friend":
             # 2026-11-13 10:18 #282 取证帧：好友页（友情勋章任务领完留在这里）。
             # 注意 OCR 把「一键领取/赠送」的「一」截掉了，只剩「键领取/赠送」。
@@ -221,6 +248,9 @@ class Screen:
             # 与休息室同一套离开交互：返回 → 确认框
             self.state = "confirm"
         elif self.state == "retail" and _near((x, y), BACK_XY):
+            self.state = "main"
+        elif self.state == "mail" and _near((x, y), MAIL_CLOSE_XY):
+            # 面板右上 X 关闭 → 回到主界面（_dismiss_overlay 会故意跳过这个 X）
             self.state = "main"
         elif self.state == "friend" and _near((x, y), BACK_XY):
             # 好友入口在主界面左上图标行，返回即到家
@@ -611,13 +641,42 @@ def test_friend_page_20261113():
           [r["name"] for r in bd.SCENE_RULES])
 
 
+# ── 4.10 2026-11-22：邮件/公告面板（自动化盲点误开也能自动退出） ───
+def test_mail_panel_20261122():
+    print("[4.10] 邮件/公告面板：盲点误开也能自动退出（#447/#456 取证）")
+    scr = Screen(state="mail")
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="t-mail"))
+    check("mail → 状态 main", state == "main", state)
+    check("mail 点面板右上 X → 回主界面", MAIL_CLOSE_XY in scr.clicks, scr.clicks)
+    check("mail 零 ESC", scr.esc == 0, scr.esc)
+    check("mail 做过动作", acted is True, acted)
+
+    frame = [{"text": t, "confidence": 0.95, "center": xy}
+             for t, xy in MAIL_FRAME_TEXTS.items()]
+    rule, _hit = bd._match_scene_rule(LOG, 1, frame)
+    check("真实取证帧（#456 的 19 个区域）判邮件/公告面板",
+          rule is not None and rule["name"] == "邮件/公告面板",
+          rule["name"] if rule else None)
+
+    # 页面判定铁律：单个「已签收」太泛，不判邮件面板
+    only_signed = [{"text": "已签收", "confidence": 0.95, "center": (1700, 300)}]
+    rule2, _ = bd._match_scene_rule(LOG, 1, only_signed)
+    check("只有「已签收」不判邮件/公告面板",
+          rule2 is None or rule2["name"] != "邮件/公告面板", rule2["name"] if rule2 else None)
+    check("特征表 ≥2 个独有词（配合 detector 双证据）",
+          len(bd.MAIL_PANEL_MARKERS) >= 2, bd.MAIL_PANEL_MARKERS)
+    check("退出点的是面板右上 X 比例点",
+          bd.MAIL_PANEL_CLOSE == (0.938, 0.19), bd.MAIL_PANEL_CLOSE)
+
+
+
 # ── 8. 登记表顺序 ─────────────────────────────────────────────────
 def test_rule_order():
     print("[8] 登记表顺序：面板特征优先，绝不在任务面板上点「返回」")
     check("规则顺序", [r["name"] for r in bd.SCENE_RULES] == ["加载过场", "活动公告", "过场遮罩", "计划等级提升",
                                                               "定巡之礼", "茶憩摘要", "关注特写", "休息室",
                                                               "烙痕详情", "烙痕列表", "茶憩房间", "有猫零售",
-                                                              "好友页"],
+                                                              "邮件/公告面板", "好友页"],
           [r["name"] for r in bd.SCENE_RULES])
     check("休息室特征不含「午后茶憩」（任务行也有这四个字）",
           "午后茶憩" not in bd.REST_ROOM_MARKERS, bd.REST_ROOM_MARKERS)
@@ -695,6 +754,7 @@ def main():
     test_loading_cn_and_failure_detail_20261110()
     test_rounds_exhausted_not_failure_20261112()
     test_friend_page_20261113()
+    test_mail_panel_20261122()
     test_event_announce_20261107()
     test_single_ocr_per_round()
     test_unknown_scene_evidence()

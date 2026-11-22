@@ -28,6 +28,13 @@ import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# 沙箱兼容：tempfile 目录创建改默认权限（0700 受保护 DACL 在沙箱里写不进）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sandbox_temp import install as _install_sandbox_temp
+
+_install_sandbox_temp()
+
 # 只在直接跑脚本时改 stdout 编码；pytest 下换掉 sys.stdout 会顶掉它的 capture
 # 包装，整套在 teardown 时炸「I/O operation on closed file」。
 if __name__ == "__main__":

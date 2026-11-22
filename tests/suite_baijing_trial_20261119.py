@@ -8,6 +8,8 @@
   [3] 14 天周期门控 trial_due
   [4] 接线：一条龙挂载点 + 抽卡入口「获取同调者」禁点防呆
   [5] 打桩全流程状态机（主界面→活动中心→试玩→单槽战斗→返回）
+  [6] 2026-11-22 #447/#456：活动中心 OCR 未命中不再抛 UnboundLocalError；
+      收尾「返回」先判页——主界面上那个坐标是邮件图标（盲点会开邮件面板）
 
 跑法：.venv\\Scripts\\python.exe -m pytest tests\\suite_baijing_trial_20261119.py -q
 """
@@ -221,7 +223,10 @@ def _run_script(pages, slot_points=(bt.SLOT_POINTS[0],), wait_team=None):
 def test_flow_done():
     print("[5] 打桩全流程：主界面 → 活动中心 → 试玩 → 单槽战斗 → 返回")
     # 调用序：hub → trial → (槽位点击后)trial → deploy → battle → result → trial
-    out, script = _run_script(["hub", "trial", "trial", "deploy", "battle", "result", "trial"])
+    # 末尾多一帧 trial：收尾判页通过才点「返回」（2026-11-22 #447/#456 新增闸门）
+    out, script = _run_script(
+        ["hub", "trial", "trial", "deploy", "battle", "result", "trial", "trial"]
+    )
     check("整链成功", out.get("ok") is True, out.get("detail"))
     check("完成 1 场并记录", out.get("fought") == ["开始试玩"] or len(out.get("fought") or []) == 1,
           out.get("fought"))
@@ -244,6 +249,32 @@ def test_flow_skip_slot():
           and (out.get("slots") or [{}])[0].get("state") == "skipped", out.get("slots"))
 
 
+
+
+# ── [6] 2026-11-22 #447/#456：OCR 未命中 → 不抛异常，收尾不盲点 ──────────
+def test_ocr_miss_no_crash():
+    print("[6] 活动中心 OCR 未命中：不抛 UnboundLocalError，收尾不盲点（#447/#456）")
+    script = Script(["main", "main"])
+    failures = []
+    with patch.object(bt, "_trial_page_now", side_effect=script.page_now), \
+         patch.object(bt, "_ocr_best_match", return_value=None), \
+         patch.object(bt, "_click", side_effect=script.click), \
+         patch.object(bt, "_pyautogui_click_guarded", side_effect=script.guarded), \
+         patch.object(bt, "_record_failure",
+                      side_effect=lambda *a, **k: failures.append(a)), \
+         patch.object(bt.time, "sleep"), \
+         patch("game_auto.runtime.baijing_scene._ensure_main_ui", return_value=True):
+        out = bt.run_trial_activity(LOG, 123)
+    check("整链不抛异常（UnboundLocalError 已修）", out.get("ok") is False, out)
+    check("停在「打开活动中心」", out.get("step") == "打开活动中心", out.get("step"))
+    check("失败取证带当帧 OCR（不再是未绑定变量）",
+          bool(failures) and isinstance(failures[0][4], list) and failures[0][4],
+          failures)
+    check("收尾在主界面 → 不点「试玩页返回」",
+          "试玩页返回" not in script.clicks, script.clicks)
+    check("收尾仍恢复主界面", out.get("returned_main") is True, out.get("returned_main"))
+
+
 def main():
     test_text_matrix()
     test_screenshot_matrix()
@@ -252,6 +283,7 @@ def main():
     test_forbidden_click()
     test_flow_done()
     test_flow_skip_slot()
+    test_ocr_miss_no_crash()
     print("-" * 60)
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} -> {FAILURES}")

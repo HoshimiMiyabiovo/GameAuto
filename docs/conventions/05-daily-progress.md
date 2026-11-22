@@ -7,14 +7,31 @@
 - **启动前签到（`services/startup_sign_runner.py`）签完后必须同时写两处**：① SQLite tracker（`record_sign_result`）② `app_config.json` 的 `{section}.last_sign_date/last_sign_status/last_sign_message`（helper `_write_sign_status_to_config`，与 bridge `_update_sign_status` 同字段）。DailyView 的签到行对 wuwa/endfield/nte **只读 last_sign_***，只写 tracker 会导致 UI 显示"今日尚未签到"（2026-10-12 实例：异环实际签到成功 +80金币，last_sign_date 却停在 3 个月前）。
 - **nte 分支过滤签到任务禁止用 `endswith("签到")`**：`_inject_external_log_progress` 里只应精确丢弃 `task_name == "游戏签到"`（游戏内由 ok-nte 代表）。`BBS签到`（社区 API 成果）和 `异环签到`（community 源）必须保留，否则成功的签到记录被丢后 UI 只能走"今日尚未签到"兜底。
 - 米游社三件套（genshin/honkai_sr/zzz）走 tracker `sign_` 前缀任务，不经 last_sign_*，两条路径不要混。
+- **同一天签到状态防降级（2026-11-21）**：`record_sign_result` 写 failed 时不得覆盖当天的 success/already；`_write_sign_status_to_config` 与 `DailyView._update_sign_status` 的 `last_sign_*` 同规则（后两者已统一走 `settings.manager.update_config` 锁内写）。启动前签到一天会跑多轮，重复轮次撞上本地代理/网络故障不能把真实签到成功改判失败（11-21 事故：08:11 四家已签成功，17:30 失败轮全覆盖）。
+### 测试进程禁止写生产进度（2026-11-22）
+
+- 同一个坑爆过两次：① 套件用假 hwnd 跑流程，`flow_failures` 里多了 138 条
+  "没有截图的失败"；② 套件跑 `task_batch_runner` 时，`_run_single_task` 里是
+  **函数内** `from ..services.daily_progress_tracker import get_tracker`，patch
+  `tbr.get_tracker` 拦不住 → 日报凭空多出 `wuwa / script_script failed`
+  （11-17 起 6 条，最近一条就是当天跑套件写的）。
+- 现口径：`settings/paths.is_test_process() and is_production_data_path(目标库)`
+  两条同时成立才拒写；目标库被套件改写成临时库时照写（套件自建库测 tracker
+  是既有写法，不能拦）。
+- 落点：`DailyProgressTracker.record_task`（唯一写入口，sign_/script_/社区任务
+  全走它）、`WorkflowDB.set_task_meta`（月度/周常门控，写了会让真机当月跳过）、
+  `flow_diagnostics.record_failure`。回归 `tests/suite_flow_failure_test_guard_20261122.py`。
+
 ## 每日进度「完成度」口径 (重要)
 
 - **`progress_percent` 有两个完全不同的口径，禁止混用**：
   1. **脚本子任务比例**（`ok_ww_daily_parser` 等）：ok-ww 跑完 5 步就是 100%，
      与玩家真实游玩进度**无关**
   2. **真实游玩进度**：如鸣潮活跃度 `cur/total`（90/100 → 90%）
-- `ui/bridge.py` 的 `UiBridge._real_completion_percent(game_key, tasks)` 是统一取值入口：
-  按游戏找"关键进度"任务（鸣潮=今日活跃 / 原神=每日委托 / 绝区零=活跃度 / 暖暖=日活跃），
+- `UiBridge._real_completion_percent(game_key, tasks)`（实现已迁 `ui/bridge_backends/daily_progress.py`，
+  经 `ui/bridge_views/daily.py` mixin 挂到桥上）是统一取值入口：复用 tracker 的
+  `KEY_PROGRESS_TASKS` 按游戏找"关键进度"任务（鸣潮=今日活跃 / 原神=每日委托 /
+  绝区零=活跃度奖励 / 暖暖=朝夕心愿 / 终末地=日活跃），
   用 `cur/total` 算百分比；`cur<=0` 视作未刷新返回 `None`；无关键任务返回 `None` 降级旧逻辑。
 - 合并外部日志进度时**必须**用 `_real_completion_percent` 覆盖 `progress_percent`，
   并写 `progress_source`（真实任务名 或 `"script"`），供 UI 区分口径。
@@ -39,7 +56,7 @@
   禁止凭代码推断或沿用缓存数据下结论。用户在 2026-09-27 明确要求过"自动查一遍"。
 ### 发邮件前必须实时查进度（禁止发缓存数据）
 
-- `ui/bridge.py::_send_daily_email_report` **不得**直接用 `tracker.load_today()` 发信。
+- `_send_daily_email_report`（`ui/bridge_backends/daily_progress.py` + `ui/bridge_views/daily.py`）**不得**直接用 `tracker.load_today()` 发信。
   一条龙跑完往往已过几十分钟~几小时，库里可能还是跑之前的数据
   （2026-09-27 事故：库里活跃度 0/100，真实 100/100）。
 - 必须走 `self._refresh_daily_snapshot_for_report(tracker_factory)`：
@@ -105,7 +122,7 @@
   任务明细，不拖卡片结论。绝区零"活跃度已满"+5 个边角失败同理：必须"全部完成"，
   汇总条计入完成而非失败（旧口径把这种计进"失败"不计"完成"）。
 - `DailyView.qml` 主列表徽标/底色/汇总条（`buildStatusText`）与歷史回看段
-  四态映射必须一致；`progress_source`（`ui/bridge.py::_attach_completion_state` 补）
+  四态映射必须一致；`progress_source`（`ui/bridge_backends/daily_progress.py::_attach_completion_state` 补）
   区分百分比口径：真实计数（活跃度）= 游玩进度直接显示，脚本子任务比例加
   "脚本"前缀——白荆活跃度 15/100 曾被误显示"脚本 15%"。
 - 已完成卡片的头部右侧只显示完成度，不翻边角失败的旧账（"失败 N 项"仅出现在

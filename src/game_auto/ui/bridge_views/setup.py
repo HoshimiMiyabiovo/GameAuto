@@ -136,6 +136,14 @@ class SetupWizardView:
             "current_value": flow_overrides.get("QODER", ""),
             "required": False,
         })
+        items.append({
+            "app_key": "",
+            "display_name": "",
+            "field": "flow_exe.RACCOON",
+            "label": "商汤小浣熊 程序或快捷方式（薅羊毛集合，可填 .lnk）",
+            "current_value": flow_overrides.get("RACCOON", ""),
+            "required": False,
+        })
         for flow_key, flow_label in (
             ("XM", "XM 脱机程序（XM 独立流程，可含 * 通配符）"),
             ("CJ", "重聚脱机程序（重聚独立流程，可含 * 通配符）"),

@@ -21,6 +21,11 @@ from types import SimpleNamespace
 
 sys.path.insert(0, r"E:\GithubProject\game_auto\src")
 
+# 沙箱兼容：tempfile 目录创建改默认权限（0700 受保护 DACL 在沙箱里写不进）
+from sandbox_temp import install as _install_sandbox_temp
+
+_install_sandbox_temp()
+
 import game_auto.services.game_update_calendar as cal  # noqa: E402
 import game_auto.ui.bridge_views.scheduler as bridge_mod  # noqa: E402
 from game_auto.ui.bridge import UiBridge  # noqa: E402

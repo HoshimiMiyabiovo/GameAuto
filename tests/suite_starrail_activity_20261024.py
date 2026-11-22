@@ -24,6 +24,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, r"E:\GithubProject\game_auto\src")
 
+# 沙箱兼容：tempfile 目录创建改默认权限（0700 受保护 DACL 在沙箱里写不进）
+from sandbox_temp import install as _install_sandbox_temp
+
+_install_sandbox_temp()
+
 from game_auto.runtime import task_batch_runner as tbr  # noqa: E402
 from game_auto.services import starrail_daily_parser as sp  # noqa: E402
 from game_auto.services.daily_progress_tracker import (  # noqa: E402
