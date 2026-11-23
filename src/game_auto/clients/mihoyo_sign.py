@@ -248,6 +248,39 @@ def extract_cookie_fields(cookie: str) -> Dict[str, str]:
     return result
 
 
+def mirror_v2_token_aliases(cookie: str) -> str:
+    """把 `*_v2` 凭证按旧键名补一份（2026-11-22 实测必需）。
+
+    绑定角色 / luna 签到接口只认 `cookie_token`：App 扫码等登录流程可能只落了
+    `cookie_token_v2`，同一枚 token 用 `cookie_token_v2` 发出去会得到
+    retcode=-100「登录状态失效，请重新登录」，改名成 `cookie_token` 立刻 0 OK。
+    症状看起来完全像登录过期，用户会白重扫一次二维码。
+
+    顺带修 `getCookieAccountInfoBySToken` 已停用（retcode=-464「请使用最新版本
+    产品/链接」）导致 `_ensure_fresh_cookie_token` 刷不出来的情况：不用刷新，
+    原 token 照样能用。
+
+    只补缺失键，绝不覆盖已存在的旧键值。
+    """
+    pairs = _parse_cookie_pairs(tidy_cookie(cookie))
+    if not pairs:
+        return ""
+    mirrored = False
+    for legacy, v2 in (
+        ("cookie_token", "cookie_token_v2"),
+        ("ltoken", "ltoken_v2"),
+        ("ltuid", "ltuid_v2"),
+        ("account_id", "account_id_v2"),
+        ("mid", "account_mid_v2"),
+    ):
+        if not pairs.get(legacy) and pairs.get(v2):
+            pairs[legacy] = pairs[v2]
+            mirrored = True
+    if not mirrored:
+        return tidy_cookie(cookie)
+    return "; ".join(f"{key}={value}" for key, value in pairs.items())
+
+
 def _merge_cookie_mapping(cookie: str, mapping: Dict[str, Any]) -> str:
     cookie_map = _parse_cookie_pairs(tidy_cookie(cookie))
     for key, value in mapping.items():
@@ -2038,7 +2071,9 @@ def _build_game_headers(
     body: Optional[Dict[str, Any]] = None,
     include_json: bool = False,
 ) -> Dict[str, str]:
-    cookie = tidy_cookie(cookie)
+    # 米游社只认旧键名 cookie_token，App 扫码等流程可能只落 cookie_token_v2
+    # （-100「登录状态失效」的真凶，2026-11-22 实测），发请求前统一镜像一份。
+    cookie = mirror_v2_token_aliases(cookie)
     user_agent = (
         "Mozilla/5.0 (Linux; Android 12; Unspecified Device) AppleWebKit/537.36 "
         f"(KHTML, like Gecko) Version/4.0 Chrome/103.0.5060.129 Mobile Safari/537.36 miHoYoBBS/{MIYOUSHE_VERSION}"

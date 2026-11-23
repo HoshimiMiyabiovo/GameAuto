@@ -66,6 +66,7 @@ suite_hsr_resin_craft_20261101.py
 suite_hsr_version_shop_20261112.py
 suite_kilo_capture_20261117.py
 suite_login_agreement_scroll_20261104.py
+suite_mihoyo_cookie_alias_20261122.py
 suite_minimax_ocr_exclude_20261031.py
 suite_minimax_sign_20261026.py
 suite_dumate_wool_20261117.py
