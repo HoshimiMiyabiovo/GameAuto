@@ -6,6 +6,8 @@
   2. 多版本公告选择最新版本
   3. 维护跳过 → 创建补跑条目 → 到点触发（force_rerun=False）→ 成功移除
   4. 有补跑条目时 _has_unfired_scheduled_today 为 True（关机顺延）
+  5. 终末地官网区间写法 / 列表条目正则（RSC 转义容错）/
+     最新无窗口回退次新 / 维护窗口判定（2026-11-25 接入 endfield 源）
 
 跑法：.venv\\Scripts\\python.exe artifacts\\test_update_calendar_20261021.py
 """
@@ -151,6 +153,114 @@ def test_wuwa_nte_regex():
         bool(m3) and m3.group(1) == "2026" and m3.group(2) == "10" and m3.group(6) == "11",
         m3.groups() if m3 else None,
     )
+
+
+def test_endfield_entry_regex():
+    print("[13] 终末地官网列表条目正则（RSC 转义容错）")
+    escaped = (
+        '{\\"cid\\":\\"5979\\",\\"tab\\":\\"notices\\",\\"sticky\\":true,'
+        '\\"title\\":\\"「穿越甚大蘑境与你相逢」版本更新说明\\",'
+        '\\"author\\":\\"\\",\\"displayTime\\":1795568400}'
+    )
+    rows = cal._RE_ENDFIELD_ENTRY.findall(escaped)
+    check("转义形态命中 1 条", len(rows) == 1, rows)
+    if rows:
+        check("cid=5979", rows[0][0] == "5979", rows[0])
+        check("标题含更新说明", "更新说明" in rows[0][1], rows[0])
+        check("displayTime 正确", rows[0][2] == "1795568400", rows[0])
+    plain = (
+        '{"cid":"9324","tab":"notices","sticky":false,'
+        '"title":"「穿越甚大蘑境与你相逢」版本预下载与更新预告",'
+        '"author":"","displayTime":1795406400}'
+    )
+    rows2 = cal._RE_ENDFIELD_ENTRY.findall(plain)
+    check("无转义也命中", len(rows2) == 1, rows2)
+    check(
+        "研发通讯不算维护公告",
+        not any(k in "「穿越甚大蘑境与你相逢」版本研发通讯" for k in cal._ENDFIELD_UPDATE_TITLE_WORDS),
+    )
+
+
+def test_endfield_parse():
+    print("[14] 终末地「更新维护时间 A - B（UTC+8）」区间解析")
+    info = cal._parse_update_item(
+        {
+            "title": "「穿越甚大蘑境与你相逢」版本更新说明",
+            "content": (
+                "2026.11.23 12:00 「穿越甚大蘑境与你相逢」版本更新说明 "
+                "欢迎来到全新版本「穿越甚大蘑境与你相逢」！ ▼//更新维护及补偿说明 "
+                "■ 更新维护时间 2026/11/25 06:00 - 2026/11/25 12:00（UTC+8） "
+                "※ 维护后的开服时间存在提前或延迟的可能，详情请关注官方公告。"
+            ),
+        },
+        title_keywords=cal._ENDFIELD_UPDATE_TITLE_WORDS,
+    )
+    check("维护开始 06:00", bool(info) and info["maintenance_start"].startswith("2026-11-25T06:00"), info)
+    check("开服 12:00", bool(info) and info["open_at"].startswith("2026-11-25T12:00"), info)
+    check("预计 6 小时", bool(info) and info["estimated_hours"] == 6, info)
+    check(
+        "正文日期 2026.11.23 不当版本号",
+        bool(info) and not str(info.get("version") or "").startswith("2026"),
+        info.get("version"),
+    )
+
+
+def test_endfield_fetch_pick_latest():
+    print("[15] 终末地 _fetch_endfield：最新条无窗口回退次新")
+    list_html = (
+        '<script>payload {\\"cid\\":\\"7777\\",\\"tab\\":\\"notices\\",\\"sticky\\":false,'
+        '\\"title\\":\\"11月26日维护完成公告\\",\\"author\\":\\"\\",\\"displayTime\\":1795650000} '
+        '{\\"cid\\":\\"5979\\",\\"tab\\":\\"notices\\",\\"sticky\\":true,'
+        '\\"title\\":\\"「穿越甚大蘑境与你相逢」版本更新说明\\",\\"author\\":\\"\\",'
+        '\\"displayTime\\":1795568400}</script>'
+    )
+    detail = {
+        "7777": "维护已完成，各渠道已恢复。（无维护时间区间）",
+        "5979": (
+            "■ 更新维护时间 2026/11/25 06:00 - 2026/11/25 12:00（UTC+8） "
+            "※ 维护后的开服时间存在提前或延迟的可能。"
+        ),
+    }
+    old = cal._fetch_text
+    try:
+        cal._fetch_text = lambda url, referer="": (
+            list_html if url.endswith("/news") else detail[url.rsplit("/", 1)[1]]
+        )
+        info = cal._fetch_endfield(
+            {"base": "https://endfield.hypergryph.com/news", "referer": ""}
+        )
+    finally:
+        cal._fetch_text = old
+    check("回退到 5979", bool(info) and info.get("ann_id") == "5979", info)
+    check("开服 12:00", bool(info) and info["open_at"].startswith("2026-11-25T12:00"), info)
+
+
+def test_endfield_maintenance_window():
+    print("[16] 终末地维护窗口：今天上午 09:48/10:41 两轮实际启动时刻应判维护中")
+    start = datetime(2026, 11, 25, 6, 0, tzinfo=cal.CN_TZ)
+    open_at = datetime(2026, 11, 25, 12, 0, tzinfo=cal.CN_TZ)
+    info = {
+        "version": "",
+        "title": "「穿越甚大蘑境与你相逢」版本更新说明",
+        "maintenance_start_dt": start,
+        "open_at_dt": open_at,
+        "maintenance_start": start.isoformat(timespec="seconds"),
+        "open_at": open_at.isoformat(timespec="seconds"),
+    }
+    old = cal.get_update_info
+    cal.get_update_info = lambda app_key, now=None, refresh_if_stale=True: dict(info)
+    try:
+        def state_at(h, m):
+            return cal.is_under_maintenance(
+                "ArknightsEndfield", now=datetime(2026, 11, 25, h, m, tzinfo=cal.CN_TZ)
+            )
+
+        check("05:50 未开维护", state_at(5, 50) is False)
+        check("09:48 维护中（首轮实际启动时刻）", state_at(9, 48) is True)
+        check("10:41 维护中（统一重试实际启动时刻）", state_at(10, 41) is True)
+        check("12:05 已开服", state_at(12, 5) is False)
+    finally:
+        cal.get_update_info = old
 
 
 def test_qoder_gate():
@@ -319,6 +429,10 @@ def main():
     test_select_latest()
     test_maintenance_window()
     test_wuwa_nte_regex()
+    test_endfield_entry_regex()
+    test_endfield_parse()
+    test_endfield_fetch_pick_latest()
+    test_endfield_maintenance_window()
     test_qoder_gate()
     test_prelaunch_guard()
     tmp_dir = Path(tempfile.mkdtemp(prefix="game_auto_update_test_"))

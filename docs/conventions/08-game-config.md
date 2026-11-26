@@ -138,7 +138,7 @@
   |---|---|---|
   | BetterGI | exe ProductVersion（`trust_exe_version`） | 目录无版本；更新器替换 exe，元数据跟真版本 |
   | March7th | `assets/config/version.txt`（`version_file`） | 目录名 v2.2.0.3 已过期，version.txt 实际 v2026.10.31 |
-  | ok-ww/ok-ef/ok-nte | `data/apps/<exe名>/app.json` 的 `current_version`（`pyappify`） | pyappify 安装器自更新清单；exe 元数据是框架版本（1.2.3/0.1.0/1.2.5 全是假），目录名是初次安装版本 |
+  | ok-ww/ok-ef/ok-nte/ok-ap | `data/apps/<exe名>/app.json` 的 `current_version`（`pyappify`） | pyappify 安装器自更新清单；exe 元数据是框架版本（1.2.3/0.1.0/1.2.5 全是假），目录名是初次安装版本 |
   | ScriptChainer | 目录名正则（`trust_dir_version`） | 按版本号命名 zip 分发、无自更新 |
   | OneDragon 一条龙系 / whimbox | 无（显示"本地版本未知"） | OneDragon 版本跟 git 走；whimbox 在 Electron asar 内，不值得解析 |
   新增/换工具时先实盘确认真值来源再填 spec，**不要默认目录名可信**——
@@ -152,8 +152,8 @@
 - **下载范围**（逐仓库实查 release 资产后定，别凭印象扩）：
   ok-ww/ok-ef/ok-nte（pyappify 在线包 zip ~5MB，首启自补全运行时）、
   March7th（7z 474MB 优先、zip 719MB 兜底）、BetterGI（7z 465MB）。
-  OneDragon 系/whimbox/ScriptChainer **不支持自动安装**（包结构复杂/只有
-  whl/无上游），页面只给「打开发布页」。资产正则必须写窄：ok-nte 另有
+  OneDragon 系/whimbox/ScriptChainer/ok-ap **不支持自动安装**（包结构复杂、只有
+  whl/无上游或只发 setup.exe），页面只给「打开发布页」。资产正则必须写窄：ok-nte 另有
   full/body 两个 300MB+ zip，宽正则会下错包。
 - **安装器**：`services/script_tool_installer.py`。流式下载（256KB 分片、
   分片级 stop_check、.part 原子改名）→ ok 系 sha256 清单对账 → 解压
@@ -300,6 +300,8 @@
   脱战够 `BATTLE_REBUILD_GAP=3.0s` 就算"下一场"，把 `self.chars` 置空后重读——
   自定义类的 `__init__` 重跑，等价于作者 Tips 里的"开关一次自动战斗"
   （`reset_combat_state`）；读屏没认全时退回旧实例。深塔强制进战斗同样走这条。
+  日志：首场 `new battle #1 (first battle)`，之后 `new battle #N after Xs out of
+  combat`（11-22/11-24 实机日志已见 #2/#3 且随后 `loaded chars success` 重建）。
   ② 同文件 `on_executor_tick()`：宏跑在 `time.sleep` 里时，执行器每 0.1 秒还会调
   `check_enabled`，借它做便宜探针（目标锁 + 血条，0.7 秒一次），两者一起消失
   `COMBAT_LOST_TIME=4.0s` 抛 `NotInCombatException` 掐断这一轮；解放键发出后
@@ -311,5 +313,5 @@
   分支（那是会真发按键的，探针不能有副作用）。
   ③ `ok/task/TaskExecutor.py` 的 `check_enabled` 接上 `on_executor_tick`，并且**不只 tick `current_task`**：一条龙（DailyTask）用 `run_task_by_class` 原地跑 DomainTask/NightmareNestTask，executor.current_task 只指向最外层，战斗实例（`_in_combat`/`skip_combat_check` 都在它身上）躺在 `onetime_tasks` 里。只 tick current_task 的话，宏跑在 `time.sleep` 里的那几十秒探针一次都不执行；所以额外遍历 `onetime_tasks` + `trigger_tasks` 中 `skip_combat_check` 已打开的任务实例。
   ④ `src/char/BaseChar.py` 的 `send_liberation_key` 调 `task.mark_liberation_sent()`。
-  **重装/换血会冲掉，按此重打**；锚点 + 5 个行为桩测（共 9 项）由
+  **重装/换血会冲掉，按此重打**；锚点 + 6 个行为桩测（共 10 项）由
   `tests/suite_okww_battle_boundary_20261121.py` 锁住。

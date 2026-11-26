@@ -6,6 +6,9 @@
 - 原神国服：hk4e-api.mihoyo.com/common/hk4e_cn/announcement/api/
 - 崩铁：sg-hkrpg-api.hoyoverse.com/common/hkrpg_global/announcement/api/（lang=zh-cn）
 - 绝区零：sg-announcement-static.hoyoverse.com/common/nap_global/announcement/api/（lang=zh-cn）
+- 终末地：endfield.hypergryph.com/news 列表（Next.js 内嵌条目）+ /news/<cid> 详情页正文
+  （2026-11-25 实证：1.7 停服窗口 06:00-12:00 由该源命中，此前 endfield 只有 update_key
+  声明没有源，KeyError 被批处理裸 except 吞掉，维护检查一直空转）
 
 公告时间均为 UTC+8。缓存写到 data/cache/game_update_calendar.json，
 默认 6 小时刷新；网络失败返回旧缓存，没有缓存则返回 None，
@@ -101,6 +104,16 @@ _SOURCES: Dict[str, Dict[str, Any]] = {
         "page_base": "https://infinitynikki.nuanpaper.com/news/",
         "referer": "https://infinitynikki.nuanpaper.com/news",
     },
+    # 终末地官网公告：/news 列表页是 Next.js SSR，条目数据内嵌（RSC payload，引号带反斜杠
+    # 转义），形如 {"cid":"5979","tab":"notices","sticky":true,"title":"…版本更新说明",
+    # "displayTime":1795568400}；详情页 /news/<cid> 服务端渲染，正文「■ 更新维护时间
+    # 2026/11/25 06:00 - 2026/11/25 12:00（UTC+8）」与 _RE_RANGE 兼容。游戏内/微博的
+    # 临时停服公告不一定同步到官网，这类短窗口覆盖不到（2026-11-25 实证）。
+    "endfield": {
+        "kind": "endfield_site",
+        "base": "https://endfield.hypergryph.com/news",
+        "referer": "https://endfield.hypergryph.com/",
+    },
 }
 
 # app_key / game_key → 公告解析 key（崩铁用 "hsr"）。由 games 注册表的
@@ -158,6 +171,18 @@ _RE_NIKKI_TIME = re.compile(
     r"(\d{4})年(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})\s*"
     r"[-–—~～至]\s*(\d{1,2}):(\d{2})\s*[（(]?\s*UTC\+8"
 )
+# 终末地官网 /news 列表页内嵌条目（RSC payload，引号可能带一层反斜杠转义）：
+# {"cid":"5979","tab":"notices","sticky":true,"title":"…版本更新说明","author":"","displayTime":1795568400}
+_RE_ENDFIELD_ENTRY = re.compile(
+    r'\\?"cid\\?":\\?"(\d+)\\?",\\?"tab\\?":\\?"[a-z]+\\?",'
+    r'\\?"sticky\\?":(?:true|false),\\?"title\\?":\\?"([^"]*?)\\?",'
+    r'\\?"author\\?":\\?"[^"]*?\\?",\\?"displayTime\\?":(\d+)'
+)
+# 终末地版本维护类公告标题词（预下载与更新预告 / 版本更新说明 / 停服维护公告…）
+_ENDFIELD_UPDATE_TITLE_WORDS = (
+    "版本更新", "更新说明", "更新公告", "更新预告",
+    "维护公告", "停服维护", "停机维护", "更新维护",
+)
 
 _LOCK = threading.RLock()
 _MEM_CACHE: Optional[Dict[str, Any]] = None
@@ -180,13 +205,17 @@ def _parse_dt(date_str: str, time_str: str) -> datetime:
     return dt.replace(tzinfo=CN_TZ)
 
 
-def _parse_update_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _parse_update_item(
+    item: Dict[str, Any],
+    title_keywords: tuple = ("版本更新", "更新说明", "更新公告", "更新通知"),
+) -> Optional[Dict[str, Any]]:
     title = _strip_html(str(item.get("title") or ""))
     content = _strip_html(str(item.get("content") or ""))
     if not content:
         return None
-    # 只认版本更新类公告；活动/修复说明即使出现“更新时间”也不当版本维护
-    if not any(k in title for k in ("版本更新", "更新说明", "更新公告", "更新通知")):
+    # 只认版本更新类公告；活动/修复说明即使出现“更新时间”也不当版本维护。
+    # title_keywords 可由调用方覆盖（终末地官网标题写法是「…版本预下载与更新预告」）。
+    if not any(k in title for k in title_keywords):
         return None
 
     start = open_at = None
@@ -215,9 +244,16 @@ def _parse_update_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             open_at = start + timedelta(hours=hours)
 
     version = ""
-    vm = _RE_VERSION.search(title) or _RE_VERSION.search(content)
+    vm = _RE_VERSION.search(title)
     if vm:
         version = vm.group(1)
+    else:
+        # 终末地官网正文里的发布日期是「2026.11.23」点分格式，会被 (\d+\.\d+) 先吃到
+        # （2026-11-25 实证 version=2026.11）；搜正文前把日期样式的点分串换成 /。
+        safe_content = re.sub(r"(\d{4})\.(\d{1,2})(?:\.\d{1,2})?", r"\1/\2", content)
+        vm = _RE_VERSION.search(safe_content)
+        if vm:
+            version = vm.group(1)
     return {
         "version": version,
         "title": title,
@@ -418,6 +454,34 @@ def _fetch_nikki(src: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
+def _fetch_endfield(src: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """终末地官网公告（鹰角官网，无需凭据）。
+
+    列表页只给 cid/标题/发布时间，正文要再抓 /news/<cid> 详情页；
+    从最新一条维护类公告起最多试 3 条，第一条解析出维护窗口的即用。
+    """
+    html_text = _fetch_text(src["base"], src["referer"])
+    entries = []
+    for cid, title, display_time in _RE_ENDFIELD_ENTRY.findall(html_text):
+        title = title.replace('\\"', '"')
+        if not any(k in title for k in _ENDFIELD_UPDATE_TITLE_WORDS):
+            continue
+        entries.append((int(display_time), cid, title))
+    if not entries:
+        return None
+    entries.sort(reverse=True)
+    for _, cid, title in entries[:3]:
+        content = _strip_html(_fetch_text(f"{src['base']}/{cid}", src["referer"]))
+        info = _parse_update_item(
+            {"title": title, "content": content},
+            title_keywords=_ENDFIELD_UPDATE_TITLE_WORDS,
+        )
+        if info:
+            info["ann_id"] = cid
+            return info
+    return None
+
+
 def _fetch_game(game_key: str) -> Optional[Dict[str, Any]]:
     src = _SOURCES[game_key]
     kind = src.get("kind", "mihoyo")
@@ -427,6 +491,8 @@ def _fetch_game(game_key: str) -> Optional[Dict[str, Any]]:
         info = _fetch_nte(src)
     elif kind == "nikki_news":
         info = _fetch_nikki(src)
+    elif kind == "endfield_site":
+        info = _fetch_endfield(src)
     else:
         info = _fetch_mihoyo(game_key, src)
     if info:

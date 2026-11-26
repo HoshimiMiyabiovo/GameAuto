@@ -17,6 +17,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -67,14 +68,66 @@ def test_clear_motw_marker_no_marker_is_noop():
         check("空路径返回 False", ac.clear_motw_marker("") is False)
 
 
+class _Logger:
+    """最小 logger 桩：只接文案，不做格式化。"""
+
+    def __init__(self):
+        self.lines = []
+
+    def _add(self, msg, *a):
+        self.lines.append(str(msg))
+
+    def info(self, msg, *a, **k):
+        self._add(msg)
+
+    def warning(self, msg, *a, **k):
+        self._add(msg)
+
+    def error(self, msg, *a, **k):
+        self._add(msg)
+
+    def debug(self, msg, *a, **k):
+        self._add(msg)
+
+
 def test_launch_normal_exe_uses_createprocess_not_shellexecute():
-    """接线锚点：.exe 必须走 CreateProcess，不能经 ShellExecute 的附件管理器。"""
+    """行为锚点：.exe 必须走 CreateProcess 列表参数，不能回退 ShellExecuteW。
+
+    2026-11-26 起 _launch_normal 把启动调用委托给 _start_launcher（有界等待），
+    断言从"源码里出现哪个分支"改成"实际调用了哪个通道"，不再锁实现文本。
+    """
     print("[3] _launch_normal 接线：exe 走 CreateProcess")
-    src = inspect.getsource(ac.AutomationController._launch_normal)
-    check("使用 subprocess.Popen", "subprocess.Popen(" in src)
-    check("按 .exe 分支", 'launcher.lower().endswith(".exe")' in src)
-    check("ShellExecuteW 只在非 exe 分支", src.count("ShellExecuteW(") == 1)
-    check("MOTW 清除兜底仍在", "clear_motw_marker(" in src)
+    controller = ac.AutomationController.__new__(ac.AutomationController)
+    controller.logger = _Logger()
+    controller.stop_current_task = False
+    controller.watchdog_aborted_task = False
+    # 包装进程发现要真扫进程表，测试里给固定 PID
+    controller._find_script_wrapper_process = lambda stem, start: SimpleNamespace(pid=4242)
+    calls = {}
+    orig_popen = ac.subprocess.Popen
+    orig_shell = ac._shell_execute
+
+    def fake_popen(argv, **kwargs):
+        calls["argv"] = list(argv)
+        calls["kwargs"] = dict(kwargs)
+        return SimpleNamespace(pid=4321)
+
+    ac.subprocess.Popen = fake_popen
+    ac._shell_execute = lambda *a, **k: calls.setdefault("shell", a)
+    try:
+        ok, pid = ac.AutomationController._launch_normal(
+            controller,
+            {"launcher": r"C:\x\BetterGI.exe", "launcher_params": ["--start"], "initial_wait": 0},
+            "script",
+        )
+    finally:
+        ac.subprocess.Popen = orig_popen
+        ac._shell_execute = orig_shell
+    check("启动成功", ok is True, (ok, pid))
+    check("走 CreateProcess 列表参数", calls.get("argv") == [r"C:\x\BetterGI.exe", "--start"], calls)
+    check("没有回退 ShellExecuteW", "shell" not in calls, calls)
+    check("MOTW 清除兜底仍在",
+          "clear_motw_marker(" in inspect.getsource(ac.AutomationController._launch_normal))
 
 
 def main():

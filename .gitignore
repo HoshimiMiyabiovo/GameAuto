@@ -129,6 +129,9 @@ storage/cache/
 
 # DSH NEXT 本地会话导出（含聊天正文，不入库）
 /data/dsh_capture/
+/data/raccoon_capture/
+# 千问办公（QwenWork）本地会话导出（含聊天正文，不入库）
+/data/qwenwork_capture/
 # 工作区根 _tmp_* 取证/探针脚本与缓存快照（2026-11-17 Kilo 排查产物，防误提交）
 /_tmp_*
 

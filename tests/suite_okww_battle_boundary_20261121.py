@@ -404,7 +404,8 @@ def test_begin_new_battle_uses_gap():
     clock.now = 1000.0
     assert begin(probe) is True  # 从没进过战斗 -> 第一场必然是新场
     assert probe.combat_id == 1
-    assert any("new battle #1" in line for line in probe.log_lines)
+    # 首场不能报 (time.time() - 0) 的假间隔
+    assert any("new battle #1 (first battle)" in line for line in probe.log_lines)
 
     probe._last_in_combat_at = 1000.0
     clock.now = 1001.0

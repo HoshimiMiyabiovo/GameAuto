@@ -19,6 +19,13 @@ from ...services.game_update_calendar import (
 from .common import TONE_DANGER, TONE_INFO, TONE_SUCCESS, TONE_WARNING, logger
 
 
+# 程序启动后的补跑宽限：启动瞬间立刻跑“更新补跑”会把刚打开的界面直接占住
+# （2026-11-26：每次重启程序都先跑异环补跑，用户点的批次一直排不上队）。
+# 宽限期内补跑不自动开跑，让用户有机会点自己的一条龙。
+UPDATE_RETRY_STARTUP_GRACE_SEC = 120.0
+_BOOT_MONOTONIC = time.monotonic()
+
+
 class SchedulerView:
     """每 30s 检查定时任务，并按公告开服时间安排更新补跑。"""
     # ═══════════ 定时启动（scheduled_tasks） ═══════════
@@ -516,6 +523,9 @@ class SchedulerView:
         if getattr(self, "_auto_run_paused", False):
             return
         if self._is_running:
+            return
+        # 启动宽限：刚打开程序先别抢跑补跑，用户此刻点的批次优先
+        if time.monotonic() - _BOOT_MONOTONIC < UPDATE_RETRY_STARTUP_GRACE_SEC:
             return
         now = now or datetime.now(CN_TZ)
         today = now.strftime("%Y-%m-%d")

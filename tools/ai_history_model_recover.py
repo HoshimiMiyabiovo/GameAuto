@@ -87,6 +87,10 @@ CODEARTS_RAW = PROJECT_ROOT / "data" / "codearts_capture" / "raw"
 # DSH NEXT 的 raw 是另一形状：dsh_fetch 落 {session, records:[原记录]}，
 # 模型在 records 里 assistant/message 的 data.message.source.model
 DSH_RAW = PROJECT_ROOT / "data" / "dsh_capture" / "raw"
+# 小浣熊本地 SQLite 抓取 raw：session.payload 带 modelSelection.model。
+RACCOON_RAW = PROJECT_ROOT / "data" / "raccoon_capture" / "raw"
+# 千问办公（QwenWork）抓取 raw：opencode 变体三表，assistant 逐条 data.modelID。
+QWENWORK_RAW = PROJECT_ROOT / "data" / "qwenwork_capture" / "raw"
 # 来源固定模型（2026-11-17 用户拍板）：Trae 分享接口不带模型字段、本地正文加密，
 # 但用户明确该来源跑的就是 deepseek-v4.1-flash——整源记账。只适用于**没有**
 # 模型字段的来源；有字段的（如 Kilo 的逐条 modelID）一律用真实字段。
@@ -115,6 +119,9 @@ MODEL_ALIASES = {
     # 与码道内核记录的真实 ID 一致）；原值留在 models_raw / model_raw /
     # note_model_raw 可追溯。
     "chat-flash": "deepseek-v4.1-flash-1017",
+    # 小浣熊的 sn- 只是 SenseTime 路由前缀；用户确认底层就是
+    # deepseek-v4.1-flash-1017。收敛到已有 canonical，不另立模型。
+    "sn-deepseek-v4-1-flash-1017": "deepseek-v4.1-flash-1017",
     # 注意：Kilo 的 modelID（particle-ai/particle-1:free）**不在映射表**——它有
     # 真实逐条字段，按原值记（2026-11-17 用户纠正：手工指定模型只给没有字段的
     # 来源，如 Trae；有字段的来源用真实字段，不许臆测映射）。
@@ -901,6 +908,15 @@ def recover_codearts() -> Dict[str, dict]:
     return _recover_opencode_raw(CODEARTS_RAW, "codearts", "codearts:message.modelID")
 
 
+def recover_qwenwork() -> Dict[str, dict]:
+    """千问办公（QwenWork）：同 opencode 变体三表，raw=data/qwenwork_capture/raw/。
+
+    assistant 逐条 `message.data.modelID`（本机 `deepseek-flash`，平台展示名，
+    有真实字段按原值记录、不进 MODEL_ALIASES——同 Kilo/码道口径）。
+    """
+    return _recover_opencode_raw(QWENWORK_RAW, "qwenwork", "qwenwork:message.modelID")
+
+
 def recover_dsh() -> Dict[str, dict]:
     """DSH NEXT：raw=data/dsh_capture/raw/，每会话 messages.json 含原始记录序列。
 
@@ -933,6 +949,51 @@ def recover_dsh() -> Dict[str, dict]:
         if turns:
             _put(out, "dsh:" + ses_dir.name,
                  _rec("per_message", "dsh:source.model", turns, len(recs)))
+    return out
+
+
+def recover_raccoon() -> Dict[str, dict]:
+    """小浣熊：raw/<sid>/messages.json 的 session.payload 带会话级真实模型。
+
+    本机字段为 modelSelection.model（缺时退 clientBinding.modelBinding.model）。
+    原始路由名留 raw/models_raw；展示层由 canonical_model 把已确认的 sn- 前缀
+    收敛到 deepseek-v4.1-flash-1017，不另立模型。时间用会话/消息的 epoch 毫秒。
+    """
+    out: Dict[str, dict] = {}
+    if not RACCOON_RAW.exists():
+        return out
+    for ses_dir in sorted(RACCOON_RAW.iterdir()):
+        fp = ses_dir / "messages.json"
+        if not fp.is_file():
+            continue
+        try:
+            with fp.open(encoding="utf-8") as f:
+                dump = json.load(f)
+        except (ValueError, OSError):
+            continue
+        session = dump.get("session") or {}
+        payload = session.get("payload") or {}
+        selection = payload.get("modelSelection") or {}
+        model = selection.get("model") if isinstance(selection, dict) else ""
+        source = "raccoon:session.modelSelection.model"
+        if not model:
+            binding = payload.get("clientBinding") or {}
+            model_binding = binding.get("modelBinding") if isinstance(binding, dict) else {}
+            model = model_binding.get("model") if isinstance(model_binding, dict) else ""
+            source = "raccoon:session.clientBinding.modelBinding.model"
+        model = _clean_model(model)
+        if not model:
+            continue
+        messages = dump.get("messages") or []
+        row = session.get("row") or {}
+        timestamps = [row.get("last_chatted_at_ms") or row.get("updated_at_ms") or 0]
+        for message in messages:
+            message_row = message.get("row") or {}
+            timestamps.append(message_row.get("updated_at_ms") or
+                              message_row.get("created_at_ms") or 0)
+        ts = max(timestamps) or 0
+        _put(out, "raccoon:" + ses_dir.name,
+             _rec("session", source, [(str(ts), model)], len(messages)))
     return out
 
 
@@ -984,7 +1045,9 @@ RECOVERERS = (
     ("Kilo", recover_kilo),
     ("TeleAgent", recover_teleagent),
     ("码道", recover_codearts),
+    ("千问办公", recover_qwenwork),
     ("DSH", recover_dsh),
+    ("小浣熊", recover_raccoon),
     ("Trae", recover_trae),
 )
 

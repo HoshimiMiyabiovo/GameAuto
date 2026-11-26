@@ -165,6 +165,8 @@ class UiBridge(
         self._sched_timer.start()
         # 到点时撞上在跑的任务 → 排队等本轮结束再执行，不直接跳过
         self._pending_scheduled: List[Dict] = []
+        # 用户点开始时若有批次在跑，把这次请求存这里，结批后自动开始（2026-11-26）
+        self._pending_user_batch = None
         # 更新补跑队列：任务因官方维护跳过后，按公告开服时间重排
         self._update_retry_lock = threading.RLock()
         # 用户主动停止后置 True：定时任务/更新补跑不再自动触发，直到用户
@@ -862,6 +864,9 @@ class UiBridge(
                 self._request_toast("任务已完成，60 秒后将自动关机。", "#b66f1f")
             elif payload.get("toast"):
                 self._request_toast("本轮任务已完成。", "#2f7d4a")
+            # 排队的用户批次优先：用户手动点了开始就不该被自动补跑/定时任务挤掉
+            if self._drain_pending_user_batch():
+                return
             # 排队中的定时任务：上一轮刚结束，现在接着跑
             if self._pending_scheduled:
                 nxt = self._pending_scheduled.pop(0)

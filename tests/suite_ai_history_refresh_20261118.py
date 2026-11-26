@@ -170,7 +170,7 @@ def test_kilo_degrade(tmp_path):
 
 
 def test_teleagent_codearts_in_chain(tmp_path):
-    print("[3b] TeleAgent/码道/DSH 并入抓取链（路径 + 顺序 + 降级）")
+    print("[3b] TeleAgent/码道/DSH/小浣熊/千问办公 并入抓取链（路径 + 顺序 + 降级）")
     _reset()
     mk = Monkey()
     mk.setattr(ahr, "STAGE_DIR", str(tmp_path / "stage"))
@@ -178,9 +178,9 @@ def test_teleagent_codearts_in_chain(tmp_path):
 
     def fake_py(args, timeout, logger, label, emit, env_extra=None):
         labels.append(label)
-        if label in ("TeleAgent", "码道", "DSH"):
+        if label in ("TeleAgent", "码道", "DSH", "小浣熊", "千问办公"):
             paths[label] = args[-1]
-        if label in ("TeleAgent", "DSH"):
+        if label in ("TeleAgent", "DSH", "小浣熊", "千问办公"):
             raise RuntimeError(f"{label} 抓取失败")
         if label == "重导":
             for name in ahr.COPY_FILES:
@@ -198,8 +198,13 @@ def test_teleagent_codearts_in_chain(tmp_path):
           out["last_msg"])
     check("msg 注明 DSH 沿用旧数据", "DSH 沿用旧数据" in out["last_msg"],
           out["last_msg"])
-    check("五抓取器都在链上且顺序正确",
-          labels == ["妙手", "Kilo", "TeleAgent", "码道", "DSH", "重导", "RAG"], labels)
+    check("msg 注明 小浣熊 沿用旧数据", "小浣熊 沿用旧数据" in out["last_msg"],
+          out["last_msg"])
+    check("msg 注明 千问办公 沿用旧数据", "千问办公 沿用旧数据" in out["last_msg"],
+          out["last_msg"])
+    check("七抓取器都在链上且顺序正确",
+          labels == ["妙手", "Kilo", "TeleAgent", "码道", "DSH", "小浣熊", "千问办公",
+                     "重导", "RAG"], labels)
     check("TeleAgent 抓取脚本路径正确",
           paths.get("TeleAgent", "").replace("\\", "/").endswith(
               "tools/teleagent_capture/teleagent_fetch.py"), paths)
@@ -209,6 +214,12 @@ def test_teleagent_codearts_in_chain(tmp_path):
     check("DSH 抓取脚本路径正确",
           paths.get("DSH", "").replace("\\", "/").endswith(
               "tools/dsh_capture/dsh_fetch.py"), paths)
+    check("小浣熊抓取脚本路径正确",
+          paths.get("小浣熊", "").replace("\\", "/").endswith(
+              "tools/raccoon_capture/raccoon_fetch.py"), paths)
+    check("千问办公抓取脚本路径正确",
+          paths.get("千问办公", "").replace("\\", "/").endswith(
+              "tools/qwenwork_capture/qwenwork_fetch.py"), paths)
     mk.undo()
     _reset()
 

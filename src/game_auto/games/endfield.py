@@ -18,6 +18,8 @@ PROFILE = GameProfile(
     daily_merge="game_auto.games.endfield:merge_daily_log",
     verify_augment="game_auto.games.endfield:augment_verify",
     update_key="endfield",
+    # 2026-11-25 起日历有 endfield 公告源，接入通用维护快速跳过（与米游/鸣潮/暖暖同款）
+    progress_hint="game_auto.games.base:build_maintenance_hint",
     view_key="endfield_center",
     supports_stamina=True,
     script_tools=(ScriptToolSpec(

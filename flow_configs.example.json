@@ -486,9 +486,20 @@
     "close_process_on_fail": true
   },
   "WORKBUDDY": {
-    "_comment": "2026-10-31：OCR 统一走 smart 排序（精确>前缀>子串），导航与验证步保存候选标注图，避免促销卡/宣传语抢走命中。",
+    "_comment": "2026-10-31：OCR 统一走 smart 排序（精确>前缀>子串），导航与验证步保存候选标注图，避免促销卡/宣传语抢走命中。2026-11-26：加 overlay_guard 兜「WorkBuddy 成长计划」整屏遮罩（领取后弹出，压住头像菜单导致步骤6 永远找不到「Buddy加油站」）。",
     "enabled": true,
     "ocr_match_mode": "smart",
+    "overlay_guard": {
+      "_comment": "2026-11-26 事故 #514：点完立即领取后弹「WorkBuddy 成长计划」整屏遮罩（✕ 不带文字，步骤级 dismiss_texts 覆盖不到），步骤6 纯 OCR 找字 0 命中，retry_prev 回退的头像步也被遮罩压住，4 轮后失败。命中 ≥require 条特征就依次试 ESC → 点 ✕ 模板，每次动作后重扫，遮罩消失即继续当前步骤；max_dismiss 防止关不掉的遮罩反复拖慢每一步。",
+      "texts": ["WorkBuddy成长计划", "我的Buddy", "做任务攒能量"],
+      "require": 2,
+      "actions": [
+        {"type": "key", "key": "escape"},
+        {"type": "template", "template": "assets/templates\\hy4-成长计划关闭.png", "scales": [1.0], "confidences": [0.9]}
+      ],
+      "settle_sec": 1.5,
+      "max_dismiss": 2
+    },
     "window_title_keywords": [
       "WorkBuddy"
     ],
@@ -539,9 +550,13 @@
       },
       {
         "name": "等待加油站页面的立即领取",
+        "_comment": "2026-11-26：模板只在「加油站卡片」在场时才算命中（template_require_texts），OCR 侧同样用 required 锚点把住页面上下文——侧栏促销卡上也有「立即领取」，不能只凭长得像就认。",
         "action": "wait_template",
         "template": "assets/templates\\hy4-立即领取.png",
         "target_text": "立即领取",
+        "template_require_texts": ["Buddy加油站", "每日可领", "今日已领取"],
+        "ocr_anchor": {"texts": ["Buddy加油站", "每日可领", "今日已领取"], "required": true},
+        "ocr_debug_snapshot": true,
         "enable_ocr_fallback": true,
         "confirm_type": "none",
         "timeout_sec": 30,
@@ -553,10 +568,13 @@
       },
       {
         "name": "点击立即领取",
-        "_comment": "2026-10-25：领取接口约 6s 才回，原 text_change 在 +3s 单次检查必然误判；本步改为不确认，成败交给后续非 optional 的「今日已领取」验证。",
+        "_comment": "2026-10-25：领取接口约 6s 才回，原 text_change 在 +3s 单次检查必然误判；本步改为不确认，成败交给后续非 optional 的「今日已领取」验证。2026-11-26：同步骤3 加页面特征门控（template_require_texts + required 锚点），页面不在加油站卡片状态就不点。",
         "action": "click_template",
         "template": "assets/templates\\hy4-立即领取.png",
         "target_text": "立即领取",
+        "template_require_texts": ["Buddy加油站", "每日可领", "今日已领取"],
+        "ocr_anchor": {"texts": ["Buddy加油站", "每日可领", "今日已领取"], "required": true},
+        "ocr_debug_snapshot": true,
         "enable_ocr_fallback": true,
         "confirm_type": "none",
         "timeout_sec": 10,

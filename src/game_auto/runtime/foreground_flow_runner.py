@@ -1287,6 +1287,7 @@ def _locate_with_ocr_fallback(
     save_debug: bool = False,
     dismiss_texts: Optional[List[str]] = None,
     engine: Optional[object] = None,
+    require_template_texts: Optional[List[str]] = None,
 ) -> Tuple[Optional[Tuple[int, int]], str]:
     """
     模板匹配+OCR联合定位。
@@ -1298,6 +1299,10 @@ def _locate_with_ocr_fallback(
         由调用方点击后继续等待，不算步骤命中。
         弹窗词排在目标词前面：弹窗在场时必然先处理弹窗。
     engine: 指定推理引擎（None 用默认 onnxocr v6；高精度步骤同引擎）。
+    require_template_texts: 模板命中还必须存在的页面特征文字（2026-11-26
+        WorkBuddy 实锤）。模板是"长得像的一个按钮"，界面一改/侧栏卡片轮换就会
+        在别处稳定命中；只按模板点等于闭眼点。配上页面特征后，特征不在场就
+        丢弃本次模板命中、继续走 OCR（OCR 侧另有 ocr_anchor 同口径拦截）。
     """
     target_candidates = _resolve_target_text_candidates(template_path, target_text)
     target_label = _display_target_text(target_candidates, os.path.basename(template_path or ""))
@@ -1306,8 +1311,18 @@ def _locate_with_ocr_fallback(
 
     center = _locate_template_in_window(hwnd, template_path, scales, confidences)
     if center:
-        logger.info(f"[{target_label}] 模板匹配成功 @ {center}")
-        return center, "template"
+        required = _normalize_target_text_candidates(require_template_texts)
+        if required:
+            gate = _ocr_locate_labeled_in_window(logger, hwnd, required)
+            if not gate:
+                logger.warning(
+                    f"[{target_label}] 模板命中 @ {center}，但页面特征 {required} 不在场，"
+                    "判为误命中（不在错误页面上闭眼点击），改走 OCR 判定"
+                )
+                center = None
+        if center:
+            logger.info(f"[{target_label}] 模板匹配成功 @ {center}")
+            return center, "template"
 
     if enable_ocr and (target_candidates or dismiss_candidates):
         # 弹窗词优先：OCR 先扫弹窗再扫目标，同一次扫描内完成
@@ -2804,6 +2819,210 @@ def _delete_old_script_exe(
         logger.warning(f"[{flow_key}] 删除旧版本脚本失败（不影响使用）: {exc}")
 
 
+# ── 全屏遮罩/活动弹窗兜底（2026-11-26 WorkBuddy 成长计划事故）──────────────
+# 事故：点完「立即领取」后 WorkBuddy 弹出「WorkBuddy 成长计划」整屏遮罩，左侧头像
+# 菜单被压住；步骤6「重新点击菜单里的Buddy加油站」纯 OCR 找字必然 0 命中，
+# on_fail=retry_prev 回退步骤5（头像模板同样被盖住）→ 回步骤6 死循环，
+# 21:03:56→21:05:14 连续 4 轮后记失败 #514，当日 WORKBUDDY 记 ❌。
+#
+# 这类"应用自己弹的活动页/遮罩"无法在步骤里预先配出元素（遮罩上的 ✕ 不带文字，
+# 步骤级 dismiss_texts 要求按钮上有字），只能按「遮罩特征文字」识别、再按配置的
+# 动作（扫描码按键 / ✕ 模板 / 比例坐标点）尝试关闭。配置在流程级 overlay_guard
+# （见 flow_configs.json WORKBUDDY）；不配就完全零开销——连一次 OCR 都不做。
+
+
+def _resolve_overlay_template(template: str) -> str:
+    """遮罩动作的模板路径：先按当前目录（与步骤 template 同口径），再回退仓库根。"""
+    path = str(template or "").strip()
+    if not path:
+        return ""
+    if os.path.isabs(path):
+        return path if os.path.exists(path) else ""
+    if os.path.exists(path):
+        return path
+    # 与 _normalize_flow_paths 同源：模板相对路径锚在项目根，仓库整体迁移不失效
+    candidate = os.path.join(str(BASE_DIR), path)
+    return candidate if os.path.exists(candidate) else ""
+
+
+def _match_overlay_signatures(texts, patterns) -> List[str]:
+    """纯函数：当帧 OCR 文字里命中了几条遮罩特征（两边归一化后包含即算命中）。
+
+    归一化复用 ocr_click_tester._normalize_text（去空白/省略号）：onnxocr 会把
+    "我的 Buddy" 这类混排稳定拆成带空格的片段，原始子串匹配会永远落空。
+    """
+    from .ocr_click_tester import _normalize_text
+
+    pattern_list = [str(p or "").strip() for p in (patterns or []) if str(p or "").strip()]
+    if not pattern_list:
+        return []
+    norms = [(_normalize_text(p), p) for p in pattern_list]
+    hits: List[str] = []
+    for raw in texts or []:
+        norm = _normalize_text(str(raw or ""))
+        if not norm:
+            continue
+        for pat_norm, pat in norms:
+            if pat_norm and pat_norm in norm and pat not in hits:
+                hits.append(pat)
+                break
+    return hits
+
+
+def _overlay_signature_hits(
+    logger: logging.Logger, hwnd: int, texts
+) -> List[str]:
+    """当帧窗口 OCR 一次，返回命中的遮罩特征文字列表。"""
+    from .ocr_click_tester import _ocr_scan
+
+    patterns = [str(t or "").strip() for t in (texts or []) if str(t or "").strip()]
+    if not patterns:
+        return []
+    results, _img, _region = _ocr_scan(logger=logger, hwnd=hwnd)
+    return _match_overlay_signatures(
+        [str(item.get("text") or "") for item in (results or [])], patterns
+    )
+
+
+def _run_overlay_action(
+    logger: logging.Logger,
+    flow_key: str,
+    hwnd: int,
+    action: Dict,
+    scales,
+    confidences,
+) -> bool:
+    """执行一条遮罩关闭动作，返回是否真的发出了输入（失败不抛）。"""
+    kind = str((action or {}).get("type") or "key").strip().lower()
+    if kind == "key":
+        key = str(action.get("key") or "escape")
+        try:
+            presses = max(1, int(action.get("presses", 1) or 1))
+        except (TypeError, ValueError):
+            presses = 1
+        _focus_window(hwnd)
+        for idx in range(presses):
+            press_key_scancode(key)
+            if idx < presses - 1:
+                time.sleep(0.8)
+        logger.info(f"[{flow_key}] 遮罩兜底：已按 {key} ×{presses}（扫描码）")
+        return True
+    if kind == "template":
+        path = _resolve_overlay_template(str(action.get("template") or ""))
+        if not path:
+            logger.warning(
+                f"[{flow_key}] 遮罩兜底：关闭模板不存在 {action.get('template')!r}"
+            )
+            return False
+        center = _locate_template_in_window(
+            hwnd,
+            path,
+            action.get("scales") or scales,
+            action.get("confidences") or confidences,
+        )
+        if not center:
+            logger.info(
+                f"[{flow_key}] 遮罩兜底：关闭模板 {os.path.basename(path)} 未命中"
+            )
+            return False
+        clicked = _click_window_local(hwnd, center[0], center[1], clicks=1, background=False)
+        logger.info(
+            f"[{flow_key}] 遮罩兜底：点击 {os.path.basename(path)} @ {center} -> {clicked}"
+        )
+        return clicked is not False
+    if kind == "click_frac":
+        rect = _window_rect(hwnd)
+        if not rect:
+            return False
+        try:
+            fx = float(action.get("x", 0.5))
+            fy = float(action.get("y", 0.5))
+        except (TypeError, ValueError):
+            return False
+        x, y = int(rect[2] * fx), int(rect[3] * fy)
+        clicked = _click_window_local(hwnd, x, y, clicks=1, background=False)
+        logger.info(
+            f"[{flow_key}] 遮罩兜底：比例点击 ({fx:.3f},{fy:.3f}) -> 窗口内({x},{y}) -> {clicked}"
+        )
+        return clicked is not False
+    logger.warning(f"[{flow_key}] 遮罩兜底：未知动作类型 {kind!r}")
+    return False
+
+
+def _dismiss_flow_overlay(
+    logger: logging.Logger,
+    flow_key: str,
+    hwnd: int,
+    guard: Any,
+    scales,
+    confidences,
+    stop_check: Optional[Callable[[], bool]] = None,
+    state: Optional[Dict] = None,
+) -> bool:
+    """识别并尝试关闭流程级「全屏遮罩/活动弹窗」，返回是否确认关掉。
+
+    只在流程配了 overlay_guard 时生效；每次识别命中算一次 max_dismiss 预算，
+    避免某个关不掉的遮罩把每个步骤都拖一次完整 action + settle 的时间。
+    """
+    if not isinstance(guard, dict):
+        return False
+    texts = _normalize_target_text_candidates(guard.get("texts"))
+    if not texts:
+        return False
+    try:
+        require = max(1, int(guard.get("require", 1) or 1))
+    except (TypeError, ValueError):
+        require = 1
+    try:
+        max_dismiss = max(0, int(guard.get("max_dismiss", 2) or 0))
+    except (TypeError, ValueError):
+        max_dismiss = 2
+    if state is not None and int(state.get("count", 0)) >= max_dismiss:
+        return False
+    try:
+        settle = max(0.0, float(guard.get("settle_sec", 1.5) or 0))
+    except (TypeError, ValueError):
+        settle = 1.5
+    actions = guard.get("actions") or [{"type": "key", "key": "escape"}]
+
+    try:
+        hits = _overlay_signature_hits(logger, hwnd, texts)
+    except Exception as exc:  # noqa: BLE001 - 遮罩探测失败按"没有遮罩"处理
+        logger.debug(f"[{flow_key}] 遮罩特征扫描失败: {exc}")
+        return False
+    if len(hits) < require:
+        return False
+
+    # 只在"真的识别到遮罩"时计预算：否则 7 个步骤各扫一次就把 max_dismiss 耗光，
+    # 真正弹遮罩时反而不兜底了。
+    if state is not None:
+        state["count"] = int(state.get("count", 0)) + 1
+    logger.warning(
+        f"[{flow_key}] 检测到全屏遮罩/活动弹窗（命中 {hits}，阈值 {require} 条），尝试关闭"
+    )
+    for action in actions:
+        try:
+            _run_overlay_action(logger, flow_key, hwnd, action, scales, confidences)
+        except Exception as exc:  # noqa: BLE001 - 单个动作失败继续试下一个
+            logger.warning(f"[{flow_key}] 遮罩关闭动作异常: {exc}")
+        if not _sleep_interruptible(settle, stop_check):
+            return False
+        try:
+            remain = _overlay_signature_hits(logger, hwnd, texts)
+        except Exception:  # noqa: BLE001
+            remain = []
+        if len(remain) < require:
+            logger.info(
+                f"[{flow_key}] 全屏遮罩已关闭（剩余特征 {remain}），继续执行当前步骤"
+            )
+            return True
+    logger.warning(
+        f"[{flow_key}] 遮罩关闭失败（{len(actions)} 个动作都没生效），"
+        "继续按未匹配处理；补新手段请加 overlay_guard.actions"
+    )
+    return False
+
+
 def run_flow(
     logger: logging.Logger,
     flow_key: str,
@@ -2979,6 +3198,7 @@ def run_flow(
 
     step_attempts: Dict[int, int] = {}
     step_local_region: Dict[int, Optional[Tuple[int, int, int, int]]] = {}
+    overlay_state: Dict[str, int] = {"count": 0}  # overlay_guard 已尝试关闭的次数
     steps_hit: set = set()  # 本轮已成功命中的步骤名（供 self_update_swap 等联动步骤判断）
     steps_hit_ts: Dict[str, float] = {}  # 命中时刻（换血以「更新点击时刻」为 mtime 锚点）
     i = start_index
@@ -3001,6 +3221,10 @@ def run_flow(
             # 等待途中需要点掉的弹窗文字（如绝区零月卡「今日到账」）：与目标文字共用
             # 同一次 OCR 扫描，命中就点掉再继续等，不算步骤命中也不消耗重试次数
             step_dismiss_texts = _normalize_target_text_candidates(step.get("dismiss_texts"))
+            # 模板命中前必须存在的页面特征（防"长得像的按钮"误点，2026-11-26 WorkBuddy）
+            step_template_require_texts = _normalize_target_text_candidates(
+                step.get("template_require_texts")
+            )
             step_ocr_match_mode = step.get("ocr_match_mode", step.get("match_mode"))
             if step_ocr_match_mode is None:
                 step_ocr_match_mode = flow_ocr_match_mode
@@ -3133,6 +3357,22 @@ def run_flow(
                 f"[搜索范围: {search_scope}] [OCR备选: {'启用' if step_enable_ocr else '禁用'}]"
                 f"{ocr_strategy_note}"
             )
+
+            # 全屏遮罩/活动弹窗兜底（2026-11-26 WorkBuddy 成长计划事故）：应用自己弹的
+            # 活动页会把左侧菜单/头像整块压住，步骤级 dismiss_texts 覆盖不到只有 ✕ 的
+            # 遮罩。流程配了 overlay_guard 才做一次特征扫描，命中就按配置动作关闭。
+            overlay_guard = step.get("overlay_guard", cfg.get("overlay_guard"))
+            if overlay_guard:
+                _dismiss_flow_overlay(
+                    logger,
+                    flow_key,
+                    hwnd,
+                    overlay_guard,
+                    scales,
+                    confidences,
+                    stop_check=stop_check,
+                    state=overlay_state,
+                )
 
             end = time.time() + timeout_sec
             center = None
@@ -3298,6 +3538,7 @@ def run_flow(
                             save_debug=step_ocr_debug,
                             dismiss_texts=step_dismiss_texts or None,
                             engine=step_engine,
+                            require_template_texts=step_template_require_texts or None,
                         )
                     if center and match_method == "ocr_dismiss":
                         # 等待途中出现弹窗（如绝区零月卡「今日到账」）：点掉后继续等

@@ -67,6 +67,7 @@ suite_hsr_version_shop_20261112.py
 suite_kilo_capture_20261117.py
 suite_login_agreement_scroll_20261104.py
 suite_mihoyo_cookie_alias_20261122.py
+suite_minimax_dismiss_cta_20261126.py
 suite_minimax_ocr_exclude_20261031.py
 suite_minimax_sign_20261026.py
 suite_dumate_wool_20261117.py
@@ -93,8 +94,11 @@ suite_nte_monthly_20261101.py
 suite_nte_reward_popup_20261105.py
 suite_ocr_structured_match_20261031.py
 suite_ocr_warmup_log_20261118.py
+suite_ok_ap_daily_20261126.py
 suite_okww_module_20261104.py
 suite_codearts_capture_20261118.py
+suite_raccoon_capture_20261125.py
+suite_qwenwork_capture_20261126.py
 suite_codearts_wool_20261116.py
 suite_okww_module_pythonpath_20261116.py
 suite_onnxocr_precision_20261107.py
@@ -155,3 +159,9 @@ suite_baijing_echo_allclaimed_cleared_20261119.py
 suite_baijing_trial_20261119.py
 suite_okww_battle_boundary_20261121.py
 suite_raccoon_wool_20261122.py
+suite_launch_timeout_20261126.py
+suite_pending_user_batch_20261126.py
+suite_wool_overlay_guard_20261126.py
+
+
+AI生成

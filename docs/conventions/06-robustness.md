@@ -23,6 +23,26 @@
 - **口径**：`stop_current_task` = 用户主动停止/FailSafe，才是整批语义；看门狗改置 `AutomationController.watchdog_aborted_task`，控制器内部所有等待/停止检查统一走 `_task_abort_requested()`（用户停止 OR 看门狗），白荆 `baijing_flow._stop_and_beat` 同样透传。
 - **收口**：`_run_single_task` 在单任务结果回来后调 `_settle_watchdog_abort`：清掉任务级标志、强制本任务 `failed`、把 execute_task 可能因任务级中止返回的"用户终止/快捷键"改成"看门狗止损"，使 `stopped=False`。这样后续任务照跑、失败项进入统一重试；用户同时点停止时 `stop_current_task` 保留，整批仍停。
 - 新批次入口会同时清两个标志，避免上批异常退出遗留。回归 `tests/suite_watchdog_task_scope_20261116.py`（5 组行为测试，含真 `_run_single_task` 路径）。
+### 启动调用必须能被超时打断，不许把整批钉死 (2026-11-26 实跑事故)
+
+- **事故**：无限暖暖 whimbox 的启动器是 `run_one_dragon.bat`，`_launch_normal` 用
+  ShellExecuteW 拉起。09:33:26 调用进去后再没返回，任务线程整段卡死；心跳看门狗
+  09:43 判定 625s 无心跳、dump 栈后只杀掉了游戏进程（`X6Game`），**杀不掉那个卡在
+  Win32 调用里的线程**。12:38 电脑解锁后该调用返回 5（SE_ERR_ACCESS_DENIED，疑似
+  安全警告/提权弹窗被取消），任务记「启动失败」；期间整批后续的白荆回廊/薅羊毛/CJ
+  与 10:01 的 Qoder 定时任务一个都没跑（10:01 那条当时已排队、`last_fired_date`
+  已写当天，随进程退出直接丢失）。
+- **口径**：① `.bat/.cmd` 一律 `cmd /c` + `subprocess.Popen`（列表参数、
+  `CREATE_NEW_CONSOLE`），不再经 shell 关联；`.py` 走当前解释器；`.exe` 直连
+  CreateProcess；只有 `.lnk`/网址才回退 ShellExecuteW。② 所有启动调用统一进
+  `_call_with_timeout`（`LAUNCH_CALL_TIMEOUT_SEC`，默认 60s），超时按本任务启动
+  失败收口、**批次继续跑后面的游戏**；卡住的旁路线程留 daemon，迟到的返回值只记日志。
+- **不许**在任务线程上直接调 ShellExecuteW / CreateProcess 而不设超时——这类 Win32
+  调用被系统弹窗挂住时既不抛异常也不返回，Python 侧没有别的办法收口。
+- special 启动器（`_launch_special`）走同一套，`hidden=True` 保持「不起控制台」的旧观感。
+- 回归 `tests/suite_launch_timeout_20261126.py`（6 组：分派 / 有界调用 / 超时收口 /
+  cmd 参数 / shell 回退 / special）；`suite_motw_clear_20261116` 的 exe 分支断言改成行为口径。
+
 ### 脚本报错日志监控（ok- 系 pyappify 脚本）(重要)
 
 - **pyappify 壳脚本有两套日志目录，监控必须指对**：
@@ -34,6 +54,9 @@
   3. `require_date_token: false`——`_matching_files` 默认要求文件名含当天日期，`ok-script.log` 无日期后缀会被排除。误判防护靠 watcher 构建时的 `_initialize_offsets` 记录当前偏移，只读启动后新增行
 - `error_keywords` 与旧配置字段 `error_markers` 等价（build 已兼容两个名字），别再造第三种命名
 - ok-ef 的 `ensure_main(time_out=600)` 超时会抛 `Please start in game world and in team!`，关键字必须包含它
+- ok-ap 的致命标记认 `任务失败标记 |`、`以下任务未完成或失败`、`exception stopped`、
+  `DailyTask_Exception`、`Failed to ensure main.`；日报另读
+  `%TEMP%/ok-ap/一键日常/一键日常_*.txt`，只有「完成」且无失败项才算成功。
 ### OCR 防护两条铁律 (重要, 2026-10-17)
 
 **背景事故**：2026-10-17 09:59-10:03 XM 流程整体失败。窗口不可用 → OCR 安静回退全屏 → 记事本里开着的 `auto_runner.log` 被拍进截图 → OCR 把日志文字当成「进入脱机」假命中（0.87）→ 点到记事本上 → 确认失败 → 步骤重试到耗尽。即注释里的"自己干扰自己"。
@@ -91,6 +114,44 @@
 - **口径**：遮挡防护的目标是拦截**其他进程**窗口的文字污染；目标应用自己的模态/提醒窗属于同一应用内容，必须放行。`_window_obscured_ratio` 对 `WindowFromPoint` 命中窗口与目标窗口 PID 相同的情况不计覆盖（`_foreground_click_block_reason` 早在 11-17 已同口径放行同 PID 点击）。
 - **配置侧**：标题「启动器版本更新」同样含「更新」，`legacy` 子串匹配会先点标题。步骤配 `ocr_match_mode: "exact"` 只匹配正文按钮；WuwaLauncher 步骤1 已接线。
 - 回归：`tests/suite_wuwa_launcher_update_modal_20261118.py`（同 PID/跨进程遮挡比例、exact 避开标题、两份 flow_configs 接线）。
+
+### 应用自己弹的活动遮罩：流程级 overlay_guard 兜底（2026-11-26 WorkBuddy 实锤）
+
+- **事故**：11-26 21:03 WorkBuddy 每日领取，步骤4 点完「立即领取」（21:03:46）后应用弹出
+  「WorkBuddy 成长计划」**整屏遮罩**（背景全暗、左侧头像与菜单被压住、卡片右上角只有一个
+  不带文字的 ✕）。步骤6「重新点击菜单里的Buddy加油站」纯 OCR 找字，21:03:56→21:05:14
+  连续 4 轮只读到遮罩内 22 个文本（WorkBuddy成长计划 / 我的 Buddy / 查看 Buddy图鉴…），
+  0 命中；on_fail=retry_prev 回退的步骤5（头像模板）同样被遮罩盖住 → 死循环后记
+  失败 **#514**，当晚 WoolFlow 汇总 WORKBUDDY 失败（#516）。证据截图
+  data/artifacts/flow_failures/20261126_210514_WORKBUDDY_重新点击菜单里的Buddy加.jpg。
+- **为什么步骤级 dismiss_texts 不够**：那套机制要求「弹窗上有字可点」（「今日到账」/「点击屏幕继续」）；
+  这种活动遮罩的关闭键是纯 ✕ 图标，OCR 读不到，只能靠按键或模板。
+- **口径**：run_flow 每个步骤开始前，若流程配了 **overlay_guard**（流程级，步骤级可覆盖），
+  先做一次窗口 OCR，按「归一化后包含」数命中条数；达到 require 条就依次执行 actions
+  （key 扫描码按键 / template 点关闭钮 / click_frac 比例点），每执行一条 settle_sec
+  后重扫，特征消失即判「遮罩已关」并**继续当前步骤**；全部动作无效则只告警、按既有
+  「未匹配 → 重试」路径走，绝不静默改流程状态。不配 overlay_guard 的流程零开销（一次 OCR 都不做）。
+- **预算**：max_dismiss 只在**真的识别到遮罩**时才计一次（不是每步都计），否则 7 个步骤各扫一次
+  就把预算耗光、真弹遮罩时反而不兜底；关不掉的遮罩最多拖两次，避免每步都白等 settle_sec。
+- **✕ 模板怎么来的、为什么只用 1.0 尺度**：assets/templates/hy4-成长计划关闭.png 是从事故截图
+  实锤帧裁的 40×40（弹窗右上角 ✕ 圆形钮，中心 (1395,232)@1920×1035）。同帧自匹配 1.0，但
+  **0.8/1.25 尺度会以 0.79~0.81 分数命中别处**（(1548,498)），所以配置里把该动作锁成
+  scales:[1.0] / confidences:[0.9]——多尺度搜索对这个低对比小圆钮是纯风险。
+- **ESC 尚未实机验证**：11-26 晚想复现时 WorkBuddy 拉不起来（桌面正在跑游戏/其他应用），
+  ESC 作为第一动作是先验最可能有效的通用手段，✕ 模板是有实锤位置的兜底。**首次实跑要看日志**
+  [WORKBUDDY] 遮罩兜底：… / 全屏遮罩已关闭（剩余特征 …）；若 ESC 既没关掉也没副作用，
+  日志会接着打 遮罩兜底：点击 hy4-成长计划关闭.png @ (x,y) -> True，两种都失败才告警
+  遮罩关闭失败。届时补新的关闭手段只需往 overlay_guard.actions 里加，不用改执行器。
+- **顺带堵住「闭眼点模板」（同批问题3）**：步骤4 的 hy4-立即领取.png 是 58×30 的黑色小按钮，
+  以前只要模板相似就在 (229,958) 点下去，没有页面上下文校验。新增步骤字段
+  **template_require_texts**：模板命中后必须再用 OCR 看到指定页面特征（WorkBuddy 配
+  「Buddy加油站 / 每日可领 / 今日已领取」），看不到就丢弃本次命中、改走 OCR 判定
+  （OCR 侧另有 ocr_anchor: {texts:[...], required:true} 同口径拦截）。步骤3/4 同时开
+  ocr_debug_snapshot，下次再出问题先看标注图再改配置。
+- **回归**：tests/suite_wool_overlay_guard_20261126.py（实锤帧 22 条 OCR 命中 3 条特征 / 聊天页
+  「做任务赢积分好礼」不误报 / 动作顺序与预算 / settle 被停止 / 模板门控四态 / 双份配置接线）。
+- 配置位置：flow_configs(.example).json → WORKBUDDY.overlay_guard（texts / require /
+  actions / settle_sec / max_dismiss）。
 
 ### 流程结束关闭进程 (重要)
 

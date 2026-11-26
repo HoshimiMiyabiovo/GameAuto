@@ -99,6 +99,94 @@ def _stop_log_listener():
             pass
 
 
+# 启动调用超时（2026-11-26 实跑事故）：启动调用本身可能被系统级弹窗卡死，
+# 一旦卡住不只是这一个游戏失败——整个批次都停在这一行里。11-26 无限暖暖
+# 的 run_one_dragon.bat 走 ShellExecuteW 挂了 3 小时 05 分才返回 5（拒绝访问），
+# 期间后续白荆/薅羊毛/CJ 与 10:01 的定时任务一个都没跑。
+# 现在：.bat/.cmd 改走 cmd /c 直连 CreateProcess（不经 shell 关联，没弹窗），
+# 且所有启动调用统一套有界等待，超时按「启动失败」收口、后续任务继续。
+LAUNCH_CALL_TIMEOUT_SEC = 60.0
+
+# 直接 CreateProcess 拉 cmd/python 时单独开窗：原先 ShellExecuteW 会给第三方
+# 脚本弹一个控制台窗口（用户靠它看脚本输出），GUI 进程（pythonw）派生控制台
+# 程序时窗口归属不稳定，显式开新控制台保持原观感。
+CREATE_NEW_CONSOLE = getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010)
+
+
+def _build_launcher_command(
+    launcher: str, params: List[str], hidden: bool = False
+) -> Tuple[str, List[str], int]:
+    """把配置里的启动器规整成 (kind, argv, creationflags)。
+
+    kind:
+      - "process"：argv 直接交给 subprocess.Popen（.exe / .bat / .cmd / .py）；
+      - "shell"：只有 .lnk、网址等确实需要 shell 关联的目标才回退 ShellExecuteW。
+
+    .bat/.cmd 必须经 cmd /c：CreateProcess 不能直接执行批处理；而让批处理走
+    ShellExecuteW 就等于把启动权交回 shell 关联——附件管理器/提权弹窗一出现
+    就会无限期阻塞（见 LAUNCH_CALL_TIMEOUT_SEC 的事故记录）。cmd /c 不经过
+    附件管理器，没有这个对话框。
+
+    Args:
+        launcher: 启动器完整路径（.exe/.bat/.cmd/.py，或 .lnk/网址）。
+        params: 传给启动器的参数列表（保持顺序）。
+        hidden: True 时不开控制台窗口（special 启动器语义，旧行为是 CREATE_NO_WINDOW）。
+
+    Returns:
+        (kind, argv, creationflags)；kind=="shell" 时 argv 为空、调用方改用
+        ShellExecuteW 并自行判断返回码。
+    """
+    if isinstance(params, str):
+        params = [params]
+    name = os.path.basename(str(launcher or "")).lower()
+    args = [str(p) for p in (params or [])]
+    flags = subprocess.CREATE_NO_WINDOW if hidden else CREATE_NEW_CONSOLE
+    if name.endswith((".bat", ".cmd")):
+        comspec = os.environ.get("COMSPEC") or "cmd.exe"
+        return "process", [comspec, "/c", str(launcher), *args], flags
+    if name.endswith(".py"):
+        import sys as _sys
+        return "process", [str(_sys.executable), str(launcher), *args], flags
+    if name.endswith(".exe"):
+        return "process", [str(launcher), *args], (subprocess.CREATE_NO_WINDOW if hidden else 0)
+    # .lnk / 网址 / 无扩展名：只能交给 shell 关联（仍然套超时，不许阻塞任务线程）
+    return "shell", [], 0
+
+
+def _call_with_timeout(fn, timeout: float) -> Tuple[bool, object, Optional[BaseException]]:
+    """在旁路 daemon 线程里执行可能永久阻塞的调用，最多等 timeout 秒。
+
+    Win32 的 ShellExecuteW / CreateProcess 都可能因为系统弹窗、被挂起的会话
+    长时间不返回；这类调用绝不能跑在任务线程上，否则一个调用就拖死整批任务。
+    超时后本函数立刻返回，调用线程留在后台（daemon，不拖住进程退出），
+    迟到的返回值由调用方丢弃并记日志。
+
+    Returns:
+        (finished, value, error)：finished=False 表示超时；否则 value 是 fn 的
+        返回值、error 是它抛出的异常（二选一）。
+    """
+    box: Dict[str, object] = {}
+    done = threading.Event()
+
+    def _runner():
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 - 由调用方按启动失败收口
+            box["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=_runner, name="launch-call", daemon=True).start()
+    finished = done.wait(max(0.1, float(timeout or 0.1)))
+    return finished, box.get("value"), box.get("error")
+
+
+def _shell_execute(launcher: str, param_str: str, exe_dir: str) -> int:
+    """ShellExecuteW 薄封装（测试可打桩；返回码语义同 Win32，<=32 即失败）。"""
+    return int(
+        ctypes.windll.shell32.ShellExecuteW(None, "open", launcher, param_str, exe_dir, 1)
+    )
+
 class AutomationController:
     def __init__(self):
         self.logger = self._init_logger()
@@ -690,21 +778,29 @@ class AutomationController:
             self.logger.error(f"[{game_display}] 前置启动流程失败: {msg}")
         return ok, msg
 
-    def _ok_ww_daily_completed(self) -> bool:
-        """ok-ww（鸣潮）今日日常是否已完成：当天脚本日志有 Successfully Executed Task。
+    def _script_daily_completed_since(self, app_name: str, started_at: float) -> bool:
+        """本次启动后新增的脚本日志是否确认日常完成。
 
-        ok-ww 日常 2-4 分钟即可跑完（账号已清空时更快），全局 MIN_RUN_TIME=300s 的
-        "运行时间过短"判定对它全是误报（2026-10-23 实例：3 次运行全部实际完成，
-        却被记了两次失败）。解析器与 Bridge 日报同源（ok_ww_daily_parser），
-        今天没跑过或读取异常都返回 False，按原时长判定（保守，不放大成功面）。
+        短时长本身不能证明成功；必须同时满足「档案解析器判定完成」和
+        「报告时间不早于本次任务」，避免把当天早先的成功报告借给本次失败运行。
         """
         try:
-            from ..services.ok_ww_daily_parser import parse_latest_ok_ww_log
+            from datetime import datetime
+            from ..games import get_profile
 
-            data = parse_latest_ok_ww_log()
-            return bool(data and data.get("is_all_success"))
+            profile = get_profile(app_name)
+            if profile is None or not profile.daily_parser:
+                return False
+            data = profile.latest_daily_log()
+            if not data or not data.get("is_all_success"):
+                return False
+            report_time = str(data.get("report_time") or "").strip()
+            if not report_time:
+                return False
+            report_dt = datetime.fromisoformat(report_time)
+            return report_dt.timestamp() >= float(started_at) - 2.0
         except Exception as exc:
-            self.logger.warning(f"[鸣潮] ok-ww 日志复核失败，按原时长判定: {exc}")
+            self.logger.warning(f"[{app_name}] 脚本日志复核失败，按原时长判定: {exc}")
             return False
 
     def _resolve_script_choice(self, app_name: str, config: dict, script_choice: Optional[str]) -> Optional[str]:
@@ -974,6 +1070,67 @@ class AutomationController:
             time.sleep(min(0.5, remaining))
             remaining -= 0.5
 
+    def _start_launcher(
+        self,
+        launcher: str,
+        params: List[str],
+        exe_dir: str,
+        script_type: str = "",
+        hidden: bool = False,
+    ) -> bool:
+        """拉起启动器本体，返回是否启动成功。
+
+        两条通道：subprocess.Popen（.exe/.bat/.cmd/.py，走 CreateProcess）和
+        ShellExecuteW（.lnk/网址）。两者都放进 _call_with_timeout 等结果——
+        Win32 启动调用被系统弹窗挂住时既不抛异常也不返回，只能靠旁路线程 +
+        超时收口，否则任务线程会一直钉在这一行（11-26 无限暖暖 3 小时实锤）。
+
+        超时返回 False：调用方按本任务启动失败处理，批次继续跑后面的游戏。
+        旁路线程留在后台（daemon），万一它后来真拉起了程序，只影响这一个游戏，
+        不会再把整批拖住。
+        """
+        if isinstance(params, str):  # 配置里个别旧条目把参数写成整串
+            params = [params]
+        params = [str(p) for p in (params or [])]
+        kind, argv, creationflags = _build_launcher_command(launcher, params, hidden)
+        timeout = float(LAUNCH_CALL_TIMEOUT_SEC)
+        if kind == "shell":
+            param_str = " ".join(f'"{p}"' if " " in p else p for p in params) if params else ""
+
+            def call():
+                return _shell_execute(str(launcher), param_str, exe_dir)
+        else:
+
+            def call():
+                return subprocess.Popen(
+                    argv, cwd=exe_dir, close_fds=True, creationflags=creationflags
+                )
+
+        finished, value, error = _call_with_timeout(call, timeout)
+        if not finished:
+            # 超时：不再等这个调用。给出可执行的排障提示（弹窗/提权框/会话被挂起）。
+            self.logger.error(
+                "[启动] %s 启动调用 %.0f 秒未返回（疑似系统安全警告/提权弹窗挂住），"
+                "按启动失败处理并继续后续任务",
+                script_type or "启动器",
+                timeout,
+            )
+            self.logger.error("[启动] 卡住的启动器: %s", launcher)
+            return False
+        if error is not None:
+            self.logger.error(f"启动进程失败: {error}")
+            return False
+        if kind == "shell":
+            if int(value or 0) <= 32:
+                self.logger.error(f"ShellExecuteW 失败 (错误码: {value})")
+                return False
+            self.logger.info(f"程序通过 ShellExecuteW 启动成功 (工作目录: {exe_dir})")
+            return True
+        self.logger.info(
+            f"程序通过 CreateProcess 启动成功 (PID={getattr(value, 'pid', '?')}, 工作目录: {exe_dir})"
+        )
+        return True
+
     def _launch_normal(
         self,
         config: dict,
@@ -1006,33 +1163,12 @@ class AutomationController:
             exe_dir = os.path.dirname(launcher)
             self.logger.debug(f"启动工作目录: {exe_dir}")
 
-            # 可执行文件走 CreateProcess 而非 ShellExecuteW：ShellExecute 会经过
-            # Windows 附件管理器，对带/曾被标记来源的文件弹「打开文件 - 安全警告」，
-            # 无人值守没人点「运行」就一直阻塞（11-16 鸣潮 09:28 挂 39 分钟返回 5、
-            # 22:05 再次卡死且弹窗提权后成了关不掉的僵尸窗）。CreateProcess 直接
-            # 建进程、不经过附件管理器，从根上没有这个对话框。
-            # 脚本文件（.bat/.cmd）仍走 ShellExecuteW——它需要 shell 关联才能执行，
-            # 且这类文件不触发该弹窗；保留原行为避免破坏其余游戏的启动链。
-            if launcher.lower().endswith(".exe"):
-                try:
-                    proc = subprocess.Popen(
-                        [launcher, *params], cwd=exe_dir, close_fds=True
-                    )
-                except OSError as exc:
-                    self.logger.error(f"CreateProcess 启动失败: {exc}")
-                    return False, None
-                self.logger.info(
-                    f"程序通过 CreateProcess 启动成功 (PID={proc.pid}, 工作目录: {exe_dir})"
-                )
-            else:
-                param_str = ' '.join(f'"{p}"' if ' ' in p else p for p in params) if params else ''
-                result = ctypes.windll.shell32.ShellExecuteW(
-                    None, "open", launcher, param_str, exe_dir, 1
-                )
-                if result <= 32:
-                    self.logger.error(f"ShellExecuteW 失败 (错误码: {result})")
-                    return False, None
-                self.logger.info(f"程序通过 ShellExecuteW 启动成功 (工作目录: {exe_dir})")
+            # 启动器一律有界拉起（见 _start_launcher）：.exe 走 CreateProcess，
+            # .bat/.cmd 走 cmd /c（不再经 ShellExecuteW 的 shell 关联），
+            # .lnk/网址才回退 ShellExecuteW。任何一个调用超过
+            # LAUNCH_CALL_TIMEOUT_SEC 就按启动失败收口，批次继续往后跑。
+            if not self._start_launcher(launcher, params or [], exe_dir, script_type):
+                return False, None
 
             launcher_name = os.path.basename(launcher)
             launcher_stem = os.path.splitext(launcher_name)[0]
@@ -1433,15 +1569,18 @@ class AutomationController:
             time.sleep(1)
 
     def _launch_special(self, config: dict) -> Tuple[bool, Optional[int]]:
-        """special 类型启动器：与 _launch_normal 同款分叉（exe → CreateProcess，
-        其余 → ShellExecuteW）。
+        """special 类型启动器：与 _launch_normal 共用 _start_launcher 的有界启动。
 
         2026-11-18 修可移植性：旧实现 `subprocess.Popen(f'cmd /c start "" "{path}"',
         shell=True)` 把路径裸插进 cmd 命令行——路径里的 `&`、`^` 等 cmd 元字符
         （Windows 目录名合法！）会被 shell 解释成命令拼接/转义，轻则启动失败、
-        重则注入执行。现在 exe 走列表参数的 CreateProcess（不经 shell、无元字符
+        重则注入执行。现在走列表参数的 CreateProcess（不经 shell、无元字符
         问题，且与 11-16 的 MOTW 教训对齐：CreateProcess 不经过附件管理器），
-        非 exe（.lnk/.bat）走 ShellExecuteW（shell 关联语义与旧 start 一致）。
+        .lnk 等必须 shell 关联的目标才回退 ShellExecuteW。
+
+        2026-11-26 起同一套有界等待：启动调用被系统弹窗挂住时按启动失败收口，
+        不再把任务线程和整批任务一起钉死。special 启动器要保持「不起控制台」
+        的旧观感，hidden=True。
         """
         launcher = config["launcher"]
         params = config.get("launcher_params", []) or []
@@ -1450,25 +1589,10 @@ class AutomationController:
             if clear_motw_marker(launcher):
                 self.logger.info(f"[启动] 已清除特殊程序的 MOTW 标记: {launcher}")
             exe_dir = os.path.dirname(launcher)
-            if launcher.lower().endswith(".exe"):
-                try:
-                    subprocess.Popen(
-                        [launcher, *params],
-                        cwd=exe_dir,
-                        close_fds=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
-                    )
-                except OSError as exc:
-                    self.logger.error(f"特殊程序 CreateProcess 启动失败: {exc}")
-                    return False, None
-            else:
-                param_str = ' '.join(f'"{p}"' if ' ' in p else p for p in params)
-                result = ctypes.windll.shell32.ShellExecuteW(
-                    None, "open", launcher, param_str, exe_dir, 1
-                )
-                if result <= 32:
-                    self.logger.error(f"特殊程序 ShellExecuteW 失败 (错误码: {result})")
-                    return False, None
+            if not self._start_launcher(
+                launcher, list(params), exe_dir, "特殊程序", hidden=True
+            ):
+                return False, None
         except Exception as e:
             self.logger.error(f"特殊程序启动失败: {str(e)}", exc_info=DEBUG_MODE)
             return False, None
@@ -2160,21 +2284,17 @@ class AutomationController:
                 )
                 return monitor_result and not self._task_abort_requested(), status, duration
 
-            # ok-ww（鸣潮）特例：日常 2-4 分钟就能跑完，MIN_RUN_TIME(300s) 的
-            # "运行时间过短"全是误报。游戏是自己退的（end_reason=game_exited，
-            # 即脚本日志 "Exiting Game and App" 签名）且时长不足时，查一次当天
-            # ok-ww 日志：有 Successfully Executed Task 即判成功。
-            wuwa_script_done = False
-            if (
-                resolve_app_key(app_name) == "WutheringWaves"
-                and end_reason == "game_exited"
-                and duration < MIN_RUN_TIME
-            ):
-                wuwa_script_done = self._ok_ww_daily_completed()
-                if wuwa_script_done:
+            # ok 系日常可能不足 5 分钟；游戏是自己退出时，只接受本次启动后
+            # 新增的成功报告，避免早先的成功日志把本次短失败误判为成功。
+            script_daily_done = False
+            if end_reason == "game_exited" and duration < MIN_RUN_TIME:
+                script_daily_done = self._script_daily_completed_since(
+                    app_name, time.time() - duration
+                )
+                if script_daily_done:
                     self.logger.info(
-                        f"[{game_display}] 脚本日志确认今日日常已完成"
-                        f"（Successfully Executed Task），运行时间 {duration}s 不计过短"
+                        f"[{game_display}] 脚本日志确认本次日常已完成，"
+                        f"运行时间 {duration}s 不计过短"
                     )
 
             status = ""
@@ -2188,7 +2308,7 @@ class AutomationController:
                 status = "脚本报错"
             elif not monitor_result:
                 status = "超时"
-            elif duration < MIN_RUN_TIME and not wuwa_script_done:
+            elif duration < MIN_RUN_TIME and not script_daily_done:
                 status = f"运行时间过短(小于{MIN_RUN_TIME//60}分钟)"
             else:
                 status = "成功"
@@ -2198,7 +2318,7 @@ class AutomationController:
             )
             success = (
                 monitor_result
-                and (duration >= MIN_RUN_TIME or wuwa_script_done)
+                and (duration >= MIN_RUN_TIME or script_daily_done)
                 and not self._task_abort_requested()
             )
             return success, status, duration

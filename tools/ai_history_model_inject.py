@@ -39,6 +39,10 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
 try:
     # 别名表只在恢复工具里定义一处；缺失时降级为「不改别名」，页面仍可用
     from ai_history_model_recover import MODEL_ALIASES, canonical_model
@@ -63,7 +67,7 @@ TL_LIMIT = 40          # 每会话注入的逐条时间线上限（明细面板�
 # 渲染逻辑锚点：确认目标页面确实是带模型字段/别名替换的新模板
 RENDER_ANCHORS = ("const MODELS =", "modelbox", "s.model_kind", "const ALIAS =")
 # 页面主显示里不该再出现的内部代号（raw 字段里保留不算）
-FORBIDDEN_DISPLAY = ("dfmodel", "qfmodel", "lmodel", "copilot/", "chat-flash")
+FORBIDDEN_DISPLAY = ("dfmodel", "qfmodel", "lmodel", "copilot/", "chat-flash", "sn-deepseek-")
 
 
 def load_index() -> Tuple[Dict[str, dict], dict, Dict[str, str]]:

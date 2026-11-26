@@ -65,7 +65,12 @@ class AutomationView:
                 except Exception as exc:
                     logger.debug("[Bridge] 提前同步 WebUI 运行状态失败: %s", exc)
         if busy:
-            self._request_toast("已有任务在运行中", "#b66f1f")
+            # 2026-11-26 实跑事故：用户点的批次正撞上异环更新补跑（单 app、动辄
+            # 20 分钟），旧实现只弹一句「已有任务在运行中」就丢掉请求，用户以为
+            # 「补跑怎么又只有异环」。现在排队，当前批次结束后立刻接着跑。
+            self._queue_user_batch(
+                apps_json, shutdown_on_finish, email_on_finish, force_rerun
+            )
             return
         # 用户手动点"开始"→解除停止闸门，恢复定时任务/更新补跑的自动触发
         self._auto_run_paused = False
@@ -80,6 +85,47 @@ class AutomationView:
             args=(targets, force_rerun, bool(email_on_finish), bool(shutdown_on_finish)),
             daemon=True,
         ).start()
+
+    def _queue_user_batch(
+        self, apps_json: str, shutdown: bool, email: bool, force_rerun: bool
+    ) -> None:
+        """用户点开始时已有批次在跑：把这次请求排进队列，结批后自动开始。
+
+        只保留最后一次点击（用户连点两下以最新勾选为准），避免跑完一批又跑
+        一批旧选择。日志留一行，事后能从 auto_runner.log 看出「用户点了但被排
+        队」，而不是凭空消失。
+        """
+        self._pending_user_batch = {
+            "apps": apps_json,
+            "shutdown": bool(shutdown),
+            "email": bool(email),
+            "force_rerun": bool(force_rerun),
+        }
+        logger.info("[Bridge] 已有任务运行中，用户批次已排队（结批后自动开始）: %s", apps_json)
+        self._request_toast("当前任务运行中，这批已排队：本轮结束后自动开始", "#b66f1f")
+
+    def _take_pending_user_batch(self):
+        """取出并清空排队的用户批次（没有则返回 None）。"""
+        pending = getattr(self, "_pending_user_batch", None)
+        self._pending_user_batch = None
+        return pending
+
+    def _drain_pending_user_batch(self) -> bool:
+        """结批后启动排队的用户批次；有排队的返回 True。
+
+        返回 True 时调用方应跳过「排队中的定时任务」——用户手动点的批次优先。
+        """
+        pending = self._take_pending_user_batch()
+        if not pending:
+            return False
+        logger.info("[Bridge] 上轮结束，执行排队的用户批次")
+        self.startAutomation(
+            pending.get("apps") or "[]",
+            pending.get("shutdown", False),
+            pending.get("email", False),
+            pending.get("force_rerun", False),
+        )
+        return True
 
     @Slot()
     def stopAutomation(self):

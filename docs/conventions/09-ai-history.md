@@ -21,8 +21,9 @@
 
 GUI 开关：**「每日进度」页底部「AI 对话史」卡片**（`services/ai_history_refresh.py`
 编排上述全链，单飞闸 + 双锁；不做定时自动化——2026-11-18 用户拍板）。
-链内本地抓取器 = 妙手 / Kilo / TeleAgent / 码道 / DSH 五个（2026-11-20 补齐
-后三个——此前只串了妙手+Kilo，三源导出一直靠手动跑、数据停在 11-18，用户发现后修）；
+链内本地抓取器 = 妙手 / Kilo / TeleAgent / 码道 / DSH / 小浣熊 / 千问办公 七个（2026-11-20 补齐
+后三个、2026-11-25 补小浣熊、2026-11-26 补千问办公；此前只串了妙手+Kilo，后续源导出一直靠手动跑，
+用户发现后补链）；
 这些抓取器失败只降级（沿用上次聚合），不阻断 build/拷回/RAG。Grok（CDP 连
 浏览器）与 Trae（官方分享页）有外部条件，仍手动跑。
 
@@ -41,7 +42,7 @@ GUI 开关：**「每日进度」页底部「AI 对话史」卡片**（`services
 kilo/teleagent/codearts 等）以 `~` 相对或客观安装位置为准，属机器事实不算
 可配置项；build.py 里残留的 `C:\Users\admin` 用户名硬编码已改 `expanduser`。
 
-## 来源清单（20 个 do_*，7 个本地抓取器：链内 5 + 手动 Grok/Trae 2）
+## 来源清单（22 个 do_*，9 个本地抓取器：链内 7 + 手动 Grok/Trae 2）
 
 | 来源 | do_* | 正文位置 | 抓取器 |
 |---|---|---|---|
@@ -63,6 +64,8 @@ kilo/teleagent/codearts 等）以 `~` 相对或客观安装位置为准，属机
 | TeleAgent | do_teleagent | `~/.local/share/TeleAgent/users/*/teleagent.db` | tools/teleagent_capture |
 | 码道 CodeArts | do_codearts | `~/.codeartsdoer/codearts-data/opencode.db` | tools/codearts_capture |
 | DSH NEXT | do_dsh | `~/.dsh/sessions/**/session.v4.jsonl.zstd`（逐行 zstd 帧拼接） | tools/dsh_capture |
+| 商汤小浣熊 | do_raccoon | `~/.office-raccoon/user-data/local-chat.sqlite3`（sessions/messages，助手正文在 content.stages） | tools/raccoon_capture |
+| 千问办公 QwenWork | do_qwenwork | `~/.qwenwork/.harness/*/*/qwenwork.db`（session/message/part，WAL；user 消息含宿主注入块，抓取侧剥离） | tools/qwenwork_capture |
 | Copilot 网页 | （并入 DeepSeek 同目录） | markdown 导出 | — |
 | QClaw / cc-switch | NOTES 声明无正文/仅元数据 | — | — |
 
@@ -79,6 +82,9 @@ kilo/teleagent/codearts 等）以 `~` 相对或客观安装位置为准，属机
    客户端内部代号/无字段来源才进 `MODEL_ALIASES` 或 `TRAE_FIXED_MODEL`
    （用户拍板表，ai_history_model_recover.py；TeleAgent 的 `chat-flash` 属内部
    路由名，2026-11-19 拍板 = deepseek-v4.1-flash-1017，原值留 raw 可追溯）。
+   已确认的纯路由前缀可在**展示层**收敛到已有 canonical，原始值仍留
+   raw/models_raw：小浣熊 `sn-deepseek-v4-1-flash-1017` = `deepseek-v4.1-flash-1017`
+   （2026-11-26 用户确认），不作为独立模型统计。
    会话 note 的模型标注两种格式都认：「模型：xxx」（Hermes/WorkBuddy/妙手）与
    「· 模型 xxx」无冒号（Kilo/TeleAgent/码道 fetch）。**Qoder 1.1.86-hotfix.5.2 起
    逐条 `message.model` 只写选择器档位 `auto`**（≤1.1.79 写真实内部代号）：
