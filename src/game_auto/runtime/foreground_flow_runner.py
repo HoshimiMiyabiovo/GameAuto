@@ -2106,6 +2106,7 @@ _BUILTIN_ACTIONS = (
     "qoder_verify_claim",
     "codearts_claim_daily",
     "astudio_claim_daily",
+    "dumate_claim_daily",
     "wool_open_close_app",
     "wool_dismiss_update",
     "wool_verify_log",
@@ -2287,6 +2288,21 @@ def _dispatch_step_action(
         if not claim_ok:
             return False, f"[{flow_key}] 步骤失败: {name} ({claim_msg})", hwnd, pid
         logger.info(f"[{flow_key}] 步骤{step_no}AStudio 每日福利领取完成: {claim_msg}")
+    elif action == "dumate_claim_daily":
+        # 百度搭子：旧版首页签到卡或新版礼盒→可用积分→积分页签到
+        from .dumate_claim import claim_daily
+
+        claim_ok, claim_msg = claim_daily(
+            logger,
+            hwnd,
+            scales=scales,
+            confidences=confidences,
+            timeout_sec=int(step.get("timeout_sec", 120)),
+            stop_check=stop_check,
+        )
+        if not claim_ok:
+            return False, f"[{flow_key}] 步骤失败: {name} ({claim_msg})", hwnd, pid
+        logger.info(f"[{flow_key}] 步骤{step_no}DuMate 每日签到完成: {claim_msg}")
     elif action == "wool_open_close_app":
         # 「打开一次再关闭」型羊毛任务（商汤小浣熊）：奖励只认当天打开过客户端，
         # 无需任何点击。停留 + 关闭逻辑集中在 wool_app_session，含三条安全闸
@@ -2844,6 +2860,26 @@ def run_flow(
             launched_after=0.0,
             logger=logger,
         )
+        tray_icon_name = str(cfg.get("tray_icon_name") or "").strip()
+        if not existing and tray_icon_name and window_process_names:
+            from .tray_activation import activate_tray_icon
+
+            process_running = any(_iter_processes_by_exact_name(name) for name in window_process_names)
+            if process_running and activate_tray_icon(
+                logger,
+                tray_icon_name,
+                timeout_sec=float(cfg.get("tray_activation_timeout_sec", 15)),
+                stop_check=stop_check,
+            ):
+                for _ in range(12):
+                    existing = _find_window_by_filters(
+                        title_keywords=window_title_keywords,
+                        process_names=window_process_names,
+                        launched_after=0.0,
+                        logger=logger,
+                    )
+                    if existing or not _sleep_interruptible(0.3, stop_check):
+                        break
         if existing:
             pid = existing[1]
             launch_ts = 0.0

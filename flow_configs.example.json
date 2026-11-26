@@ -2162,14 +2162,18 @@
   },
   "DUMATE": {
     "enabled": true,
-    "_comment": "2026-11-17 用户需求：DuMate（F:\\Program Files\\dumate\\DuMate.exe）薅羊毛并入集合。用户口径「启动五秒后退出即可」——奖励随启动自动到账，无需任何点击：startup_wait_sec=5 在窗口等待前保底睡满 5s（run_flow 启动段结构保证），随后唯一步骤 best-effort OCR 看一眼主界面（optional_if_missing——认不出也照常过，不构成失败判据），跑完由薅羊毛收尾按 close_process_on_finish 关进程。无本地领取日志、无 UI 领取判据，成败口径=进程正常启动、存活跑满等待并被正常关闭；若实际上奖励需要点击领取（首跑日志/用户反馈），再补点击步。",
+    "_comment": "2026-11-26 用户需求：DuMate（F:\\Program Files\\dumate\\DuMate.exe）每日签到真正接入薅羊毛集合，取代 11-17「只启动五秒」的临时口径。兼容旧版首页「双端签到积分+500 / 立即签到」卡片与 1.0.97 新版左下角礼盒→账户菜单「可用积分」→积分页签到卡片。成败只认页面出现「今日已签到 / 已签到 / 签到成功 / 明日再来」；找不到入口或点后无已签到证据一律失败并走 flow_failures 取证。复用已开窗口，默认不关闭用户正在使用的搭子。",
     "window_title_keywords": [
+      "百度搭子",
       "DuMate"
     ],
     "window_process_names": [
       "DuMate.exe"
     ],
-    "startup_wait_sec": 5,
+    "reuse_existing_window": true,
+    "tray_icon_name": "百度搭子",
+    "tray_activation_timeout_sec": 15,
+    "startup_wait_sec": 8,
     "ocr_match_mode": "smart",
     "match_scales": [
       1.0,
@@ -2180,24 +2184,33 @@
       0.88,
       0.84
     ],
-    "close_process_on_finish": true,
-    "close_process_on_fail": true,
+    "close_process_on_finish": false,
+    "close_process_on_fail": false,
     "steps": [
       {
-        "name": "观察主界面渲染",
+        "name": "等待搭子主界面",
         "action": "wait_template",
         "template": "",
         "target_text": [
-          "DuMate"
+          "搭子帮你",
+          "开启今天的工作",
+          "新任务"
         ],
         "enable_ocr_fallback": true,
         "confirm_type": "none",
-        "timeout_sec": 5,
-        "post_delay_sec": 0.5,
-        "optional_if_missing": true,
+        "timeout_sec": 60,
+        "post_delay_sec": 1.0,
         "on_fail": "fail",
-        "search_interval_sec": 1.0,
-        "_comment": "best-effort 观察步（非判据）：OCR 认出「DuMate」字样就留一条渲染证据日志；认不出（英文拆字/深色皮肤/遮挡）optional_if_missing 直接跳过，流程照常成功。5s 保底等待由 startup_wait_sec 结构性保证，本步只多给渲染一点时间（合计约 5-10s 后收尾关进程，符合「启动五秒后退出即可」）。"
+        "search_interval_sec": 1.5,
+        "_comment": "Electron 冷启动容错；主界面专属文案任一命中即可，旧版签到卡/新版礼盒都在这个页面之后处理。"
+      },
+      {
+        "name": "执行每日签到",
+        "action": "dumate_claim_daily",
+        "timeout_sec": 120,
+        "on_fail": "retry_step",
+        "max_attempts": 2,
+        "_comment": "内建动作全包：先认已签到；否则旧版直接点「立即签到」，新版点左下角礼盒→等「可用积分」→点积分页→点「立即签到」；点击后必须看到已签到文案，否则失败。重试幂等。"
       }
     ]
   },
