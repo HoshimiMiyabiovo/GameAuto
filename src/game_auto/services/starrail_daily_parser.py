@@ -5,8 +5,10 @@
 
     YYYY-MM-DD HH:MM:SS,mmm | LEVEL | 消息
 
-关键任务完成标志：
-- 副本任务完成
+关键任务完成标志（2026-11-27 实锤校正，v2.2.0.3 真实日志 11-21~11-26）：
+- 副本战斗：结算行「已结算 N 次」（每场战斗结算必打；旧文案
+  「副本任务完成」该版本从不存在，曾导致每天被补判「未执行 → failed」），
+  失败时打「清体力未完成 {error}」（config.yaml 消息模板 InstanceNotCompleted）
 - 每日实训已完成 / 实训分数已达标
 - 邮件奖励已领取
 """
@@ -30,8 +32,11 @@ LOG_LINE_RE = re.compile(
 )
 
 TASK_MARKERS: List[Dict[str, Any]] = [
+    # 副本战斗（清体力/开拓力）：success 首位保留旧文案兼容旧版；「已结算」是
+    # v2.2.0.3 结算行（「已结算 6 次」）的包含匹配，6 天实锤每天都有。
+    # failed 标志命中 → status=failed 且 message 带脚本原因；都不命中 → 补「未执行」。
     {"key": "副本战斗", "name": "副本战斗（开拓力）",
-     "success": ["副本任务完成"], "failed": []},
+     "success": ["副本任务完成", "已结算"], "failed": ["清体力未完成"]},
     {"key": "每日实训", "name": "每日实训",
      "success": ["每日实训已完成", "实训分数已达标"], "failed": []},
     {"key": "邮件", "name": "邮件",
@@ -102,6 +107,7 @@ def parse_starrail_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
         task_key = task_def["key"]
         task_name = task_def["name"]
         success_markers = task_def["success"]
+        failed_markers = task_def.get("failed") or []
 
         status = "pending"
         message = ""
@@ -124,21 +130,31 @@ def parse_starrail_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
             if "每日实训已完成" in body:
                 daily_training_done = True
 
+            # 成功/失败标志都按行序覆盖：最后一次命中说了算（failed 在前、
+            # 结算行在后 → 最终 success；反之亦然）。行内先试 success，
+            # 同行同时命中两类标志时 success 优先（几乎不可能出现）。
             for marker in success_markers:
                 if marker in body:
                     status = "success"
                     message = marker
                     last_time = f"{date_str} {time_str}"
                     break
+            else:
+                for marker in failed_markers:
+                    if marker in body:
+                        status = "failed"
+                        message = body  # 带脚本报错详情，比「未执行」信息量大
+                        last_time = f"{date_str} {time_str}"
+                        break
 
         if last_time and last_time > report_time:
             report_time = last_time
 
-        if status == "success":
+        if status in ("success", "failed"):
             subtasks.append({
                 "task_key": task_key,
                 "task_name": task_name,
-                "status": "success",
+                "status": status,
                 "message": message,
             })
 
@@ -156,7 +172,9 @@ def parse_starrail_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
 
     has_failed = any(t["status"] == "failed" for t in subtasks)
     success_count = sum(1 for t in subtasks if t["status"] in ("success", "already"))
-    progress_percent = int(success_count / max(len(TASK_MARKERS), 1) * 100)
+    # 分母用实际产出任务数（含活跃度）：固定用 len(TASK_MARKERS) 会把附加的
+    # 活跃度任务算成超 100%（2026-11-27 实跑 4/3=133%）。
+    progress_percent = int(success_count / max(len(subtasks), 1) * 100)
 
     errors: List[str] = []
     for task_def in TASK_MARKERS:
@@ -170,7 +188,9 @@ def parse_starrail_log(file_path: str | Path) -> Optional[Dict[str, Any]]:
             })
             errors.append(f"{task_def['name']} 未执行")
 
-    overall_success = len(errors) == 0
+    # failed 标志显式命中的任务同样不算整体成功（此前口径里 failed 数组是
+    # 死代码，is_all_success 只看「未执行」补判，两者不一致）。
+    overall_success = len(errors) == 0 and not has_failed
 
     if not report_time:
         for line in reversed(lines):

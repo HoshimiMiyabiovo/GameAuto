@@ -124,6 +124,11 @@ def test_pure_functions():
     check("无窗口区域返回 None", dclaim.gift_local_point(None) is None)
     check("礼盒横坐标不随窗口宽度缩放",
           dclaim.gift_local_point((0, 0, 1366, 768))[0] == dclaim.GIFT_X_LOCAL)
+    check("公告弹窗标题可识别", dclaim.announce_title_block(
+        [{"text": "项目功能上新", "center": (730, 489)}]) is not None)
+    check("公告标题子串也可识别（OCR 拆块容忍）",
+          dclaim.announce_title_block([{"text": "项目功能上新公告"}]) is not None)
+    check("正常主页不冒充公告弹窗", dclaim.announce_title_block([{"text": "新任务"}]) is None)
 
 
 def _run_flow(ocr_sequence, *, rect=(0, 0, 1936, 1048), click_results=None, timeout_sec=30):
@@ -187,6 +192,50 @@ def test_flows():
     check("积分页无按钮且无已签到文案：失败", not result[0] and "既无" in result[1], result)
 
 
+def test_announce_popup():
+    print("[5] 公告弹窗（2026-11-27 #514）")
+    announce_frame = [
+        {"text": "X", "center": (218, 590)},          # 签到卡自己的关闭 X（标题左侧）
+        {"text": "项目功能上新", "center": (730, 489)},
+        {"text": "X", "center": (933, 247)},          # 弹窗右上 ×（2026-11-27 当帧实测位）
+        {"text": "立即签到", "center": (118, 726)},
+    ]
+    with mock.patch.object(dclaim, "_window_rect", return_value=(0, 0, 1936, 1048)), \
+         mock.patch.object(dclaim, "_ocr", side_effect=[announce_frame, []]), \
+         mock.patch.object(dclaim, "_click", return_value=True) as click, \
+         mock.patch.object(dclaim.time, "sleep"):
+        ok = dclaim._dismiss_announce_popup(mock.Mock(), 1234, (0, 0, 1936, 1048), announce_frame)
+    check("弹窗关闭成功（点 × 后复核消失）", ok is True, ok)
+    check("只点击弹窗右上 ×，不碰左侧签到卡的 X", click.call_count == 1
+          and click.call_args == mock.call(1234, 933, 247),
+          [c.args for c in click.call_args_list])
+
+    # 入口检测到弹窗：关掉 → 重新判页 → 点签到 → 核验通过
+    no_announce, plain_button = [], [{"text": "立即签到", "center": (118, 726)}]
+    sequence = [announce_frame, no_announce, plain_button, plain_button,
+                [{"text": "今日已签到", "center": (118, 726)}]]
+    result, click = _run_flow(sequence)
+    check("首页弹窗：先关弹窗再签到成功", result[0] and "签到成功" in result[1], result)
+    check("首页弹窗：点击顺序 ×→签到按钮 共两次",
+          click.call_count == 2
+          and click.call_args_list[0] == mock.call(1234, 933, 247)
+          and click.call_args_list[1] == mock.call(1234, 118, 726),
+          [c.args for c in click.call_args_list])
+
+    # 点击落在遮罩上被吞：核验帧见弹窗 → 关掉 → 重点一次 → 通过
+    # （前两帧弹窗未在场：第一次点击后的核验轮才 OCR 到弹窗）
+    sequence = [plain_button, plain_button, announce_frame, no_announce,
+                plain_button, [{"text": "签到成功", "center": (118, 726)}]]
+    result, click = _run_flow(sequence)
+    check("遮罩吞点击：关弹窗后重点仍成功", result[0] and "签到成功" in result[1], result)
+    check("遮罩吞点击：点击顺序 签到→×→重点 共三次",
+          click.call_count == 3
+          and click.call_args_list[0] == mock.call(1234, 118, 726)
+          and click.call_args_list[1] == mock.call(1234, 933, 247)
+          and click.call_args_list[2] == mock.call(1234, 118, 726),
+          [c.args for c in click.call_args_list])
+
+
 def test_tray_activation():
     print("[5] 托盘激活")
     proc = mock.Mock()
@@ -216,6 +265,7 @@ def main():
     test_wiring()
     test_pure_functions()
     test_flows()
+    test_announce_popup()
     test_tray_activation()
     print("-" * 60)
     if FAILURES:

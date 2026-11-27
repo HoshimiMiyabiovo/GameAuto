@@ -117,6 +117,7 @@ suite_sign_resilience_20261121.py
 suite_stamina_configs_phase2_20261029.py
 suite_stamina_view_perf_20261031.py
 suite_starrail_activity_20261024.py
+suite_starrail_instance_marker_20261127.py
 suite_start_from_main_20261104.py
 suite_step_ocr_region_20261107.py
 suite_teleagent_capture_20261118.py

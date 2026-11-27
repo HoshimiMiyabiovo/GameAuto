@@ -187,6 +187,17 @@
   注意既有行为：无计数时「每日实训」布尔任务名命中 KEY_PROGRESS_TASKS →
   completion_state=unknown → 复核从不改判（改判失败侧全靠超时兜底）。
   回归 `artifacts/test_starrail_activity_20261024.py`（22 项）。
+- **崩铁「副本战斗（开拓力）」标志行实锤**（2026-11-27 排查"全都完成了却说刷本失败"）：
+  March7thAssistant v2.2.0.3 日志**从不打**「副本任务完成」（当时写解析器参照的文案
+  在该版本从未存在，8 天日志 0 次命中）→ 副本战斗每天被补判「未执行 → failed」，
+  卡片单项红叉；活跃度 500/500 让整体 completed，批次不重试但展示误导。
+  实际日志形态：`开始清体力` → `开拓力：251/300` → `已确认副本选中队伍 XX` →
+  `进入战斗` → `已结算 N 次`（结算行，每场战斗必打）→ `开拓力不足，结束本副本项`；
+  失败时打 `清体力未完成 {error}`（config.yaml 消息模板 InstanceNotCompleted）。
+  解析器：success=["副本任务完成"(旧兼容), "已结算"]、failed=["清体力未完成"]，
+  failed 标志命中 → status=failed + message 带脚本原因；标志按行序覆盖、最后一次
+  命中说了算；is_all_success 同时看「未执行」补判与 failed 显式命中。
+  回归 `tests/suite_starrail_instance_marker_20261127.py`（已登记 CI，含真实日志回放）。
 - **绝区零（OneDragon）超时兜底 + KEY_STATUS 口径**（用户拍板 2026-10-24）：
   OneDragon 日志只有枚举状态（活跃度已满/未满/领取成功），**没有数值**，
   无法像崩铁那样算百分比。超时侧由 `_apply_zzz_activity_verdict` 兜底：
@@ -267,3 +278,5 @@
 - `completion_state()` 里 KEY_STATUS_TASKS 优先级最高，其次 real_progress_percent()。
 - **判定关键任务所在的脚本日志必须落库**（`daily_checker._record_*_script_tasks`）：
   只在 bridge 内存注入/失败复核里用完就丢的话，统计与历史回看永远拿不到。
+
+> AI生成

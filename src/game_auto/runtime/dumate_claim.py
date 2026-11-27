@@ -5,6 +5,10 @@
 - 1.0.97 新版首页取消卡片，入口变为左下角礼盒 → 账户菜单「可用积分」
   → 积分页签到卡片。
 
+首页/积分页都可能弹出「项目功能上新」公告弹窗（服务端下发，无已读标记），
+模态遮罩会把落在弹窗外的点击全部吞掉（2026-11-27 #514 实锤），因此所有
+判页/核验循环都带弹窗检测：见到就先关再继续。
+
 所有点击都有独立页面/状态校验：礼盒点完必须看到「可用积分」，积分页点完
 必须看到「立即签到」或已签到文案；「立即签到」点完只认「今日已签到 / 已签到 /
 签到成功 / 明日再来」。拿不到明确已签到证据一律失败，不把“点过了”当成功。
@@ -22,6 +26,17 @@ CLAIM_BUTTON_TEXT = "立即签到"
 CLAIMED_TEXTS = ("今日已签到", "已签到", "签到成功", "明日再来")
 POINTS_ENTRY_TEXT = "可用积分"
 SIGNIN_PAGE_TEXTS = ("积分账单", "赠送积分", "每日签到", "快来签到领积分啦")
+
+# 「项目功能上新」公告弹窗（2026-11-27 #514 实锤）：首页中央模态卡 + 全屏遮罩，
+# 服务端下发、本地无已读标记，每次启动都可能再弹（同 MiniMax 更新公告的形态）。
+# 遮罩在弹窗外挡着时，「立即签到」明明 OCR 命中（conf 1.00）点击却被遮罩吞掉
+# ——当帧点完 25 秒核验等不到已签到文案直接判死。必须先关弹窗再签到。
+#   - 标题「项目功能上新」在首页/积分页正常界面均不出现，可当弹窗独占特征；
+#   - × 字形 OCR 置信度低（当帧 0.67），只能当候选位；同屏左侧签到卡自己
+#     也有一个关闭 X（conf 0.92）——X 候选必须限定在标题右上方向，否则会
+#     把签到卡关掉。
+ANNOUNCE_TITLE_TEXT = "项目功能上新"
+ANNOUNCE_GLYPHS = ("×", "x", "X", "✕", "ⅹ", "Ⅹ")
 
 MENU_WAIT_SEC = 10.0
 POINTS_PAGE_WAIT_SEC = 20.0
@@ -68,6 +83,11 @@ def claimed_text(results: Sequence[dict]) -> Optional[str]:
 def signin_page_visible(results: Sequence[dict]) -> bool:
     """积分页专属内容，用于区分“菜单还开着”与“已经进入积分页”。"""
     return any(find_block(results, text) is not None for text in SIGNIN_PAGE_TEXTS)
+
+
+def announce_title_block(results: Sequence[dict]) -> Optional[dict]:
+    """「项目功能上新」公告弹窗标题；首页/积分页正常界面均无此文案。"""
+    return find_block(results, ANNOUNCE_TITLE_TEXT)
 
 
 def claim_click_point(block: dict) -> Optional[Tuple[int, int]]:
@@ -137,6 +157,59 @@ def _to_local(rect, screen_xy) -> Tuple[int, int]:
     return int(screen_xy[0]) - left, int(screen_xy[1]) - top
 
 
+def _dismiss_announce_popup(logger, hwnd, rect, results) -> bool:
+    """关闭「项目功能上新」公告弹窗：逐候选位点 × → ESC 兜底，每步复核。
+
+    调用方先用 announce_title_block 确认弹窗在场再进这里。× 候选限定在
+    标题右上方向（水平不小于标题中心、垂直不高于标题中心 +60px 容差），
+    排除同屏左侧签到卡自己的关闭 X——点错会把签到卡关掉。每次点击后
+    重 OCR 复核标题消失才算关掉；× 全无效时 ESC 收尾（模态卡多数支持）。
+    返回 True 表示弹窗已确认消失，False 表示没关掉（调用方继续原流程，
+    失败取证会留下现场）。
+    """
+    title = announce_title_block(results)
+    if not title:
+        return False
+    logger.warning("[DuMate] 检测到「%s」公告弹窗，先关掉再签到", ANNOUNCE_TITLE_TEXT)
+    title_center = title.get("center") or (0, 0)
+    glyphs = {_norm_text(g) for g in ANNOUNCE_GLYPHS}
+    candidates = []
+    for item in results or []:
+        if _norm_text((item or {}).get("text")) not in glyphs:
+            continue
+        center = (item or {}).get("center")
+        if not center:
+            continue
+        if center[0] >= title_center[0] and center[1] <= title_center[1] + 60:
+            candidates.append((int(center[0]), int(center[1])))
+    for sx, sy in candidates:
+        lx, ly = _to_local(rect, (sx, sy))
+        if not _click(hwnd, lx, ly):
+            logger.debug("[DuMate] 点公告弹窗 ×(%d,%d) 被防护闸拦下", sx, sy)
+            continue
+        logger.info("[DuMate] 已点击公告弹窗 × @ (%d, %d)", sx, sy)
+        time.sleep(1.0)
+        if not announce_title_block(_ocr(logger, hwnd)):
+            logger.info("[DuMate] 公告弹窗已关闭（×）")
+            return True
+    try:
+        import pyautogui
+
+        from .foreground_flow_runner import _focus_window
+
+        _focus_window(hwnd)
+        time.sleep(0.4)
+        pyautogui.press("escape")
+        time.sleep(1.0)
+    except Exception as exc:
+        logger.debug("[DuMate] ESC 关公告弹窗异常: %s", exc)
+    if not announce_title_block(_ocr(logger, hwnd)):
+        logger.info("[DuMate] 公告弹窗已关闭（ESC）")
+        return True
+    logger.warning("[DuMate] 公告弹窗仍未关闭（×/ESC 均无效）")
+    return False
+
+
 def _wait_for(logger, hwnd, judge, timeout_sec, stop_check=None):
     from .foreground_flow_runner import _heartbeat_beat
 
@@ -151,6 +224,9 @@ def _wait_for(logger, hwnd, judge, timeout_sec, stop_check=None):
             return verdict
         time.sleep(POLL_SEC)
     return None
+
+
+_ANNOUNCE_BLOCKED = object()  # verify 哨兵：核验帧里见到公告弹窗（点击被遮罩吞了）
 
 
 def _click_claim_and_verify(logger, hwnd, rect, deadline, stop_check=None) -> Tuple[bool, str]:
@@ -170,14 +246,41 @@ def _click_claim_and_verify(logger, hwnd, rect, deadline, stop_check=None) -> Tu
     remaining = max(1.0, deadline - time.time())
 
     def verify_judge(ocr_results):
-        return claimed_text(ocr_results)
+        evidence = claimed_text(ocr_results)
+        if evidence:
+            return evidence
+        if announce_title_block(ocr_results):
+            # 公告弹窗在场 = 刚才那次点击落在遮罩上没生效，关掉后哨兵返回，
+            # 别把 25 秒核验白等满
+            _dismiss_announce_popup(logger, hwnd, rect, ocr_results)
+            return _ANNOUNCE_BLOCKED
+        return None
 
     evidence = _wait_for(logger, hwnd, verify_judge, min(VERIFY_POLL_SEC, remaining), stop_check)
-    if evidence:
+    if evidence and evidence is not _ANNOUNCE_BLOCKED:
         logger.info("[DuMate] 签到核验通过: %s", evidence)
         return True, f"签到成功（页面显示「{evidence}」）"
     if stop_check and stop_check():
         return False, "用户请求停止"
+    if evidence is _ANNOUNCE_BLOCKED:
+        # 2026-11-27 #514：第一次点击被弹窗遮罩吞掉——弹窗已关，重点一次，
+        # 别直接判死（2026-11-02 MiniMax 同形态实锤：点对了坐标也发不出请求）
+        time.sleep(0.8)
+        results = _ocr(logger, hwnd)
+        already = claimed_text(results)
+        if already:
+            return True, f"页面显示「{already}」"
+        button = claim_button_block(results)
+        point = claim_click_point(button or {})
+        if point:
+            lx, ly = _to_local(rect, point)
+            if _click(hwnd, lx, ly):
+                logger.info("[DuMate] 公告弹窗关闭后重点「立即签到」@ (%d, %d)", point[0], point[1])
+                remaining = max(1.0, deadline - time.time())
+                evidence = _wait_for(logger, hwnd, claimed_text, min(VERIFY_POLL_SEC, remaining), stop_check)
+                if evidence:
+                    logger.info("[DuMate] 签到核验通过: %s", evidence)
+                    return True, f"签到成功（页面显示「{evidence}」）"
     return False, "点击「立即签到」后未出现已签到/签到成功文案"
 
 
@@ -205,6 +308,11 @@ def claim_daily(
         return False, reason
 
     results = _ocr(logger, hwnd)
+    if announce_title_block(results):
+        # 公告弹窗带全屏遮罩，不先关掉，后面礼盒/按钮的点击全会落在遮罩上
+        if _dismiss_announce_popup(logger, hwnd, rect, results):
+            time.sleep(0.8)
+            results = _ocr(logger, hwnd)
     already = claimed_text(results)
     if already:
         return True, f"今日已签到（页面显示「{already}」）"
@@ -223,6 +331,10 @@ def claim_daily(
         logger.info("[DuMate] 已点击左下角礼盒 @ 窗口局部 (%d, %d)", gift[0], gift[1])
 
         def menu_judge(ocr_results):
+            if announce_title_block(ocr_results):
+                # 弹窗可能在等菜单期间弹出，挡住「可用积分」入口——关掉后继续等
+                _dismiss_announce_popup(logger, hwnd, rect, ocr_results)
+                return None
             block = points_entry_block(ocr_results)
             return block.get("center") if block else None
 
@@ -244,6 +356,10 @@ def claim_daily(
     logger.info("[DuMate] 已点击「可用积分」@ (%d, %d)", points_point[0], points_point[1])
 
     def page_judge(ocr_results):
+        if announce_title_block(ocr_results):
+            # 公告弹窗可能延迟弹出并盖住积分页卡片，先关再判
+            _dismiss_announce_popup(logger, hwnd, rect, ocr_results)
+            return None
         already = claimed_text(ocr_results)
         if already:
             return ("claimed", already)

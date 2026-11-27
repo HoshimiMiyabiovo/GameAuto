@@ -1441,6 +1441,23 @@ def _foreground_click_block_reason(hwnd: int, sx: int, sy: int) -> str:
     return ""
 
 
+def _fixed_click_point(hwnd: int, step: dict) -> Optional[Tuple[int, int]]:
+    """把步骤的窗口比例坐标换算为本地像素；配置缺失或越界时拒绝点击。"""
+    rect = _window_rect(hwnd)
+    if not rect:
+        return None
+    try:
+        fx = float(step["x_frac"])
+        fy = float(step["y_frac"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0):
+        return None
+    width = max(1, int(rect[2]) - int(rect[0]))
+    height = max(1, int(rect[3]) - int(rect[1]))
+    return int(round(width * fx)), int(round(height * fy))
+
+
 def _click_window_local(hwnd: int, x_local: int, y_local: int, clicks: int = 1,
                         interval: float = 0.2, background: bool = False,
                         hold_sec: Optional[float] = None):
@@ -3053,6 +3070,10 @@ def run_flow(
 
     close_on_exit = bool(cfg.get("close_process_on_finish", False))
     close_on_fail = bool(cfg.get("close_process_on_fail", True))
+    try:
+        window_wait_sec = int(cfg.get("window_wait_sec", 45))
+    except (TypeError, ValueError):
+        window_wait_sec = 45
 
     exe_path = _resolve_exe_path(cfg, flow_key, logger)
     if not exe_path:
@@ -3125,7 +3146,7 @@ def run_flow(
 
     hwnd, window_pid = _wait_window_for_flow(
         pid,
-        timeout=45,
+        timeout=window_wait_sec,
         title_keywords=window_title_keywords,
         process_names=window_process_names,
         launched_after=launch_ts,
@@ -3297,7 +3318,7 @@ def run_flow(
                     return _abort_for_stop()
                 hwnd, window_pid = _wait_window_for_flow(
                     pid,
-                    timeout=45,
+                    timeout=window_wait_sec,
                     title_keywords=window_title_keywords,
                     process_names=window_process_names,
                     launched_after=launch_ts,
@@ -3469,6 +3490,17 @@ def run_flow(
                     # 每次匹配前置顶窗口，防止其他窗口（如游戏退出后弹出的启动器）遮挡
                     _focus_window(hwnd)
 
+                    if action == "click_fixed":
+                        center = _fixed_click_point(hwnd, step)
+                        if center is None:
+                            logger.error(
+                                f"[{flow_key}] 步骤{step_no}「{name}」固定点击坐标无效: "
+                                f"x_frac={step.get('x_frac')!r}, y_frac={step.get('y_frac')!r}"
+                            )
+                            break
+                        match_method = "fixed"
+                        break
+
                     # 自带内部循环的动作跳过模板匹配，直接进分发
                     if action in _BUILTIN_ACTIONS:
                         break
@@ -3627,7 +3659,7 @@ def run_flow(
                 if local_region:
                     logger.debug(f"[{flow_key}] 步骤{step_no} 局部搜索区域: {local_region}")
 
-            if action == "click_template":
+            if action in ("click_template", "click_fixed"):
                 if hover:
                     # 悬停型入口：只移动鼠标不点击（浮层菜单/预览卡片）
                     if search_scope == "screen":
@@ -3734,7 +3766,7 @@ def run_flow(
                     )
                     return False, dispatch_msg
 
-            if action == "click_template" and not no_click:
+            if action in ("click_template", "click_fixed") and not no_click:
                 ok, reason = execute_confirm_strategy(
                     logger=logger,
                     hwnd=hwnd,

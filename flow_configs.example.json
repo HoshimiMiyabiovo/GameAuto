@@ -520,9 +520,11 @@
     ],
     "steps": [
       {
-        "name": "点击左下角头像",
-        "action": "click_template",
-        "template": "assets/templates\\hy4-左下角头像.png",
+        "name": "点击左下角头像（固定区域）",
+        "action": "click_fixed",
+        "x_frac": 0.022395833333333332,
+        "y_frac": 0.9719806763285024,
+        "_comment": "2026-11-27：头像模板随用户头像变化失效；固定区锚定历史成功点击 (43,1006)@1920x1035（参照 x=95 左移 52），不跟随轮播广告卡。",
         "target_text": "头像",
         "enable_ocr_fallback": false,
         "confirm_type": "none",
@@ -586,10 +588,11 @@
         "search_interval_sec": 1.0
       },
       {
-        "name": "重新点击左下角头像",
-        "_comment": "2026-10-27 实锤：点完「立即领取」后加油站页面会整个关闭退回聊天页，「今日已领取」必须重新导航才能看到。本步 optional——页面还开着（头像被盖住）时超时跳过，交给下一步。",
-        "action": "click_template",
-        "template": "assets/templates\\hy4-左下角头像.png",
+        "name": "重新点击左下角头像（固定区域）",
+        "_comment": "2026-11-27：头像区改固定坐标，避免换头像/轮播卡导致模板失效；2026-10-27：领取后加油站页关闭，需重新导航才能验证「今日已领取」。",
+        "action": "click_fixed",
+        "x_frac": 0.022395833333333332,
+        "y_frac": 0.9719806763285024,
         "target_text": "头像",
         "enable_ocr_fallback": false,
         "confirm_type": "none",
@@ -817,7 +820,7 @@
   },
   "TELEAGENT": {
     "enabled": true,
-    "_comment": "2026-11-14 用户需求：TeleAgent（电信星辰超级智能体，Electron）每日领 100 积分。入口用户拍板「点击左下角头像/用户名稳定进入签到」：用户面板内积分福利社块，未领态「立即领取 >」、已领态「今日已领 ✓ + 已领 N 天/累计 100积分」（用户两张截图实锤）。成败核验 OCR「今日已领」fail-closed（无本地领取日志可核验，MINIMAX 弃假阳性模板同款思路）。第 4 步 optional_if_missing：已领态「立即领取」不存在 → 幂等跳过，重跑无害。锚「积分余额」+区域限定：主界面左下还有一张悬浮福利社卡片同样有「立即领取」（y≈0.9），锚+区域双闸防误点；先等「积分余额」（面板专属词）出现再点，保证点的是面板。未实机验证：OCR 认字/点击后面板行为/悬浮卡片遮挡关系按首跑取证校准（ocr_debug_snapshot 全开）。",
+    "_comment": "2026-11-14 用户需求：TeleAgent（电信星辰超级智能体，Electron）每日领 100 积分。入口用户拍板「点击左下角头像/用户名稳定进入签到」：用户面板内积分福利社块，未领态「立即领取 >」、已领态「今日已领 ✓ + 已领 N 天/累计 100积分」（用户两张截图实锤）。成败核验 OCR「今日已领」fail-closed（无本地领取日志可核验，MINIMAX 弃假阳性模板同款思路）。第 4 步 optional_if_missing：已领态「立即领取」不存在 → 幂等跳过，重跑无害。锚「积分余额」+区域限定：主界面左下还有一张悬浮福利社卡片同样有「立即领取」（y≈0.9），锚+区域双闸防误点；先等「积分余额」（面板专属词）出现再点，保证点的是面板。未实机验证：OCR 认字/点击后面板行为/悬浮卡片遮挡关系按首跑取证校准（ocr_debug_snapshot 全开）。2026-11-28：TeleAgent 冷启动窗口出现晚于旧 20s+45s 预算，11-26/11-27 两次羊毛集合因此卡在「未找到窗口」；window_wait_sec=150 只放宽找窗口上限，窗口一出现即继续。",
     "window_title_keywords": [
       "TeleAgent"
     ],
@@ -825,6 +828,7 @@
       "TeleAgent.exe"
     ],
     "startup_wait_sec": 20,
+    "window_wait_sec": 150,
     "ocr_match_mode": "smart",
     "match_scales": [
       1.0,

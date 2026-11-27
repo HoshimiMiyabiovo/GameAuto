@@ -9,6 +9,7 @@
    （它是用户日常聊天软件，AGENTS 明确禁止）。
 
 本套件锁定：
+- 步骤1/5 使用头像固定区比例坐标，不再依赖会随用户头像变化的模板；
 - 步骤2/6 改为纯 OCR 定位「Buddy加油站」（无模板、OCR 开启、失败回退上一步）；
 - WORKBUDDY / QODER 的 close_process_on_finish/fail 均为 false；
 - _close_wool_flow 成功看 finish、失败看 fail，尊重配置。
@@ -50,6 +51,15 @@ def test_config():
         wb = cfg.get("WORKBUDDY") or {}
         steps = wb.get("steps") or []
         check(f"{name} WORKBUDDY 7 步", len(steps) == 7, len(steps))
+        for idx, label in ((0, "步骤1"), (4, "步骤5")):
+            s = steps[idx]
+            check(f"{name} {label} 使用固定头像坐标", s.get("action") == "click_fixed", s.get("action"))
+            check(f"{name} {label} 不再依赖头像模板", not s.get("template"), s.get("template"))
+            try:
+                point = (round(1920 * float(s["x_frac"])), round(1035 * float(s["y_frac"])))
+            except (KeyError, TypeError, ValueError):
+                point = None
+            check(f"{name} {label} 坐标锚定 (43,1006)", point == (43, 1006), point)
         for idx, label in ((1, "步骤2"), (5, "步骤6")):
             s = steps[idx]
             check(f"{name} {label} 不再用模板", not s.get("template"), s.get("template"))
@@ -66,8 +76,26 @@ def test_config():
             check(f"{name} QODER 关闭开关为布尔", isinstance(qoder.get("close_process_on_finish"), bool))
 
 
+def test_fixed_click_point():
+    print("[2] 固定坐标：窗口比例换算 + run_flow 接线")
+    orig = ffr._window_rect
+    try:
+        ffr._window_rect = lambda hwnd: (0, 0, 1920, 1035)
+        step = {"x_frac": 43 / 1920, "y_frac": 1006 / 1035}
+        check("1920x1035 回到历史点击点", ffr._fixed_click_point(1, step) == (43, 1006))
+        ffr._window_rect = lambda hwnd: (100, 50, 2020, 1085)
+        check("非零窗口原点不影响本地坐标", ffr._fixed_click_point(1, step) == (43, 1006))
+        ffr._window_rect = lambda hwnd: (0, 0, 3840, 2070)
+        check("分辨率变化按比例缩放", ffr._fixed_click_point(1, step) == (86, 2012))
+        check("越界坐标拒绝点击", ffr._fixed_click_point(1, {"x_frac": 1.1, "y_frac": 0.5}) is None)
+        check("缺失坐标拒绝点击", ffr._fixed_click_point(1, {"x_frac": 0.5}) is None)
+    finally:
+        ffr._window_rect = orig
+    check("run_flow 接线 click_fixed", "click_fixed" in ffr.run_flow.__code__.co_consts)
+
+
 def test_close_logic():
-    print("[2] 收尾逻辑：成功看 finish、失败看 fail")
+    print("[3] 收尾逻辑：成功看 finish、失败看 fail")
     calls = []
     logger = logging.getLogger("test_wool")
     orig = ffr.close_flow_processes
@@ -107,6 +135,7 @@ def test_close_logic():
 
 def main():
     test_config()
+    test_fixed_click_point()
     test_close_logic()
     src = (PROJECT_ROOT / "src" / "game_auto" / "runtime" / "background_template_runner.py").read_text(encoding="utf-8")
     check("调用方把 ok 传给收尾", "_close_wool_flow(logger, flow_key, cfg, ok)" in src)

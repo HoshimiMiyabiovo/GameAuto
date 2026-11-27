@@ -84,6 +84,10 @@ def _parse_manifest() -> tuple[list[str], dict[str, str]]:
         excluded = name.startswith("!")
         if excluded:
             name = name[1:].strip()
+        # 平台 AIGC 水印钩子会在文件尾追加「AI生成」等非套件行（必须保留、不能删）：
+        # 不以 suite_ 开头的行一律忽略，不进闸门匹配（2026-11-27 实锤会把闸门误卡红）。
+        if not name.startswith("suite_"):
+            continue
         if (name in exclude) or (name in include):
             raise ValueError(f"ci_suites.txt 重复条目: {name}")
         if excluded:
