@@ -177,7 +177,12 @@ class FileCompletionMonitor:
             self.matched_marker = marker
             self.matched_line = line
             self.completion_event.set()
-            self.logger.info(f"[CJ流程] 检测到奇想盒完成标记: {marker} ({path.name})")
+            if "一条龙任务完成" in line and self.RESULT_HEADER_MARKER not in line:
+                # 异常结束（如「一条龙任务完成: 前往页面 「地图」 失败」）：没有汇总块，
+                # 成败由日志复核层判，这里只把「脚本已退出」这件事记成 ERROR 便于排查
+                self.logger.error(f"[CJ流程] 奇想盒一条龙异常结束: {line} ({path.name})")
+            else:
+                self.logger.info(f"[CJ流程] 检测到奇想盒完成标记: {marker} ({path.name})")
             self._maybe_invoke_completion_callback()
 
         if not self._capture_result_block:

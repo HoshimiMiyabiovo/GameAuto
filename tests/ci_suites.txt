@@ -166,3 +166,9 @@ suite_wool_overlay_guard_20261126.py
 
 
 AI生成
+suite_whimbox_failure_marker_20261128.py
+suite_okww_treasure_f_timeout_20261128.py
+suite_okww_runner_idle_exit_20261128.py
+suite_okww_stall_focus_guard_20261128.py
+suite_baijing_tea_dialogue_20261128.py
+suite_okhna_module_20261128.py

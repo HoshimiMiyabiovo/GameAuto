@@ -49,6 +49,48 @@
   InfinityNikki 的 launcher**：whibox 的 bat 会 `cd /d %~dp0`，所以就是
   `<launcher 所在目录>/configs/config.json`。不要按 UI 进程或运行副本切换——UI
   开哪份不影响一条龙实际跑的那份；要换副本就改 `app_config` 的 launcher。
+## 因缘精灵 ok-hna 模块模式（2026-11-28）
+
+- **ok-hna 才是因缘精灵的脚本**（`E:\GithubProject\autoGame\ok-hna`，独立
+  ok-script 3.0.13 工程），不要再说“无脚本”。GameAuto 的 `games/nexus_anima.py`
+  已填 `script_name=ok-hna` 与 `module_mode` 默认值；本机
+  `app_config.apps.NexusAnima.module_mode` 启用并填机器路径（不入库）：
+  `runtime_root=ok-hna 根`、`python_exe=ok-hna/.venv/Scripts/python.exe`、
+  `task=DailyActivityTask`、`timeout=2400`、`stall_log_sec=720`、
+  `close_game=true`、`humanize_config=""`。
+- **为什么走 module 模式**：`DailyActivityTask` 自带「启动→日常活跃→消耗精力
+  作战→福利领取」一条龙；GameAuto 只需用 ok-hna 的 venv 起
+  `tools/okww_module/runner.py`，按 runner 的 task 结果判定。旧链路裸启动游戏
+  后只能等游戏退出，无脚本完成信号，必然 30 分钟监控超时并把游戏杀掉
+  （11-28 #537 实锤，还打断了 ok-hna 正在盯的游戏）。
+- **runner 泛化**：同一份 runner 现支持 ok-ww 的 `main.py` 与 ok-hna 的
+  `config.py` 入口；`--runtime-name` 区分工程（成功标记
+  `Successfully Executed Task...` 只给 ok-ww 写）；`stall_log_sec /
+  focus_retry_sec / idle_exit_sec` 由 `module_mode` 透传环境变量；
+  `humanize_config` 为空时 ok-ww 仍用默认路径、ok-hna 直接不用，别让 ok-hna
+  误加载 ok-ww 的点击节奏。
+- **不会等到死**：controller 侧 `module_mode.timeout=2400s` 是硬上限，runner
+  侧同值任务超时会先报；任务运行期间 ok-hna 日志 720s 无新增 → runner 熔断
+  停任务（LauncherTask 最长 600s 静默等待，720s 留余量）；用户停止/看门狗
+  仍走原链路。真卡死最多 12 分钟静默熔断或 40 分钟硬超时。
+- **权限与前台**：游戏是管理员进程，游戏内 UI 只接受 Pynput 真实输入；
+  GameAuto/runner 必须以管理员启动，任务运行期间游戏保持前台，不能抢鼠标
+  键盘。非管理员时 ok-hna 会明确报「需要管理员权限」，不会假成功。
+- **别并行**：不要同时开 ok-hna GUI 和 GameAuto module runner（同一游戏窗口/
+  配置）。运行日志：`data/logs/okhna_module_runner.log` +
+  `ok-hna/logs/ok-script.log`；失败截图在 `ok-hna/screenshots/`。
+- **判定口径**：NexusAnima 暂无 `daily_parser`，批次结论以 runner task 结果为准
+  （`task_batch_runner` 对 module_mode 跳过日志复核）；日报暂不展示逐项详情。
+  ok-script 的失败常用 `TaskDisabledException` 表达，它不写 `task.info['Error']`、
+  只打一行 `TaskDisabledException, continue`；runner 会扫描本次任务新增的
+  `ok-script.log` 把它判成失败（并尽量带上邻近的「失败/超时/权限」上下文），
+  绝不当成正常完成。GameAuto 侧 `module_mode.require_admin` 会在起 runner 前
+  检查管理员，非管理员直接失败并提示，不会白等。
+- **回归**：`tests/suite_okhna_module_20261128.py`；ok-ww module 旧套件
+  （pythonpath / idle exit / stall focus / shutdown）全过。`suite_okww_module_
+  20261104` 在本机因 `data/okww/src/logs` 的文件 ACL 权限失败，属环境问题。
+  实跑 `DailyActivityTask` 仍需管理员会话验证。
+
 ## flow_configs 本地/示例拆分（2026-10-28）
 
 - **背景**：`flow_configs.json` 同时含共享流程定义和 GUI 写入的个人开关
@@ -315,3 +357,11 @@
   ④ `src/char/BaseChar.py` 的 `send_liberation_key` 调 `task.mark_liberation_sent()`。
   **重装/换血会冲掉，按此重打**；锚点 + 6 个行为桩测（共 10 项）由
   `tests/suite_okww_battle_boundary_20261121.py` 锁住。
+- **宝箱 F 提示等待放宽（2026-11-28）**：`src/task/BaseWWTask.py` 的
+  `walk_to_treasure` 原版 `walk_until_f(time_out=2, backward_time=0)`——宝箱前
+  F 提示偶发漏识别一次就 `CannotFindException: cant find the f to enter`，
+  fail-fast 打死整轮 DailyTask（11-28 #531，波片停在 155/240；11-27 同段成功）。
+  改为 `time_out=4, backward_time=2`（多等 2 秒 + 后退补等 2 秒），仍找不到才抛，
+  fail-fast 语义不变。改前备份 `BaseWWTask.py.bak_20261128`；
+  **重装/换血会冲掉，按此重打**；锚点 + 4 个行为桩测由
+  `tests/suite_okww_treasure_f_timeout_20261128.py` 锁住。

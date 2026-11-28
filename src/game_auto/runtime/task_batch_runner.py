@@ -1098,12 +1098,13 @@ def _run_single_task(
     # 事后日志复核（绝区零/星铁March7th/鸣潮/终末地/异环）：日志显示没跑完则改判失败；
     # 无当日日志时保持原判。只做 success→failed，不做反向。放在全部分支之后，
     # ok 脚本分支（elif）和常规分支（else）都能覆盖到。
-    # 模块模式（ok-ww runner）的结论来自 runner 的 task 返回值，不再用日志标记复核。
+    # 模块模式（ok-ww / ok-hna runner）的结论来自 runner 的 task 返回值，
+    # 不再用日志标记复核。
     _module_mode_cfg = app_config.get("module_mode")
     _module_mode = (
         isinstance(_module_mode_cfg, dict)
         and bool(_module_mode_cfg.get("enabled"))
-        and str(app_config.get("script_name") or "") == "ok-ww"
+        and str(app_config.get("script_name") or "") in ("ok-ww", "ok-hna")
     )
     if success and not controller.stop_current_task and not _module_mode:
         _verify_msg = _verify_script_log_result(

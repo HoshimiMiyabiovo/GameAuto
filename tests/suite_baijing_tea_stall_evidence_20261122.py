@@ -78,6 +78,10 @@ class FakeTime:
         self.t += 0.05
         return self.t
 
+    # _TeaProgressTracker（2026-11-28 #533/#534 修复）默认走 time.monotonic
+    def monotonic(self):
+        return self.time()
+
     def sleep(self, s):
         self.t += float(s)
 

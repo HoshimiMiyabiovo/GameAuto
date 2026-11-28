@@ -75,11 +75,15 @@ P_START_TRIAL = (0.849, 0.788)                   # 「开始试玩」按钮（OC
 SLOT_POINTS = tuple(                            # 角色缩略图条 5 槽（NEW 徽标下方）
     (x, 0.310) for x in (0.674, 0.738, 0.798, 0.861, 0.924)
 )
-# OCR 区域（窗口比例）——全窗 OCR 后按区域过滤，不做裁剪再识别（04 分篇教训）
-REGION_ACTIVITY_BTN = (0.55, 0.86, 0.45, 0.14)
-REGION_TRIAL_TAB = (0.00, 0.55, 0.22, 0.17)
-REGION_START_BTN = (0.72, 0.72, 0.28, 0.14)
-REGION_CHAR_NAME = (0.60, 0.48, 0.35, 0.12)
+# OCR 区域（窗口比例，x0,y0,x1,y1）——全窗 OCR 后按区域过滤，不做裁剪再识别
+# （04 分篇教训）。必须与 _abs_region 及其它白荆模块的约定一致：11-25 #505 /
+# 11-27 / 11-28 #536 角色试玩「打开活动中心」三连挂，就是这里曾按 (x,y,宽,高)
+# 写、被 _abs_region 当 (x0,y0,x1,y1) 解释算出零面积区域，把 1.00 置信度的
+# 「活动中心」候选全滤掉（该步无比例兜底 → 每跑必失败）。
+REGION_ACTIVITY_BTN = (0.55, 0.86, 1.00, 1.00)
+REGION_TRIAL_TAB = (0.00, 0.55, 0.22, 0.72)
+REGION_START_BTN = (0.72, 0.72, 1.00, 0.86)
+REGION_CHAR_NAME = (0.60, 0.48, 0.95, 0.60)
 
 WAIT_HUB = 10.0
 WAIT_TRIAL = 12.0
@@ -218,7 +222,7 @@ def _read_char_name(logger: logging.Logger, hwnd, items) -> str:
     if not region:
         return ""
     left, top, width, height = region
-    rx0, ry0, rw, rh = REGION_CHAR_NAME
+    rx0, ry0, rx1, ry1 = REGION_CHAR_NAME
     best = ""
     best_conf = 0.0
     for it in items or []:
@@ -227,7 +231,7 @@ def _read_char_name(logger: logging.Logger, hwnd, items) -> str:
             continue
         fx = (it["center"][0] - left) / width if width else -1.0
         fy = (it["center"][1] - top) / height if height else -1.0
-        if rx0 <= fx <= rx0 + rw and ry0 <= fy <= ry0 + rh and conf > best_conf:
+        if rx0 <= fx <= rx1 and ry0 <= fy <= ry1 and conf > best_conf:
             best, best_conf = str(it.get("text") or ""), conf
     return best
 

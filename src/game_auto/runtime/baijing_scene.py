@@ -174,6 +174,28 @@ MAIL_PANEL_CLOSE = (0.938, 0.19)   # 面板右上 X（1800,204）@1919x1079 实�
 
 
 
+# ── 战斗结算「任务完成」页（2026-11-27 #522 补登记）────────────────────
+# 显影行动/自由贸易/光刻协议等「快速战斗」打完落在合并结算页（第1次/第2次
+# 两次战利品清单）。_handle_stage_battle_task 识别到结算页后只点了屏幕中心
+# （那只能翻标签），恢复认不出 → 白落一条假失败。实测步骤：点中心无效；
+# ESC 一次即离开结算页露出关卡页（22:49:27），随后由上层点关卡页左上
+# 「返回」回任务列表（22:49:42）。**结算页左上没有「返回」按钮**，退出走 ESC。
+# 「任务完成」「执行官等级」别处也可能同现，判页除 ≥2 独有词外必须带
+# 战利品/连战次数的硬证据（见 _battle_result_hit）。
+BATTLE_RESULT_MARKERS = ("任务完成", "获得战利品", "执行官等级", "第1次", "第2次")
+
+
+# ── 外勤作战中心（2026-11-27 #524 补登记）──────────────────────────────
+# 联合训练场侦察完点左上「返回」，防区页关掉后画面落在「外勤作战中心」
+# （物资筹备/漫巡回忆/分进合击战/联合训练场…作战地图），恢复认不出 → 假失败。
+# 实测 ESC 一次即回主界面（22:53:37）。特征避开任务列表同名行
+# （联合训练场/物资筹备/拟合回归）：标题「外勤作战中心」必须命中，
+# 再搭一个防区独有词才判页（铁律：单词不判页）。
+OUTER_COMBAT_MARKERS = ("外勤作战中心", "天隙勘测", "拟合回归", "分进合击战", "战斗教学")
+
+
+
+
 def _on_memory_detail_page(logger: logging.Logger, hwnd) -> bool:
     """是否处于烙痕详情页：右下「强化烙痕」模板优先，OCR 文字兜底。"""
     if (
@@ -520,6 +542,112 @@ def _scene_exit_mail_panel(logger: logging.Logger, hwnd, results, stop_check=Non
 
 
 
+def _battle_result_hit(logger, hwnd, results: List[Dict]) -> Optional[Dict]:
+    """战斗结算页 = 独有词 ≥2 且带战利品/连战证据（#522 实测帧 7 个区域全命中）。"""
+    texts = [str(r.get("text") or "") for r in (results or [])]
+    hits = [m for m in BATTLE_RESULT_MARKERS if any(m in t for t in texts)]
+    if len(hits) < 2 or not any(m in ("获得战利品", "第1次", "第2次") for m in hits):
+        return None
+    return {"text": "战斗结算:" + "+".join(hits), "confidence": 1.0, "center": (0, 0)}
+
+
+def _scene_exit_battle_result(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
+    """战斗结算页：按 ESC 退关（结算页左上没有返回按钮，点中心只能翻第X次标签）。"""
+    hit = _battle_result_hit(logger, hwnd, results)
+    if not hit:
+        return False
+    _focus_game_window(logger, hwnd)
+    pyautogui.press("escape")
+    logger.info(f"[白荆回廊·日常] 场景退出·战斗结算：按 ESC 退关（命中 {hit['text']}）")
+    time.sleep(1.2)
+    return True
+
+
+def _outer_combat_hit(logger, hwnd, results: List[Dict]) -> Optional[Dict]:
+    """外勤作战中心 = 标题「外勤作战中心」必须命中，且再搭 ≥1 个防区独有词。"""
+    texts = [str(r.get("text") or "") for r in (results or [])]
+    hits = [m for m in OUTER_COMBAT_MARKERS if any(m in t for t in texts)]
+    if len(hits) < 2 or "外勤作战中心" not in hits:
+        return None
+    return {"text": "外勤作战中心:" + "+".join(hits), "confidence": 1.0, "center": (0, 0)}
+
+
+def _scene_exit_outer_combat(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
+    """外勤作战中心：ESC 回主界面（2026-11-27 #524 实测一次即出）。"""
+    hit = _outer_combat_hit(logger, hwnd, results)
+    if not hit:
+        return False
+    _focus_game_window(logger, hwnd)
+    pyautogui.press("escape")
+    logger.info(f"[白荆回廊·日常] 场景退出·外勤作战中心：按 ESC 回主界面（命中 {hit['text']}）")
+    time.sleep(1.2)
+    return True
+
+
+# ── 关卡页 / 快速战斗设置弹窗（2026-11-28 #535 补登记）──────────────
+# 显影行动等关卡战斗打完、结算页 ESC 后，游戏会自动重弹「快速战斗设置」
+# 窗（指定次数重置回默认 1），取消/ESC 后画面停在关卡选择页——两张都没
+# 登记，recover_scene 连续落 unknown 假失败（153454 现场帧，实际靠
+# _return_to_task_panel 的 ESC/左上返回兜底自愈，白耗约 7s）。
+# 判据都是双证据：
+# - 弹窗：标题「快速战斗设置」独占——关卡页按钮只有「快速战斗」、弹窗
+#   说明文字「可以进行快速战斗」都不带「设置」后缀——再加弹窗内字段 ≥1
+#   防标题漏字时错挂；
+# - 关卡页：「进入关卡」+「行动力」双词（handlers 的 IMAGING_STAGE_MARKERS
+#   同款，2026-10-18 起无误判记录）；弹窗帧没有「进入关卡」，结算页两词
+#   全无，不会串。
+# 退出：弹窗点「取消」（OCR 优先，153454 实测比例兜底）；关卡页点左上
+# 「返回」回任务面板（15:35:09 日志实锤返回键在左上角）。
+QUICK_BATTLE_DIALOG_TITLE = "快速战斗设置"
+QUICK_BATTLE_DIALOG_AUX_MARKERS = ("指定次数", "当前关卡掉落信息")
+QUICK_BATTLE_DIALOG_CANCEL = (0.391, 0.797)   # 弹窗「取消」@ (751,860)@1919x1079
+STAGE_PAGE_MARKERS = ("进入关卡", "行动力")
+
+
+def _quick_battle_dialog_hit(logger, hwnd, results: List[Dict]) -> Optional[Dict]:
+    """快速战斗设置弹窗 = 标题「快速战斗设置」命中 + 弹窗内字段 ≥1（双证据）。"""
+    texts = [str(r.get("text") or "") for r in (results or [])]
+    if not any(QUICK_BATTLE_DIALOG_TITLE in t for t in texts):
+        return None
+    if not any(m in t for m in QUICK_BATTLE_DIALOG_AUX_MARKERS for t in texts):
+        return None
+    return {"text": "快速战斗设置弹窗", "confidence": 1.0, "center": (0, 0)}
+
+
+def _scene_exit_quick_battle_dialog(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
+    """快速战斗设置弹窗：点「取消」关闭（取消后回关卡页，由关卡页规则再退一层）。"""
+    hit = _quick_battle_dialog_hit(logger, hwnd, results)
+    if not hit:
+        return False
+    cancel = _pick_result(logger, hwnd, results, ("取消",), min_conf=0.55)
+    if cancel:
+        _pyautogui_click_guarded(*cancel["center"])
+        logger.info(f"[白荆回廊·日常] 场景退出·快速战斗设置：点「取消」@ {cancel['center']}")
+    else:
+        _click_ratio(logger, hwnd, QUICK_BATTLE_DIALOG_CANCEL, "快速战斗设置「取消」（比例兜底）")
+    time.sleep(1.2)
+    return True
+
+
+def _stage_page_hit(logger, hwnd, results: List[Dict]) -> Optional[Dict]:
+    """关卡选择页 = 「进入关卡」+「行动力」双词都在（单词在弹窗/其它页会串）。"""
+    texts = [str(r.get("text") or "") for r in (results or [])]
+    hits = [m for m in STAGE_PAGE_MARKERS if any(m in t for t in texts)]
+    if len(hits) < 2:
+        return None
+    return {"text": "关卡页:" + "+".join(hits), "confidence": 1.0, "center": (0, 0)}
+
+
+def _scene_exit_stage_page(logger: logging.Logger, hwnd, results, stop_check=None) -> bool:
+    """关卡选择页：点左上「返回」回任务面板（2026-11-28 15:35:09 日志实锤）。"""
+    if not _stage_page_hit(logger, hwnd, results):
+        return False
+    logger.info("[白荆回廊·日常] 场景退出·关卡页：点左上「返回」回任务面板")
+    return _exit_via_top_left_back(logger, hwnd, results, "关卡页")
+
+
+
+
 def _loading_screen_hit(logger, hwnd, results: List[Dict]) -> Optional[Dict]:
     """加载过场 = 中央 logo + 进度百分比，两样都在才算。
 
@@ -550,6 +678,15 @@ SCENE_RULES = (
     # 活动公告横幅在遮罩前：加载完它经常第一个弹出来挡路（11-04/11-06 两次实录）
     {"name": "活动公告", "markers": EVENT_ANNOUNCE_MARKERS, "min_conf": 0.55, "exit": _scene_exit_event_announce},
     {"name": "过场遮罩", "markers": ("点击屏幕继续",), "min_conf": 0.5, "exit": _scene_exit_overlay},
+    # 战斗结算在遮罩后：结算页若是带「点击屏幕继续」的变体，先让遮罩点掉再 Escape
+    {"name": "战斗结算", "markers": BATTLE_RESULT_MARKERS, "min_conf": 0.55,
+     "detector": _battle_result_hit, "exit": _scene_exit_battle_result},
+    # 快速战斗设置弹窗/关卡页：2026-11-28 补登记（#535，结算 ESC 后游戏自动
+    # 重弹设置窗、取消后停在关卡页，都曾落 unknown 假失败）
+    {"name": "快速战斗设置", "markers": (QUICK_BATTLE_DIALOG_TITLE,), "min_conf": 0.55,
+     "detector": _quick_battle_dialog_hit, "exit": _scene_exit_quick_battle_dialog},
+    {"name": "关卡页", "markers": STAGE_PAGE_MARKERS, "min_conf": 0.55,
+     "detector": _stage_page_hit, "exit": _scene_exit_stage_page},
     {"name": "计划等级提升", "markers": LEVEL_UP_MARKERS, "min_conf": 0.55,
      "exact_only": True, "exit": _scene_exit_level_up},
     {"name": "定巡之礼", "markers": EVENT_DIALOG_MARKERS, "min_conf": 0.55, "exit": _scene_exit_event_dialog},
@@ -563,6 +700,9 @@ SCENE_RULES = (
     # 邮件/公告面板：2026-11-22 补登记（#447/#456 盲点误开，见 MAIL_PANEL_MARKERS）
     {"name": "邮件/公告面板", "markers": MAIL_PANEL_MARKERS, "min_conf": 0.55,
      "detector": _mail_panel_hit, "exit": _scene_exit_mail_panel},
+    # 外勤作战中心：2026-11-27 补登记（#524，联合训练场侦察返回后漂到作战地图）
+    {"name": "外勤作战中心", "markers": OUTER_COMBAT_MARKERS, "min_conf": 0.55,
+     "detector": _outer_combat_hit, "exit": _scene_exit_outer_combat},
     # 好友页排最后：独有词多页少见，detector ≥2 闸在（2026-11-13 #282 取证驱动）
     {"name": "好友页", "markers": FRIEND_SCENE_MARKERS, "min_conf": 0.55,
      "detector": _friend_page_hit, "exit": _scene_exit_friend},

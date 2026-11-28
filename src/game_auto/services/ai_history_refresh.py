@@ -21,7 +21,8 @@
 
 线程模型：GUI 槽起 daemon 线程调 run_refresh()；本模块维护单飞锁
 （refresh 中再次触发直接拒绝）与最近一次结果状态（bridge getAiHistoryStatus
-读取）。每步 subprocess 隔离（超时/编码统一处理），进度经回调逐行外抛。
+读取）。每步 subprocess 隔离（超时/编码统一处理），进度文本只进日志，
+emit 回调只外抛状态 JSON（QML 侧直接 JSON.parse）。
 失败语义：①②③④⑤ 任一核心步骤失败 → 整链报失败（F: 旧页面/旧索引保留，
 不半新半旧）；②/②b 三个外部抓取器特殊，失败只降级为警告（沿用上次聚合）。
 """
@@ -91,16 +92,17 @@ def status_json() -> str:
 
 
 def _py(args: list, timeout: int, logger: logging.Logger, label: str,
-        emit: Callable[[str], None], env_extra: Optional[dict] = None) -> str:
+        env_extra: Optional[dict] = None) -> str:
     """跑一个 python 子进程步骤（venv 解释器、repo 根 cwd、UTF-8）。
 
-    返回 stdout（失败抛 RuntimeError 带 stderr 尾巴）。逐行打日志让 UI
-    日志面板能看到链路进展。
+    返回 stdout（失败抛 RuntimeError 带 stderr 尾巴）。进度文本只进日志——
+    aiHistoryChanged 是 JSON 状态通道，QML 侧直接 JSON.parse。
     """
     env = dict(os.environ)
     if env_extra:
         env.update(env_extra)
-    emit(f"[{label}] 运行 {os.path.basename(args[1]) if len(args) > 1 else label} ...")
+    logger.info("[AI对话史][%s] 运行 %s ...", label,
+                os.path.basename(args[-1]) if len(args) > 1 else label)
     proc = subprocess.run(
         args, cwd=PROJECT_ROOT, env=env, capture_output=True,
         encoding="utf-8", errors="replace", timeout=timeout,
@@ -154,7 +156,7 @@ def run_refresh(logger: logging.Logger, emit: Callable[[str], None]) -> Dict:
         emit(json.dumps(_snapshot(), ensure_ascii=False))
         _py([sys.executable, "-X", "utf8",
              os.path.join(PROJECT_ROOT, "tools", "catpaw_capture", "catpaw_fetch.py")],
-            _FETCH_TIMEOUT, logger, "妙手", emit)
+            _FETCH_TIMEOUT, logger, "妙手")
 
         # ② Kilo（可降级）
         degraded: list = []
@@ -163,11 +165,10 @@ def run_refresh(logger: logging.Logger, emit: Callable[[str], None]) -> Dict:
             emit(json.dumps(_snapshot(), ensure_ascii=False))
             _py([sys.executable, "-X", "utf8",
                  os.path.join(PROJECT_ROOT, "tools", "kilo_capture", "kilo_fetch.py")],
-                _FETCH_TIMEOUT, logger, "Kilo", emit)
+                _FETCH_TIMEOUT, logger, "Kilo")
         except (RuntimeError, subprocess.TimeoutExpired, OSError) as exc:
             degraded.append("Kilo")
             logger.warning("[AI对话史] Kilo 抓取失败（沿用上次聚合继续）: %s", str(exc)[:300])
-            emit(f"[Kilo] 抓取失败，沿用上次聚合：{str(exc)[:120]}")
 
         # ②b 本地抓取器：TeleAgent / 码道 / DSH / 小浣熊。单个桌面源不可用
         #    时沿用上次聚合，避免一个应用没开就阻断总库与 RAG 的其余更新。
@@ -183,19 +184,18 @@ def run_refresh(logger: logging.Logger, emit: Callable[[str], None]) -> Dict:
                 emit(json.dumps(_snapshot(), ensure_ascii=False))
                 _py([sys.executable, "-X", "utf8",
                      os.path.join(PROJECT_ROOT, "tools", *_sub)],
-                    _FETCH_TIMEOUT, logger, _label, emit)
+                    _FETCH_TIMEOUT, logger, _label)
             except (RuntimeError, subprocess.TimeoutExpired, OSError) as exc:
                 degraded.append(_label)
                 logger.warning("[AI对话史] %s 抓取失败（沿用上次聚合继续）: %s",
                                _label, str(exc)[:300])
-                emit(f"[{_label}] 抓取失败，沿用上次聚合：{str(exc)[:120]}")
 
         # ③ build.py 重导（串链内含 recover/length/report/inject）
         _set({"step": "重导总库"})
         emit(json.dumps(_snapshot(), ensure_ascii=False))
         build_out = _py(
             [sys.executable, "-X", "utf8", BUILD_PY],
-            _BUILD_TIMEOUT, logger, "重导", emit,
+            _BUILD_TIMEOUT, logger, "重导",
             env_extra={"AI_ORGANIZE_OUTDIR": STAGE_DIR, "PYTHONIOENCODING": "utf-8"},
         )
         m = re.search(r'"sessions":\s*(\d+)', build_out)
@@ -214,7 +214,7 @@ def run_refresh(logger: logging.Logger, emit: Callable[[str], None]) -> Dict:
         emit(json.dumps(_snapshot(), ensure_ascii=False))
         rag_out = _py([sys.executable, "-X", "utf8",
                        os.path.join(PROJECT_ROOT, "tools", "ai_history_rag.py"), "build"],
-                      _RAG_TIMEOUT, logger, "RAG", emit,
+                      _RAG_TIMEOUT, logger, "RAG",
                       env_extra={"PYTHONIOENCODING": "utf-8"})
         m_blk = re.search(r"切块：\s*([\d,]+)", rag_out)
         m_idx = re.search(r"index\.bin\s*(\d+)MB", rag_out)

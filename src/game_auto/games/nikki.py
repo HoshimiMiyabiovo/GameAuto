@@ -41,9 +41,15 @@ PROFILE = GameProfile(
         "whimbox_log_monitor": {
             "log_dir": "",
             "file_pattern": "whimbox-*.log",
+            # 2026-11-28 实锤：whimbox 跑挂时 main.py 只打
+            # 「一条龙任务完成: 前往页面 「地图」 失败」，没有「任务结果如下：」汇总块，
+            # 旧标记只认汇总行 → 监控永不触发 → 游戏不关、GUI 空等 60 分钟记成「超时」
+            # （实际脚本 4 分钟就退了）。通用前缀兜底：正常结束与异常结束都算「跑完了」，
+            # 成败交给 whimbox_daily_parser + _verify_script_log_result 复核。
             "completion_markers": [
                 "✅ 一条龙结束",
                 "一条龙任务完成: 任务结果如下：",
+                "一条龙任务完成: ",
             ],
             "poll_interval": 2.0,
             "encoding": "utf-8",

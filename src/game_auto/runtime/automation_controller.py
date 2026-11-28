@@ -1237,10 +1237,17 @@ class AutomationController:
 
     @classmethod
     def _module_mode_active(cls, config: dict) -> bool:
-        """模块模式只对 ok-ww 生效；其它脚本即使误配也不改走旧链路。"""
+        """模块模式只对已接入的 ok-script 工程生效（ok-ww / ok-hna）。"""
         return bool(cls._module_mode_config(config).get("enabled")) and str(
             config.get("script_name") or ""
-        ) == "ok-ww"
+        ) in ("ok-ww", "ok-hna")
+
+    @staticmethod
+    def _is_admin_process() -> bool:
+        try:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            return False
 
     def _cleanup_stale_module_runners(self) -> None:
         """清掉上一次异常退出残留的 ok-ww module runner（python.exe）。"""
@@ -1260,21 +1267,23 @@ class AutomationController:
             cmdline = " ".join(str(part) for part in (proc.info.get("cmdline") or []))
             if "okww_module" not in cmdline or "runner.py" not in cmdline:
                 continue
-            self.logger.warning("[鸣潮] 清理残留 ok-ww module runner: PID=%s", pid)
+            self.logger.warning("[模块] 清理残留 runner: PID=%s", pid)
             try:
                 ProcessSupervisor.safe_kill_process(pid)
             except Exception as exc:  # noqa: BLE001
-                self.logger.warning("[鸣潮] 清理残留 runner 失败: %s", exc)
+                self.logger.warning("[模块] 清理残留 runner 失败: %s", exc)
 
     def _on_module_event(self, event: dict) -> None:
         if not isinstance(event, dict):
             return
         name = str(event.get("event") or "")
+        display = getattr(self, "_module_display", None) or "模块"
         if name == "task_started":
-            self.logger.info("[鸣潮] ok-ww 模块任务开始: %s", event.get("task"))
+            self.logger.info("[%s] 模块任务开始: %s", display, event.get("task"))
         elif name == "task_finished":
             self.logger.info(
-                "[鸣潮] ok-ww 模块任务结束: %s success=%s stopped=%s duration=%ss error=%s",
+                "[%s] 模块任务结束: %s success=%s stopped=%s duration=%ss error=%s",
+                display,
                 event.get("task"),
                 event.get("success"),
                 event.get("stopped"),
@@ -1288,17 +1297,26 @@ class AutomationController:
         game_display: str,
         launch_started_at: Optional[float] = None,
     ) -> Tuple[bool, Optional[int]]:
-        """启动常驻 headless ok-ww runner，并异步执行第一阶段 DailyTask。
+        """启动常驻 headless ok-script runner，并异步执行模块任务。
 
-        与旧链路（ShellExecute ok-ww.exe）并列：只有 app_config 的
-        module_mode.enabled=true 时才会走到这里。runner 独立进程运行，
-        game_auto 继续负责看门狗、停止键和进程收尾。
+        ok-ww 跑 DailyTask，ok-hna 跑 DailyActivityTask（含启动/日常/福利）；
+        只有 app_config 的 module_mode.enabled=true 时才会走到这里。runner
+        独立进程运行，game_auto 继续负责看门狗、停止键和进程收尾。
         """
         from .okww_module_session import OkwwModuleSession
 
         self._cleanup_stale_module_runners()
         module_cfg = self._module_mode_config(config)
         task_name = str(module_cfg.get("task") or "DailyTask")
+        script_label = str(config.get("script_name") or "module")
+        self._module_display = f"{game_display}({script_label})"
+        if bool(module_cfg.get("require_admin")) and not self._is_admin_process():
+            self.logger.error(
+                "[%s] 需要管理员权限（游戏以管理员运行，ok-hna 的 Pynput 输入需要同级完整性）；"
+                "请用管理员启动 GameAuto 后再跑",
+                self._module_display,
+            )
+            return False, None
         timeout = float(
             module_cfg.get("timeout")
             or config.get("timeouts", {}).get("monitor", 1800)
@@ -1314,11 +1332,11 @@ class AutomationController:
             session.start(stop_check=self._task_abort_requested)
         except Exception as exc:  # noqa: BLE001
             self.logger.error(
-                "[%s] ok-ww 模块 runner 启动失败: %s", game_display, exc
+                "[%s] 模块 runner 启动失败: %s", self._module_display, exc
             )
             if session is not None:
                 try:
-                    self.logger.error("[%s] runner 日志尾部:\n%s", game_display, session.log_tail(30))
+                    self.logger.error("[%s] runner 日志尾部:\n%s", self._module_display, session.log_tail(30))
                 except Exception:
                     pass
                 try:
@@ -1330,8 +1348,8 @@ class AutomationController:
         self._module_session = session
         self._module_task_result = None
         self.logger.info(
-            "[%s] ok-ww 模块 runner 已启动 (PID=%s, task=%s, timeout=%ss, close_game=%s)",
-            game_display,
+            "[%s] 模块 runner 已启动 (PID=%s, task=%s, timeout=%ss, close_game=%s)",
+            self._module_display,
             session.pid,
             task_name,
             timeout,
@@ -1342,7 +1360,7 @@ class AutomationController:
         self._click_game_window_after_launch(
             config,
             game_display,
-            click_reason="ok-ww 模块 runner 启动后切回游戏窗口",
+            click_reason="模块 runner 启动后切回游戏窗口",
         )
         initial_wait = max(0.0, float(config.get("initial_wait", 5) or 0))
         if initial_wait:
@@ -1388,12 +1406,12 @@ class AutomationController:
                 error=f"{type(exc).__name__}: {exc}",
                 duration=time.time() - started,
             )
-            self.logger.error("[%s] ok-ww 模块任务异常: %s", game_display, exc)
+            self.logger.error("[%s] 模块任务异常: %s", game_display, exc)
         self._module_task_result = result
         if result.success:
             metrics = result.humanize if isinstance(result.humanize, dict) else {}
             self.logger.info(
-                "[%s] ok-ww 模块任务成功: %s (%.1fs, clicks=%s, target_cps=%s)",
+                "[%s] 模块任务成功: %s (%.1fs, clicks=%s, target_cps=%s)",
                 game_display,
                 result.task,
                 result.duration,
@@ -1402,7 +1420,7 @@ class AutomationController:
             )
         else:
             self.logger.warning(
-                "[%s] ok-ww 模块任务失败: %s (%.1fs) %s",
+                "[%s] 模块任务失败: %s (%.1fs) %s",
                 game_display,
                 result.task,
                 result.duration,
@@ -1422,7 +1440,7 @@ class AutomationController:
         try:
             session.stop()
         except Exception as exc:  # noqa: BLE001
-            self.logger.warning("[鸣潮] 停止 ok-ww 模块 runner 失败: %s", exc)
+            self.logger.warning("[模块] 停止模块 runner 失败: %s", exc)
 
     def shutdown_module_runtime(self) -> None:
         """退出时显式回收 ok-ww 常驻 module runner（2026-11-16 退出漏杀实锤）。
@@ -1436,11 +1454,11 @@ class AutomationController:
         try:
             self._stop_module_session()
         except Exception as exc:  # noqa: BLE001
-            self.logger.warning("[鸣潮] 退出回收 module 会话异常: %s", exc)
+            self.logger.warning("[模块] 退出回收 module 会话异常: %s", exc)
         try:
             self._cleanup_stale_module_runners()
         except Exception as exc:  # noqa: BLE001
-            self.logger.warning("[鸣潮] 退出清理残留 runner 异常: %s", exc)
+            self.logger.warning("[模块] 退出清理残留 runner 异常: %s", exc)
 
     def _monitor_module_task(
         self,
@@ -1451,7 +1469,7 @@ class AutomationController:
         launch_started_at: Optional[float] = None,
         runtime_processes: Optional[Dict[str, ProcessSnapshot]] = None,
     ) -> Tuple[bool, int, str]:
-        """等待 ok-ww 模块任务结束；失败/超时/用户停止都做完整收尾。"""
+        """等待模块任务结束；失败/超时/用户停止都做完整收尾。"""
         runtime_processes = runtime_processes if runtime_processes is not None else {}
         game_display = get_app_display_name(app_name)
         module_cfg = self._module_mode_config(config)
@@ -1468,10 +1486,10 @@ class AutomationController:
             snapshot = ProcessSupervisor.find_process_snapshot(game_name, exact_name=True)
             if snapshot is not None:
                 runtime_processes["game"] = snapshot
-                self._log_detected_process("游戏进程", snapshot, source="ok-ww 模块任务")
+                self._log_detected_process("游戏进程", snapshot, source="模块任务")
             else:
                 self.logger.error(
-                    "[%s] ok-ww 模块任务开始前未找到游戏进程: %s",
+                    "[%s] 模块任务开始前未找到游戏进程: %s",
                     game_display,
                     game_name,
                 )
@@ -1479,13 +1497,13 @@ class AutomationController:
         while True:
             duration = int(time.time() - start)
             if self._task_abort_requested():
-                self.logger.info("[%s] 收到停止请求，结束 ok-ww 模块任务", game_display)
+                self.logger.info("[%s] 收到停止请求，结束模块任务", game_display)
                 session = self._module_session
                 if session is not None:
                     try:
                         session.stop_task()
                     except Exception as exc:
-                        self.logger.warning("[%s] 停止 ok-ww 模块任务失败: %s", game_display, exc)
+                        self.logger.warning("[%s] 停止模块任务失败: %s", game_display, exc)
                 self._wait_module_thread(30)
                 self._stop_module_session()
                 self._kill_related_processes(
@@ -1500,7 +1518,7 @@ class AutomationController:
             if thread is None or not thread.is_alive():
                 result = self._module_task_result
                 if result is None:
-                    self.logger.error("[%s] ok-ww 模块任务线程结束但没有结果", game_display)
+                    self.logger.error("[%s] 模块任务线程结束但没有结果", game_display)
                     self._stop_module_session()
                     self._kill_related_processes(
                         config,
@@ -1515,7 +1533,7 @@ class AutomationController:
                     "user_stop" if result.stopped else "module_error"
                 )
                 self.logger.info(
-                    "[%s] ok-ww 模块任务收尾: success=%s reason=%s duration=%.1fs",
+                    "[%s] 模块任务收尾: success=%s reason=%s duration=%.1fs",
                     game_display,
                     success,
                     end_reason,
@@ -1533,7 +1551,7 @@ class AutomationController:
             session = self._module_session
             if session is not None and not session.is_alive():
                 self.logger.error(
-                    "[%s] ok-ww 模块 runner 意外退出，提前结束任务\n%s",
+                    "[%s] 模块 runner 意外退出，提前结束任务\n%s",
                     game_display,
                     session.log_tail(30),
                 )
@@ -1548,7 +1566,7 @@ class AutomationController:
 
             if duration >= timeout:
                 self.logger.warning(
-                    "[%s] ok-ww 模块任务超时 (%ss)，强制停止", game_display, int(timeout)
+                    "[%s] 模块任务超时 (%ss)，强制停止", game_display, int(timeout)
                 )
                 if session is not None:
                     try:
@@ -2246,7 +2264,7 @@ class AutomationController:
                 success = duration >= MIN_RUN_TIME and not self._task_abort_requested()
                 return success, status, duration
 
-            # 监控游戏进程 / ok-ww 模块任务
+            # 监控游戏进程 / 模块任务
             if self._module_mode_active(config):
                 monitor_result, duration, end_reason = self._monitor_module_task(
                     app_name,
@@ -2277,10 +2295,10 @@ class AutomationController:
                 elif result is not None and result.error:
                     status = result.error
                 else:
-                    status = "ok-ww 模块任务失败"
+                    status = "模块任务失败"
                 self.logger.info(
                     f"\n{'='*40}\n[{game_display}] 任务结束: {status} "
-                    f"(模块: {getattr(result, 'task', 'ok-ww')}, 运行时间: {duration//60}分{duration%60}秒)\n{'='*40}"
+                    f"(模块: {getattr(result, 'task', script_display)}, 运行时间: {duration//60}分{duration%60}秒)\n{'='*40}"
                 )
                 return monitor_result and not self._task_abort_requested(), status, duration
 
@@ -2341,7 +2359,7 @@ class AutomationController:
                 try:
                     self._module_session.stop()
                 except Exception as exc:  # noqa: BLE001
-                    self.logger.warning("[%s] 停止 ok-ww 模块 runner 失败: %s", game_display, exc)
+                    self.logger.warning("[%s] 停止模块 runner 失败: %s", game_display, exc)
                 self._module_session = None
                 self._module_task_thread = None
                 self._module_task_result = None

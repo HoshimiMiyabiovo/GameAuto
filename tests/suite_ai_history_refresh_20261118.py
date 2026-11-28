@@ -15,7 +15,10 @@ RAG 重建），编排逻辑在 services/ai_history_refresh.py。
 [4] 成功路径：build stdout 的 sessions 数与 RAG stdout 的切块/索引数解析进
     msg；COPY_FILES 逐个经 _copy_to_f（shutil 直写——管理员 GUI 直写 F:，
     2026-11-18 提权探针实锤，非管理员全被拦）；
-[5] 超时收口：TimeoutExpired → last_ok=False 不崩。
+[5] 超时收口：TimeoutExpired → last_ok=False 不崩；
+[6] emit 契约（2026-11-28）：aiHistoryChanged 只承载 JSON——此前抓取进度
+    文本 `[X] 运行 ...` 混进信号，QML 侧每条都刷 JSON.parse 报错，看似整链
+    失败；现进度只进日志、_py 不再接 emit 回调。
 
 跑法：.venv\\Scripts\\python.exe -m pytest tests\\suite_ai_history_refresh_20261118.py -q
 """
@@ -117,7 +120,7 @@ def test_failure_collect(tmp_path):
     os.makedirs(ahr.STAGE_DIR, exist_ok=True)
     (Path(ahr.STAGE_DIR) / "AI对话全览.html").write_text("x", encoding="utf-8")
 
-    def fake_py(args, timeout, logger, label, emit, env_extra=None):
+    def fake_py(args, timeout, logger, label, env_extra=None):
         if label == "重导":
             raise RuntimeError("boom 重导失败")
         return ""
@@ -142,7 +145,7 @@ def test_kilo_degrade(tmp_path):
     mk = Monkey()
     mk.setattr(ahr, "STAGE_DIR", str(tmp_path / "stage"))
 
-    def fake_py(args, timeout, logger, label, emit, env_extra=None):
+    def fake_py(args, timeout, logger, label, env_extra=None):
         if label == "Kilo":
             raise RuntimeError("内核没开")
         if label == "重导":
@@ -176,7 +179,7 @@ def test_teleagent_codearts_in_chain(tmp_path):
     mk.setattr(ahr, "STAGE_DIR", str(tmp_path / "stage"))
     labels, paths = [], {}
 
-    def fake_py(args, timeout, logger, label, emit, env_extra=None):
+    def fake_py(args, timeout, logger, label, env_extra=None):
         labels.append(label)
         if label in ("TeleAgent", "码道", "DSH", "小浣熊", "千问办公"):
             paths[label] = args[-1]
@@ -230,7 +233,7 @@ def test_timeout_collect(tmp_path):
     mk = Monkey()
     mk.setattr(ahr, "STAGE_DIR", str(tmp_path / "stage"))
 
-    def fake_py(args, timeout, logger, label, emit, env_extra=None):
+    def fake_py(args, timeout, logger, label, env_extra=None):
         raise __import__("subprocess").TimeoutExpired(cmd=args, timeout=timeout)
 
     mk.setattr(ahr, "_py", fake_py)
@@ -251,6 +254,18 @@ def test_copy_helper(tmp_path):
     check("shutil 直写落盘", (dst_dir / "a.html").read_text(encoding="utf-8") == "hello")
 
 
+def test_emit_payload_contract():
+    print("[6] aiHistoryChanged 只承载 JSON")
+    src = Path(ahr.__file__).read_text(encoding="utf-8")
+    bad = [ln.strip() for ln in src.splitlines()
+           if 'emit(f"' in ln or "emit(f'" in ln]
+    check("服务层无文本外抛 emit(f\"...\")", not bad, bad)
+    import inspect
+    check("_py 不再接收 emit 回调",
+          "emit" not in inspect.signature(ahr._py).parameters,
+          inspect.signature(ahr._py))
+
+
 def main():
     test_state_and_singleflight()
     with tempfile.TemporaryDirectory() as td:
@@ -259,6 +274,7 @@ def main():
         test_teleagent_codearts_in_chain(Path(td))
         test_timeout_collect(Path(td))
         test_copy_helper(Path(td))
+    test_emit_payload_contract()
     print("-" * 60)
     if FAILURES:
         print(f"FAILED {len(FAILURES)}: {FAILURES}")

@@ -433,3 +433,21 @@
   "监控不可用"（原神走 fail-closed，暖暖走 monitor 超时兜底）。
 - 回归：`tests/suite_nte_launch_heartbeat_20261105.py`（AST 断言 beat 在 sleep
   之前、动态 mock 跑 3 轮验证 beat 次数、预算不匹配证据、补跑队列口径）。
+
+### ok-ww 模块 runner 的任务护栏（2026-11-28）
+
+- **焦点守护**：任务在跑、游戏窗口不是前台时，runner 每 `FOCUS_RETRY_SEC`（默认
+  15s）自动切前台：先 `hwnd_window.bring_to_front()`，失败再走 AttachThreadInput
+  版 `_force_foreground`。背景：ok-ww 只在交互线程启动时置顶一次，游戏热更重启
+  换了 hwnd 后不会再置顶；而它的输入层有前台门禁（非前台鼠标直接跳过并打
+  `window in background, not clickable`、按键打 ERROR），会静默走不动。
+- **停滞判死**：任务在跑、但 `<ok-ww>/logs/ok-script.log` 连续 `STALL_LOG_SEC`
+  （默认 300s，`GAMEAUTO_OKWW_STALL_LOG_SEC` 可调）无新增 → 先
+  `faulthandler.dump_traceback(all_threads=True)` 把全线程栈打进
+  `data/logs/okww_module_runner.log` 留现场，再 `stop_current_task()`；任务以
+  `error=ok-ww 日志 Ns 无新增（疑似卡死…）` 返回失败，批次可继续/重试。
+  背景：11-28 19:29 鸣潮热更重启后 ok-ww 卡在 `start_device()`（`start_device end`
+  从未出现）静默 23 分钟——不是等主界面（`wait_until` 超时会打日志），是重建
+  捕获的无超时调用堵死。
+- 两个阈值都只作用于「任务 running」期间；等游戏启动阶段由 GUI 侧启动超时兜底。
+- 回归：`tests/suite_okww_stall_focus_guard_20261128.py`（已登记 ci 清单）。

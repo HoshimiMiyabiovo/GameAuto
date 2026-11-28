@@ -82,6 +82,9 @@ Item {
             root.failuresLoading = false
         }
         function onAiHistoryChanged(jsonStr) {
+            // 状态通道只承载 JSON；非 JSON 负载（如进度文本）直接忽略，
+            // 避免在控制台刷「解析失败」假警报。
+            if (!jsonStr || jsonStr.charAt(0) !== "{") return
             try {
                 var d = JSON.parse(jsonStr || "{}")
                 root.aiHistRunning = !!d.running

@@ -43,6 +43,10 @@ REGISTRY = {
     ("qoder_claim.py", "_ensure_visible"): "动作函数（聚焦/置前，非页面判定）",
     ("codearts_claim.py", "_ensure_visible"): "动作函数（聚焦/置前，非页面判定）",
     ("astudio_claim.py", "_ensure_visible"): "动作函数（聚焦/置前，非页面判定）",
+    ("dumate_claim.py", "_ensure_visible"): "动作函数（聚焦 + 遮挡率复核，非页面判定）",
+    # 2026-11-26 DuMate 每日签到：积分页专属文案（积分账单/赠送积分/每日签到/
+    # 快来签到领积分啦），用于区分「菜单还开着」与「已进积分页」
+    ("dumate_claim.py", "signin_page_visible"): "积分页专属文案任一命中（SIGNIN_PAGE_TEXTS；首页/菜单态均无）",
     # 2026-11-16 码道Agent Space：面板权益状态判定（非页面判定）
     ("codearts_claim.py", "pending_subtitle_visible"): "面板「活动福利」行的「待领取」副标题 OCR 子串（权益状态专属词，主界面无此词）",
     ("hsr_resin_craft.py", "detail_visible"): "双证据：商品名 + 「获得途径/消耗品」",

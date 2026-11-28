@@ -43,9 +43,11 @@ class OkwwModulePaths:
     python_exe: Path
     runtime_root: Path
     runner_path: Path
-    humanize_config: Path
+    humanize_config: Optional[Path]
     log_path: Path
     ready_path: Path
+    runtime_name: str = "ok-ww"
+    extra_env: Dict[str, str] = field(default_factory=dict)
 
 
 def _as_module_config(app_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -79,7 +81,8 @@ def _resolve_paths(app_config: Dict[str, Any], module_cfg: Dict[str, Any]) -> Ok
         or ""
     ).strip()
     if not script_exe:
-        raise OkwwModuleError("ok-ww 可执行文件路径缺失（app_config._discovery.script_exe_path）")
+        raise OkwwModuleError(
+            "脚本可执行文件路径缺失（module_mode.script_exe / app_config._discovery.script_exe_path）")
     install_root = Path(script_exe).resolve().parent
     app_dir = _find_app_dir(install_root)
 
@@ -87,29 +90,41 @@ def _resolve_paths(app_config: Dict[str, Any], module_cfg: Dict[str, Any]) -> Ok
         str(module_cfg.get("python_exe") or app_dir / "python" / "python.exe")
     ).resolve()
     if not python_exe.is_file():
-        raise OkwwModuleError(f"ok-ww bundled python not found: {python_exe}")
+        raise OkwwModuleError(f"module runtime python not found: {python_exe}")
 
     runtime_root = Path(
         str(module_cfg.get("runtime_root") or DATA_DIR / "okww" / "src")
     ).resolve()
-    if not (runtime_root / "main.py").is_file():
+    # ok-ww 用 main.py 作入口；ok-hna 没有 main.py，以 config.py 为根。
+    has_entry = (runtime_root / "main.py").is_file() or (runtime_root / "config.py").is_file()
+    if not has_entry:
         fallback = (app_dir / "working").resolve()
-        if (fallback / "main.py").is_file():
+        if (fallback / "main.py").is_file() or (fallback / "config.py").is_file():
             runtime_root = fallback
         else:
             raise OkwwModuleError(
-                f"ok-ww runtime not found: {runtime_root} (also tried {fallback})"
+                f"ok-script runtime not found: {runtime_root} (also tried {fallback})"
             )
 
     runner_path = Path(
         str(module_cfg.get("runner_path") or TOOLS_DIR / "okww_module" / "runner.py")
     ).resolve()
     if not runner_path.is_file():
-        raise OkwwModuleError(f"ok-ww module runner not found: {runner_path}")
+        raise OkwwModuleError(f"module runner not found: {runner_path}")
 
-    humanize_config = Path(
-        str(module_cfg.get("humanize_config") or DATA_DIR / "okww" / "humanize.json")
-    ).resolve()
+    runtime_name = str(
+        module_cfg.get("runtime_name") or app_config.get("script_name") or "ok-ww"
+    )
+    # humanize 是 ok-ww 的拟人化点击插件；历史配置里 humanize_config 为空表示
+    # 「用默认路径」，ok-ww 继续保留这个兼容。ok-hna 等其它工程空串表示不用，
+    # 不能回退到 ok-ww 的配置，否则点击节奏会被意外改写。
+    if "humanize_config" in module_cfg:
+        raw_humanize = str(module_cfg.get("humanize_config") or "").strip()
+        if not raw_humanize and runtime_name == "ok-ww":
+            raw_humanize = str(DATA_DIR / "okww" / "humanize.json")
+    else:
+        raw_humanize = str(DATA_DIR / "okww" / "humanize.json")
+    humanize_config = Path(raw_humanize).resolve() if raw_humanize else None
     log_path = Path(
         str(module_cfg.get("log_path") or LOG_DIR / "okww_module_runner.log")
     ).resolve()
@@ -119,6 +134,15 @@ def _resolve_paths(app_config: Dict[str, Any], module_cfg: Dict[str, Any]) -> Ok
             or DATA_DIR / "okww" / "run" / f"runner_{os.getpid()}_{int(time.time() * 1000)}.json"
         )
     ).resolve()
+    extra_env: Dict[str, str] = {}
+    for key, env_key in (
+        ("stall_log_sec", "GAMEAUTO_OKWW_STALL_LOG_SEC"),
+        ("focus_retry_sec", "GAMEAUTO_OKWW_FOCUS_RETRY_SEC"),
+        ("idle_exit_sec", "GAMEAUTO_OKWW_IDLE_EXIT_SEC"),
+    ):
+        value = module_cfg.get(key)
+        if value not in (None, ""):
+            extra_env[env_key] = str(value)
     return OkwwModulePaths(
         python_exe=python_exe,
         runtime_root=runtime_root,
@@ -126,6 +150,8 @@ def _resolve_paths(app_config: Dict[str, Any], module_cfg: Dict[str, Any]) -> Ok
         humanize_config=humanize_config,
         log_path=log_path,
         ready_path=ready_path,
+        runtime_name=runtime_name,
+        extra_env=extra_env,
     )
 
 
@@ -168,7 +194,7 @@ class OkwwModuleSession:
     ) -> "OkwwModuleSession":
         module_cfg = _as_module_config(app_config)
         if require_enabled and not bool(module_cfg.get("enabled", False)):
-            raise OkwwModuleError("ok-ww module_mode is not enabled")
+            raise OkwwModuleError("module_mode is not enabled")
         paths = _resolve_paths(app_config, module_cfg)
         return cls(
             paths,
@@ -200,6 +226,8 @@ class OkwwModuleSession:
             str(self.paths.runner_path),
             "--okww-root",
             str(self.paths.runtime_root),
+            "--runtime-name",
+            self.paths.runtime_name,
             "--host",
             self.host,
             "--port",
@@ -210,9 +238,9 @@ class OkwwModuleSession:
             str(self.paths.ready_path),
             "--log",
             str(self.paths.log_path),
-            "--humanize-config",
-            str(self.paths.humanize_config),
         ]
+        if self.paths.humanize_config is not None:
+            command.extend(["--humanize-config", str(self.paths.humanize_config)])
         env = os.environ.copy()
         # 剥掉继承来的项目 src/ 路径：GUI 由 start_gui_admin.bat 启动时把
         # <项目>/src 塞进 PYTHONPATH，runner 用 ok-ww 内嵌 python 跑，一旦继承
@@ -229,6 +257,7 @@ class OkwwModuleSession:
         env["PYTHONPATH"] = os.pathsep.join(_kept)
         env.setdefault("PYTHONIOENCODING", "utf-8")
         env.setdefault("PYTHONUTF8", "1")
+        env.update(self.paths.extra_env)
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self._proc = subprocess.Popen(
             command,

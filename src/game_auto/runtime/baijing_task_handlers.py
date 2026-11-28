@@ -231,6 +231,13 @@ TEA_DRINK_WAIT_SEC = 10.0
 TEA_DRINK_POLL_SEC = 20.0
 
 
+# 每杯的硬上限：画面一直在变（对话在往后推）就允许一直点，只有连续
+# TEA_DRINK_POLL_SEC 秒画面不变才判卡住。2026-11-28 #533/#534 实锤：第 2 杯时
+# 尤尼的台词有好几屏（153231「前几天，我跟随β小队…」→ 153318「我感觉有点奇怪…」），
+# 点对话框确实在推进，但旧的 20s 预算在对话中途就判「未轮询到喝茶按钮」。
+TEA_DRINK_POLL_MAX_SEC = 90.0
+
+
 # 茶憩要经过游戏加载：2026-10-20 实测 ASHECHOES 加载条从 47% 到 99% 超过 20s，
 # 原先 10s 的等待会把“还在加载”误判成“没进角色选择页”，随后点返回取消进入。
 TEA_SELECT_TIMEOUT_SEC = 45.0
@@ -1040,6 +1047,39 @@ def _tea_texts(results) -> List[str]:
     return texts
 
 
+class _TeaProgressTracker:
+    """茶憩对话推进预算：画面文字一变就续命，连续 idle 秒不变才判卡住。
+
+    2026-11-28 #533/#534：第 2 杯时尤尼的台词有好几屏，点对话框确实在往后推，
+    但旧的「每杯 20s」预算在对话中途就到点，脚本判「未轮询到喝茶按钮」并取证
+    失败（153318 截图里仍在对话）。现在只要画面还在变就继续点，硬上限 max_total。
+    """
+
+    def __init__(
+        self,
+        idle: float = TEA_DRINK_POLL_SEC,
+        max_total: float = TEA_DRINK_POLL_MAX_SEC,
+        now_fn=None,
+    ) -> None:
+        self.idle = float(idle)
+        self.max_total = float(max_total)
+        self._now = now_fn or time.monotonic
+        self._start = self._now()
+        self._last_change = self._start
+        self._prev: Optional[Tuple[str, ...]] = None
+
+    def feed(self, texts) -> bool:
+        """返回 True=还在推进（继续点），False=静默超时/超硬上限。"""
+        now = self._now()
+        sig = tuple(sorted(texts))
+        if sig != self._prev:
+            self._prev = sig
+            self._last_change = now
+        if now - self._start >= self.max_total:
+            return False
+        return (now - self._last_change) < self.idle
+
+
 class _TeaFreezeTracker:
     """茶憩场景冻结判定：同一帧文字不变累计到 TEA_FREEZE_SEC 即判卡死。"""
 
@@ -1333,7 +1373,9 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
         #     （饮料/摘要/气泡/冻结共用当帧结果）
         drink_hit = None
         summary_in_round = False
-        deadline = time.time() + TEA_DRINK_POLL_SEC
+        # 2026-11-28：预算改成"还在推进就续命"——对话多屏时不再中途判失败
+        progress = _TeaProgressTracker()
+        deadline = time.time() + TEA_DRINK_POLL_MAX_SEC
         while time.time() < deadline:
             if _stopped(stop_check):
                 return False
@@ -1361,8 +1403,16 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
                 time.sleep(2.5)
                 continue
             # 2026-11-22：同一帧 30s 不变 → 卡死（11-08 起天天卡在「怎么了？」）
-            if freeze.feed(_tea_texts(results)):
+            texts = _tea_texts(results)
+            if freeze.feed(texts):
                 frozen = True
+                break
+            # 2026-11-28：画面还在变（对话在往后推）就继续点；连续 idle 秒不变才收
+            if not progress.feed(texts):
+                logger.info(
+                    f"[白荆回廊·日常] 第 {rnd} 杯：画面 {TEA_DRINK_POLL_SEC:.0f}s 未推进，"
+                    f"停止点对话框（累计点对话框 {dialogue_clicks} 次）"
+                )
                 break
             action = _tea_advance_once(logger, hwnd, results, scene_seen)
             if action == "bubble":
@@ -1392,8 +1442,9 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
             # 2026-11-22 用户拍板：轮询没命中就当场取证，别等退出后画面已不是茶憩
             _record_step_failure(
                 logger, hwnd, "午后茶憩",
-                f"第 {rnd} 杯：{TEA_DRINK_POLL_SEC:.0f}s 内未出现「喝茶/再来一杯」"
-                f"（点气泡 {bubble_clicks} 次、点对话框 {dialogue_clicks} 次）",
+                f"第 {rnd} 杯：{TEA_DRINK_POLL_MAX_SEC:.0f}s 内未出现「喝茶/再来一杯」"
+                f"（画面推进会自动续命，静默 {TEA_DRINK_POLL_SEC:.0f}s 才收；"
+                f"点气泡 {bubble_clicks} 次、点对话框 {dialogue_clicks} 次）",
             )
         # 4c) 每杯之间等待一段时间（用户：等待一段时间后再来一杯）
         if rnd < TEA_DRINK_ROUNDS:
@@ -1401,7 +1452,7 @@ def _handle_tea_break_task(logger: logging.Logger, hwnd, stop_check=None) -> boo
     # 5) 等「茶憩结束」摘要：边推进边等（旧实现纯等待 45s，卡在气泡上必然超时）
     if not summary_seen and not frozen:
         summary_seen, frozen = _drive_tea_summary(
-            logger, hwnd, scene_seen, timeout=45.0,
+            logger, hwnd, scene_seen, timeout=90.0,
             stop_check=stop_check, freeze=freeze,
         )
     # 6) 判成功/失败：只有「茶憩结束」摘要算完成证据。

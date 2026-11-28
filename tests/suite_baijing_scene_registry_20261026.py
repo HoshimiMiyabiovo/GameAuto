@@ -26,6 +26,14 @@
     「键领取/赠送」），退出点左上「返回」零 ESC
 13. 2026-11-22 #447/#456：邮件/公告面板登记（角色试玩盲点 P_BACK 误开，
     独有词 ≥2 判页），退出点面板右上 X，零 ESC
+14. 2026-11-27 #522/#524：战斗结算「任务完成」页（ESC 退关；硬证据 =
+    战利品/连战次数，防「任务完成+执行官等级」在别处同现误判）与
+    「外勤作战中心」（ESC 回主界面；标题 + 防区独有词 ≥2，任务列表
+    同名行不误判）
+15. 2026-11-28 #535：快速战斗设置弹窗（标题 + 字段双证据，点「取消」）
+    与关卡选择页（「进入关卡」+「行动力」双词，点左上「返回」）——
+    结算页 ESC 后游戏自动重弹设置窗、取消后停在关卡页，两张都曾落
+    unknown 假失败
 
 跑法：.venv\\Scripts\\python.exe tests\\suite_baijing_scene_registry_20261026.py
 """
@@ -61,6 +69,7 @@ CLAIM_XY = (630, 762)          # 定巡之礼弹窗「可领取」（2026-11-06 
 EVENT_CLOSE_XY = (1752, 258)   # 定巡之礼右上 X（比例 0.913,0.239 换算值）
 ANNOUNCE_BLANK_XY = (192, 540)  # 活动公告点空白关闭（比例 0.10,0.50 换算值）
 MAIL_CLOSE_XY = (1800, 205)    # 邮件面板右上 X（比例 0.938,0.19 换算值）
+CANCEL_XY = (751, 860)         # 快速战斗设置弹窗「取消」（#535 当帧 OCR 位置）
 
 
 # 2026-11-21 19:41:36 #456 生产当帧（19 个文本区域，原样抄录；坐标按 1919x1079）：
@@ -190,6 +199,35 @@ class Screen:
             # 注意 OCR 把「一键领取/赠送」的「一」截掉了，只剩「键领取/赠送」。
             data = {"返回": BACK_XY, "好友列表": (233, 167), "列表内查找好友": (600, 120),
                     "键领取/赠送": (1734, 55), "今日赠礼": (400, 300)}
+        elif self.state == "battle_result":
+            # 2026-11-27 22:49:26 #522 生产当帧（7 个文本区域，原样抄录）：
+            # 显影行动快速战斗两次的合并结算（第1次/第2次两列战利品）。
+            data = {"任务完成": (414, 159), "执行官等级": (228, 240), "100": (140, 280),
+                    "经验值+450": (310, 280), "获得战利品": (240, 330),
+                    "第1次": (150, 440), "第2次": (150, 540)}
+        elif self.state == "outer_combat":
+            # 2026-11-27 22:53:36 #524 生产当帧（24 个文本区域，摘录关键行）：
+            # 联合训练场侦察返回后漂到的作战地图。
+            data = {"物资筹备": (75, 75), "定向物资保障": (300, 77), "自由贸易": (425, 77),
+                    "显影行动": (557, 77), "光刻协议": (688, 77), "新质领域": (820, 77),
+                    "漫巡回忆": (312, 190), "队长养成": (290, 280), "卓越道路": (320, 280),
+                    "分进合击战": (1280, 340), "思维演绎": (230, 405),
+                    "外勤作战中心": (1390, 455), "联合训练场": (1140, 550),
+                    "天隙勘测": (1120, 620), "拟合回归": (1090, 700),
+                    "战斗教学": (1400, 800)}
+        elif self.state == "quick_battle_dialog":
+            # 2026-11-28 15:34:54 #535 生产当帧（原样抄录关键行）：显影行动
+            # 结算页 ESC 后游戏自动重弹的「快速战斗设置」窗，指定次数重置 1。
+            data = {"快速战斗设置E-10": (578, 189), "点击按钮或空白区域关闭": (1362, 187),
+                    "当前关卡掉落信息": (959, 248), "快速战斗设置": (959, 440),
+                    "行动力685/240640/240": (902, 506), "补充": (1207, 506),
+                    "指定次数": (955, 588), "1": (944, 610),
+                    "取消": CANCEL_XY, "快速战斗": (1183, 860)}
+        elif self.state == "stage_page":
+            # 2026-11-28 15:35:01-09 日志实锤：弹窗关掉后停在关卡选择页（E-10），
+            # 右下「进入关卡」「快速战斗」按钮 + 左上「返回」（15:35:09 OCR 命中）。
+            data = {"进入关卡": (1713, 962), "快速战斗": (1504, 962),
+                    "行动力": (733, 531), "返回": BACK_XY}
         elif self.state == "panel":
             # 任务列表里也有「午后茶憩」任务行文字，绝不能被当成休息室特征
             data = {"累计活跃度": ACTIVITY_XY, "午后茶憩": TEA_ROW_XY}
@@ -252,6 +290,12 @@ class Screen:
         elif self.state == "mail" and _near((x, y), MAIL_CLOSE_XY):
             # 面板右上 X 关闭 → 回到主界面（_dismiss_overlay 会故意跳过这个 X）
             self.state = "main"
+        elif self.state == "quick_battle_dialog" and _near((x, y), CANCEL_XY):
+            # 取消后回关卡选择页（关卡页由登记表下一轮再退一层）
+            self.state = "stage_page"
+        elif self.state == "stage_page" and _near((x, y), BACK_XY):
+            # 关卡页左上返回 → 任务面板
+            self.state = "panel"
         elif self.state == "friend" and _near((x, y), BACK_XY):
             # 好友入口在主界面左上图标行，返回即到家
             self.state = "main"
@@ -270,6 +314,9 @@ class Screen:
 
     def press(self, key):
         self.esc += 1
+        # 2026-11-27 #522/#524：结算页与外勤作战中心都吃 ESC 一次退
+        if key == "escape" and self.state in ("battle_result", "outer_combat"):
+            self.state = "main"
 
     def record_failure(self, logger, hwnd, step, detail):
         self.failures.append((step, detail))
@@ -302,6 +349,7 @@ class Screen:
         self._mset("detect_baijing_main_ui",
                    lambda logger, hwnd, budget_sec=2.0: (self.state == "main", "fake"))
         self._mset("_record_step_failure", self.record_failure)
+        self._mset("_focus_game_window", lambda logger, hwnd: None)
         self._mset("pyautogui", FakePyAuto())
         self._mset("time", FakeTime())
         for name, fn in (extra or {}).items():
@@ -670,13 +718,137 @@ def test_mail_panel_20261122():
 
 
 
+# ── 4.11 2026-11-27 新登记：战斗结算 / 外勤作战中心 ────────────────
+def test_battle_result_and_outer_combat_20261127():
+    print("[4.11] 战斗结算 / 外勤作战中心：失败取证驱动补登记（#522/#524）")
+    # 页面判定铁律：「任务完成+执行官等级」可能在别处同现，没战利品证据不判结算页
+    weak = [
+        {"text": "任务完成", "confidence": 1.0, "center": (0, 0)},
+        {"text": "执行官等级", "confidence": 1.0, "center": (0, 0)},
+    ]
+    check("无战利品/连战证据不判战斗结算", bd._battle_result_hit(LOG, 1, weak) is None,
+          bd._battle_result_hit(LOG, 1, weak))
+
+    battle_frame = [
+        {"text": t, "confidence": 0.95, "center": xy}
+        for t, xy in {
+            "任务完成": (414, 159), "执行官等级": (228, 240), "100": (140, 280),
+            "经验值+450": (310, 280), "获得战利品": (240, 330),
+            "第1次": (150, 440), "第2次": (150, 540),
+        }.items()
+    ]
+    rule, _hit = bd._match_scene_rule(LOG, 1, battle_frame)
+    check("真实取证帧（#522 的 7 个区域）判战斗结算",
+          rule is not None and rule["name"] == "战斗结算",
+          rule["name"] if rule else None)
+
+    # 结算页左上没有「返回」，退出 = ESC 一次（22:49:27 实测）
+    scr = Screen(state="battle_result")
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="t-battle-result"))
+    check("battle_result → 状态 main", state == "main", state)
+    check("battle_result ESC 一次退关", scr.esc == 1, scr.esc)
+    check("battle_result 不做点击", scr.clicks == [], scr.clicks)
+    check("battle_result 做过动作", acted is True, acted)
+
+    # 任务列表同名行（联合训练场/物资筹备/拟合回归）不能误判外勤作战中心
+    panel_words = [
+        {"text": "联合训练场", "confidence": 1.0, "center": (0, 0)},
+        {"text": "物资筹备", "confidence": 1.0, "center": (0, 0)},
+        {"text": "拟合回归", "confidence": 1.0, "center": (0, 0)},
+    ]
+    check("任务列表同名行不误判外勤作战中心", bd._outer_combat_hit(LOG, 1, panel_words) is None,
+          bd._outer_combat_hit(LOG, 1, panel_words))
+
+    outer_frame = [
+        {"text": t, "confidence": 0.95, "center": xy}
+        for t, xy in {
+            "物资筹备": (75, 75), "定向物资保障": (300, 77), "自由贸易": (425, 77),
+            "显影行动": (557, 77), "光刻协议": (688, 77), "新质领域": (820, 77),
+            "漫巡回忆": (312, 190), "队长养成": (290, 280), "卓越道路": (320, 280),
+            "分进合击战": (1280, 340), "思维演绎": (230, 405),
+            "外勤作战中心": (1390, 455), "联合训练场": (1140, 550),
+            "天隙勘测": (1120, 620), "拟合回归": (1090, 700),
+            "战斗教学": (1400, 800),
+        }.items()
+    ]
+    rule2, _ = bd._match_scene_rule(LOG, 1, outer_frame)
+    check("真实取证帧（#524 的 16 个关键区域）判外勤作战中心",
+          rule2 is not None and rule2["name"] == "外勤作战中心",
+          rule2["name"] if rule2 else None)
+    check("外勤作战中心特征避开任务行同名词",
+          "联合训练场" not in bd.OUTER_COMBAT_MARKERS and "物资筹备" not in bd.OUTER_COMBAT_MARKERS,
+          bd.OUTER_COMBAT_MARKERS)
+
+    scr = Screen(state="outer_combat")
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 1, context="t-outer-combat"))
+    check("outer_combat → 状态 main", state == "main", state)
+    check("outer_combat ESC 一次回主界面", scr.esc == 1, scr.esc)
+    check("outer_combat 不做点击", scr.clicks == [], scr.clicks)
+
+
+
+# ── 4.9 2026-11-28 #535：快速战斗设置弹窗 + 关卡页登记 ─────────────
+def test_quick_battle_dialog_20261128():
+    print("[4.9] #535：结算 ESC 后自动重弹的快速战斗设置窗、取消后的关卡页")
+    # 真帧（#535 当帧 OCR 原样）双证据命中弹窗规则
+    real = [{"text": "快速战斗设置E-10", "confidence": 1.0, "center": (578, 189)},
+            {"text": "当前关卡掉落信息", "confidence": 1.0, "center": (959, 248)},
+            {"text": "指定次数", "confidence": 1.0, "center": (955, 588)},
+            {"text": "取消", "confidence": 1.0, "center": CANCEL_XY}]
+    rule, _ = bd._match_scene_rule(LOG, 1, real)
+    check("弹窗真帧命中「快速战斗设置」",
+          rule is not None and rule["name"] == "快速战斗设置", rule["name"] if rule else None)
+
+    # 双证据闸：只有标题字样、弹窗内容字段漏读时不认领（防错挂到无关帧）
+    title_only = [{"text": "快速战斗设置", "confidence": 0.9, "center": (959, 440)}]
+    rule_t, _ = bd._match_scene_rule(LOG, 1, title_only)
+    check("只有标题没字段不判弹窗", rule_t is None, rule_t["name"] if rule_t else None)
+
+    # 关卡页负样本：弹窗帧没有「进入关卡」，关卡页规则不许抢弹窗
+    dialog_minus_title = [{"text": "快速战斗", "confidence": 1.0, "center": (1504, 962)},
+                          {"text": "行动力685/240", "confidence": 1.0, "center": (902, 506)}]
+    rule_d, _ = bd._match_scene_rule(LOG, 1, dialog_minus_title)
+    check("关卡页按钮词「快速战斗+行动力」不判弹窗也不判关卡页", rule_d is None,
+          rule_d["name"] if rule_d else None)
+
+    # 关卡页双词才认领（单词会串）
+    stage_one = [{"text": "进入关卡", "confidence": 1.0, "center": (1713, 962)}]
+    rule_s1, _ = bd._match_scene_rule(LOG, 1, stage_one)
+    check("只有「进入关卡」不判关卡页", rule_s1 is None, rule_s1["name"] if rule_s1 else None)
+    stage_full = [{"text": "进入关卡", "confidence": 1.0, "center": (1713, 962)},
+                  {"text": "行动力685/240", "confidence": 1.0, "center": (902, 506)},
+                  {"text": "返回", "confidence": 1.0, "center": BACK_XY}]
+    rule_s2, _ = bd._match_scene_rule(LOG, 1, stage_full)
+    check("进入关卡+行动力 → 判关卡页",
+          rule_s2 is not None and rule_s2["name"] == "关卡页", rule_s2["name"] if rule_s2 else None)
+
+    # 结算页不串：#522 结算帧文字仍命中「战斗结算」，不被新规则抢走
+    battle = [{"text": "任务完成", "confidence": 1.0, "center": (414, 159)},
+              {"text": "获得战利品", "confidence": 1.0, "center": (240, 330)},
+              {"text": "第1次", "confidence": 1.0, "center": (150, 440)}]
+    rule_b, _ = bd._match_scene_rule(LOG, 1, battle)
+    check("结算页仍判「战斗结算」",
+          rule_b is not None and rule_b["name"] == "战斗结算", rule_b["name"] if rule_b else None)
+
+    # 全链：弹窗点取消 → 关卡页点左上返回 → 任务面板（对应 15:34:54→15:35:11 实际链路）
+    scr = Screen(state="quick_battle_dialog")
+    state, acted = scr.run(lambda: bd.recover_scene(LOG, 4, context="t-qbd"))
+    check("弹窗→取消→关卡页→返回→面板 全链", state == "panel", state)
+    check("做过动作", acted is True, acted)
+    check("点击序列＝取消→左上返回", scr.clicks == [CANCEL_XY, BACK_XY], scr.clicks)
+    check("全程零 ESC", scr.esc == 0, scr.esc)
+    check("证据零落证", scr.failures == [], scr.failures)
+
+
 # ── 8. 登记表顺序 ─────────────────────────────────────────────────
 def test_rule_order():
     print("[8] 登记表顺序：面板特征优先，绝不在任务面板上点「返回」")
-    check("规则顺序", [r["name"] for r in bd.SCENE_RULES] == ["加载过场", "活动公告", "过场遮罩", "计划等级提升",
-                                                              "定巡之礼", "茶憩摘要", "关注特写", "休息室",
-                                                              "烙痕详情", "烙痕列表", "茶憩房间", "有猫零售",
-                                                              "邮件/公告面板", "好友页"],
+    check("规则顺序", [r["name"] for r in bd.SCENE_RULES] == ["加载过场", "活动公告", "过场遮罩", "战斗结算",
+                                                              "快速战斗设置", "关卡页",
+                                                              "计划等级提升", "定巡之礼", "茶憩摘要", "关注特写",
+                                                              "休息室", "烙痕详情", "烙痕列表", "茶憩房间",
+                                                              "有猫零售", "邮件/公告面板", "外勤作战中心",
+                                                              "好友页"],
           [r["name"] for r in bd.SCENE_RULES])
     check("休息室特征不含「午后茶憩」（任务行也有这四个字）",
           "午后茶憩" not in bd.REST_ROOM_MARKERS, bd.REST_ROOM_MARKERS)
@@ -755,6 +927,8 @@ def main():
     test_rounds_exhausted_not_failure_20261112()
     test_friend_page_20261113()
     test_mail_panel_20261122()
+    test_battle_result_and_outer_combat_20261127()
+    test_quick_battle_dialog_20261128()
     test_event_announce_20261107()
     test_single_ocr_per_round()
     test_unknown_scene_evidence()

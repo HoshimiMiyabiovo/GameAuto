@@ -337,6 +337,11 @@ This file mirrors important repository-level development notes inside the projec
   后台 python 形态一直挂着。现 `AutomationController.shutdown_module_runtime()`
   （停当前会话 + 扫杀孤儿）由 `gui._cleanup_on_quit` 显式调用；回归
   `tests/suite_module_runtime_shutdown_20261117.py`。
+  **runner 空闲自杀（2026-11-28 补）**：退出钩子只在 GUI 正常退出时跑，GUI 被强杀/
+  崩溃时孤儿扫杀也不执行——11-28 实锤 PID 8448 在客户端断开、任务停掉后还挂了一整晚。
+  现 runner 自己判断「无控制端连接 + 无任务在跑 + 空闲 ≥ `IDLE_EXIT_SEC`（默认 120s，
+  环境变量 `GAMEAUTO_OKWW_IDLE_EXIT_SEC` 可调）」就收摊；有任务时永不触发。回归
+  `tests/suite_okww_runner_idle_exit_20261128.py`。
 - **GUI 内置 ok-ww 开关（2026-11-19）**：鸣潮专项页顶部「内置 ok-ww」开关用内置副本的
   `data/apps/ok-ww/python/pythonw.exe main.py` 直启 GUI 引擎（同 `start-ok-ww-direct.bat`，
   不走 ok-ww.exe 管理器、不触发 UAC/自动更新），关闭开关结束该 pythonw 进程。只认
@@ -590,7 +595,7 @@ This file mirrors important repository-level development notes inside the projec
   白荆四套件 ALL PASS。**未实机验证，需重启 GUI**。
   `_return_to_task_panel` 返回顺序：已在面板→主界面重开「任务」→ 退出确认框点「确认」→
   页面左上角「返回」按钮（fx<0.2,fy<0.15 区域）→ ESC，最多 5 层。
-- **场景退出登记表已扩到 10 个场景**（`SCENE_RULES`，2026-10-27 / 10-29 / 10-30 失败取证驱动补登记）：
+- **场景退出登记表已扩到 16 个场景**（`SCENE_RULES`，2026-10-27 / 10-29 / 10-30 失败取证驱动补登记）：
   原有 过场遮罩/茶憩摘要/关注特写/休息室 之外，新增 **烙痕详情**（特质提升/烙痕等级；
   10-27 10:18 实锤 +1/确认都点中了、等级提升都出了，只因页面不在登记表里恢复认不出，
   连环拖死茶憩和叶脉联结）、**茶憩房间**（茶憩纪念函/飞镖/棒球 并集——10:22 当帧 OCR
@@ -617,6 +622,13 @@ This file mirrors important repository-level development notes inside the projec
   （「好友列表/列表内查找好友/今日赠礼/键领取/赠送/一键领取/赠送」——OCR 实测
   「一键领取/赠送」的「一」常被截掉），单「好友列表」不许命中；退出点左上「返回」
   （好友入口在主界面左上图标行，返回即到家）。回归 scene_registry 套件 [4.9]。
+  **2026-11-27 再补两条（#522/#524 取证驱动）**：① **战斗结算**「任务完成」页
+  （显影行动等「快速战斗」打完的合并结算，第1次/第2次两列战利品）——点屏幕中心
+  只能翻标签、左上没有「返回」，实测 ESC 一次退关（22:49:27）；detector ≥2 独有词
+  且必须带「获得战利品/第X次」硬证据（防「任务完成+执行官等级」在别处同现误判）。
+  ② **外勤作战中心**（联合训练场侦察返回后漂到的作战地图）——实测 ESC 一次回
+  主界面（22:53:37）；detector 要求标题「外勤作战中心」+ ≥1 个防区独有词，任务
+  列表同名行（联合训练场/物资筹备/拟合回归）不误判。回归 scene_registry 套件 [4.11]。
   **2026-11-10 更正（用户「加载过场不能登记吗？为什么总是对着加载报失败」）**：
   规则 11-07 就登记了、还排在 `SCENE_RULES` 第一位，但 `LOADING_SCREEN_MARKERS=("ASHECHOES",)`
   当天 **0 次命中**——10:00:32 生产 onnxocr v6 的真实当帧是「白荆廊」(0.85) /
@@ -657,7 +669,7 @@ This file mirrors important repository-level development notes inside the projec
   烙痕详情返回后的列表页无独占特征，如实报 unknown 交通用兜底。
   照证据补登记的闭环继续有效：`未匹配任何已知场景` 的当帧文字就是候选特征来源。
   回归 `tests/suite_baijing_scene_registry_20261026.py`（[4.5] 节含 10-29/10-30 新增 6 项 +
-  顺序断言 10 条）。
+  顺序断言 16 条）。
 - **午后茶憩「前往」任务已自动化**（`_handle_tea_break_task`，同日用户 7 张截图实测）：
   点行内「前往」（关键词「午后茶」，OCR 常把"歇"认成"憩"）→「是否前往茶憩?」确定
   (0.62,0.63) → 角色选择页（今日可邀份额）点首个角色 (0.41,0.42) → 茶憩场景喝茶 →

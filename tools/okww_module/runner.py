@@ -36,6 +36,123 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("game_auto.okww.runner")
 
+# 控制端（game_auto GUI）消失后，runner 空闲多久自杀（秒）。
+# 2026-11-28 实锤：GUI 被强杀/崩溃时 aboutToQuit 不跑，常驻 runner 会变无窗口
+# 孤儿 python 一直挂着（PID 8448 挂了一整晚）。只靠 GUI 退出钩子扫杀不够，
+# runner 自己也要能收摊；正在跑任务时永不触发（任务被打断由 _clear_client 停）。
+IDLE_EXIT_SEC = max(15.0, float(os.environ.get("GAMEAUTO_OKWW_IDLE_EXIT_SEC") or 120))
+
+# 任务在跑、但 ok-ww 日志连续这么多秒没有任何新增 → 判卡死：
+# 先 dump 全线程栈留现场，再强制停任务（批次按失败处理，继续下一个游戏）。
+# 2026-11-28 实锤：游戏内热更重启后 ok-ww 卡在 start_device()（重建捕获），
+# 23 分钟零日志，直到 GUI 断线才被踢出来；有这条护栏最多损失 5 分钟。
+STALL_LOG_SEC = max(30.0, float(os.environ.get("GAMEAUTO_OKWW_STALL_LOG_SEC") or 300))
+
+# 任务在跑、游戏窗口却不是前台时，多久重试一次切前台（秒）。
+# ok-ww 的输入层有前台门禁（非前台直接跳过点击/按键），游戏热更重启换 hwnd
+# 后它不会自己再置顶，这里替它兜住。
+FOCUS_RETRY_SEC = max(5.0, float(os.environ.get("GAMEAUTO_OKWW_FOCUS_RETRY_SEC") or 15))
+
+
+def _pick_okww_log(root: Path) -> Optional[Path]:
+    """返回 ok-ww 的实时日志文件（logs/ok-script.log，轮转后取最新的）。"""
+    live = root / "logs" / "ok-script.log"
+    if live.is_file():
+        return live
+    try:
+        candidates = [
+            path for path in (root / "logs").glob("ok-script*.log") if path.is_file()
+        ]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _file_signature(path: Optional[Path]) -> Optional[tuple]:
+    """(路径, 大小, mtime) 签名；路径切换（日志轮转）也算变化。"""
+    if path is None:
+        return None
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (str(path), stat.st_size, stat.st_mtime)
+
+
+def _read_log_since(path: Optional[Path], offset: int) -> str:
+    """读取任务开始后新增的日志；轮转/截断时从头读。"""
+    if path is None:
+        return ""
+    try:
+        size = path.stat().st_size
+        start = offset if size >= offset else 0
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            handle.seek(start)
+            return handle.read()
+    except OSError:
+        return ""
+
+
+def _extract_task_disabled_error(delta: str) -> str:
+    """ok-script 用 TaskDisabledException 表示任务被框架中止（含 ok-hna 的
+    `_raise_with_evidence` 失败）。这个异常不会设置 task.info['Error']，
+    executor 只打一行 "TaskDisabledException, continue"，必须从日志里认出来，
+    否则会被 runner 误判成正常完成（假成功）。
+    """
+    if not delta or "TaskDisabledException" not in delta:
+        return ""
+    lines = [line.strip() for line in delta.splitlines() if line.strip()]
+    index = next(
+        (i for i, line in enumerate(lines) if "TaskDisabledException" in line), None
+    )
+    if index is None:
+        return ""
+    context = lines[index - 1] if index > 0 else ""
+    for line in reversed(lines[max(0, index - 8):index]):
+        if any(key in line for key in ("❌", "失败", "超时", "权限", "未找到", "无法")):
+            context = line
+            break
+    return "ok-script TaskDisabledException" + (f": {context[:240]}" if context else "")
+
+
+def _force_foreground(hwnd: int) -> bool:
+    """AttachThreadInput 版本的 SetForegroundWindow。
+
+    ok 自带的 bring_to_front 只做 BringWindowToTop + SetForegroundWindow；
+    Windows 允许前台锁定，后台进程单独调经常静默失败，先挂到前台线程再切。
+    """
+    try:
+        import win32api
+        import win32con
+        import win32gui
+        import win32process
+
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        foreground = win32gui.GetForegroundWindow()
+        if foreground == hwnd:
+            return True
+        current_thread = win32api.GetCurrentThreadId()
+        foreground_thread = (
+            win32process.GetWindowThreadProcessId(foreground)[0] if foreground else 0
+        )
+        attached = False
+        if foreground_thread and foreground_thread != current_thread:
+            attached = bool(
+                win32process.AttachThreadInput(foreground_thread, current_thread, True)
+            )
+        try:
+            win32gui.BringWindowToTop(hwnd)
+            win32gui.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                win32process.AttachThreadInput(foreground_thread, current_thread, False)
+        return win32gui.GetForegroundWindow() == hwnd
+    except Exception:  # noqa: BLE001 - 切前台失败只降级为 warning
+        return False
+
 
 def _json_safe(value: Any, depth: int = 0) -> Any:
     """Best-effort conversion for task.info values."""
@@ -61,8 +178,10 @@ class ModuleRunner:
         ready_file: str,
         log_file: str,
         humanize_config: str,
+        runtime_name: str = "ok-ww",
     ) -> None:
         self.root = Path(okww_root).resolve()
+        self.runtime_name = str(runtime_name or "ok-ww")
         self.host = host
         self.port = int(port)
         self.token = token
@@ -86,7 +205,15 @@ class ModuleRunner:
         self._errors: List[str] = []
         self._active_client: Optional["ClientConnection"] = None
         self._client_lock = threading.Lock()
+        self._client_gone_at: Optional[float] = None
+        self._started_monotonic = time.monotonic()
         self._log_handle = None
+        # 卡死护栏状态：日志签名 + 从何时开始没变；触发后置 _stall_reason
+        self._stall_signature: Optional[tuple] = None
+        self._stall_since: Optional[float] = None
+        self._stall_reason = ""
+        # 焦点守护：上次尝试切前台的时间（节流）
+        self._focus_last_attempt = 0.0
 
     # ------------------------------------------------------------------ setup
     def _setup_logging(self) -> None:
@@ -111,16 +238,22 @@ class ModuleRunner:
         package_logger.addHandler(handler)
 
     def _init_okww(self) -> None:
-        if not (self.root / "main.py").is_file():
-            raise RuntimeError(f"ok-ww runtime not found: {self.root / 'main.py'}")
+        # ok-ww 用 main.py 作入口；ok-hna 这类无 main.py 的 ok-script 工程
+        # 以 config.py 为根（ok-script 只取 sys.argv[0] 的目录，不要求文件是 main.py）。
+        entry = self.root / "main.py"
+        if not entry.is_file():
+            entry = self.root / "config.py"
+        if not entry.is_file():
+            raise RuntimeError(
+                f"ok-script runtime not found: {self.root} (main.py/config.py)")
         if not (self.root / "configs").exists():
-            raise RuntimeError(f"ok-ww configs not found: {self.root / 'configs'}")
+            raise RuntimeError(f"ok-script configs not found: {self.root / 'configs'}")
 
-        # ok-script derives its app path from sys.argv[0].  It must point at
-        # ok-ww's main.py, otherwise assets/logs resolve under our runner dir.
+        # ok-script derives its app path from sys.argv[0].  It must point inside
+        # the runtime root, otherwise assets/logs resolve under our runner dir.
         os.chdir(self.root)
         sys.path.insert(0, str(self.root))
-        sys.argv = [str(self.root / "main.py")]
+        sys.argv = [str(entry)]
 
         import config as okww_config  # type: ignore[import-not-found]
 
@@ -151,18 +284,24 @@ class ModuleRunner:
         for task in list(self.ok.task_executor.trigger_tasks):
             task._enabled = False
         logger.info(
-            "ok-ww runtime ready: version=%s onetime=%d trigger=%d",
+            "%s runtime ready: version=%s onetime=%d trigger=%d",
+            self.runtime_name,
             self.version,
             len(self.ok.task_executor.onetime_tasks),
             len(self.ok.task_executor.trigger_tasks),
         )
 
     def _install_humanize(self) -> None:
+        # humanize 是 ok-ww 的拟人化点击插件配置；ok-hna 等工程没有这份配置，
+        # 空路径/文件不存在时直接跳过，别把正常启动刷成 ERROR。
+        path = str(self.humanize_config or "").strip()
+        if not path or not Path(path).is_file():
+            return
         try:
             import humanize  # type: ignore[import-not-found]
 
             self.humanize_settings = humanize.install(
-                self.humanize_config, logger_override=logger
+                path, logger_override=logger
             )
         except Exception as exc:  # noqa: BLE001 - never block the runtime
             logger.error("humanize install failed: %s", exc)
@@ -179,6 +318,7 @@ class ModuleRunner:
             "token": self.token,
             "version": self.version,
             "root": str(self.root),
+            "runtime_name": self.runtime_name,
             "started_at": self._started_at,
             "error": error,
         }
@@ -218,6 +358,15 @@ class ModuleRunner:
             try:
                 conn, addr = self.server.accept()
             except socket.timeout:
+                if self._idle_exit_due():
+                    logger.warning(
+                        "no control client for %.0fs (idle exit %ss); exiting",
+                        time.monotonic()
+                        - (self._client_gone_at or self._started_monotonic),
+                        IDLE_EXIT_SEC,
+                    )
+                    self._shutdown.set()
+                    break
                 continue
             except OSError:
                 break
@@ -238,10 +387,22 @@ class ModuleRunner:
                     continue
                 client = ClientConnection(self, conn, addr)
                 self._active_client = client
+                self._client_gone_at = None
             client.start()
+
+    def _idle_exit_due(self) -> bool:
+        """没有控制端连着、也没有任务在跑，且空闲超时 → 该收摊了。"""
+        if self._active_client is not None or self._current_task is not None:
+            return False
+        since = self._client_gone_at or self._started_monotonic
+        return (time.monotonic() - since) >= IDLE_EXIT_SEC
 
     def _heartbeat_loop(self) -> None:
         while not self._shutdown.wait(5.0):
+            try:
+                self._guard_running_task()
+            except Exception as exc:  # noqa: BLE001 - 护栏自身绝不能炸掉心跳
+                logger.warning("task guard loop failed: %s", exc)
             client = self._active_client
             if client is None:
                 continue
@@ -258,10 +419,102 @@ class ModuleRunner:
             }
             client.send(payload)
 
+    # ------------------------------------------------------------ task guards
+    def _guard_running_task(self) -> None:
+        """任务运行期间的看护：焦点守护 + 日志停滞检测。"""
+        task = self._current_task
+        if task is None or self.ok is None:
+            self._stall_signature = None
+            self._stall_since = None
+            self._focus_last_attempt = 0.0
+            return
+        if not getattr(task, "running", False):
+            # 还没真正跑起来（等游戏启动）由 GUI 侧启动超时兜底
+            self._stall_signature = None
+            self._stall_since = None
+            return
+        self._ensure_game_foreground()
+        self._check_log_stall()
+
+    def _ensure_game_foreground(self) -> None:
+        """游戏窗口不在前台时主动切回来。
+
+        ok-ww 只在交互线程启动时置顶一次，热更重启换 hwnd 后不会重试；
+        而它的输入层有前台门禁（非前台直接跳过点击/按键），会静默走不动。
+        """
+        now = time.monotonic()
+        if now - self._focus_last_attempt < FOCUS_RETRY_SEC:
+            return
+        hwnd_window = getattr(self.ok.device_manager, "hwnd_window", None)
+        hwnd = int(getattr(hwnd_window, "hwnd", 0) or 0)
+        if not hwnd:
+            return
+        try:
+            if hwnd_window.is_foreground():
+                return
+        except Exception:  # noqa: BLE001 - 状态查询失败不拦任务
+            return
+        self._focus_last_attempt = now
+        logger.info("focus guard: game window not foreground (hwnd=%s), re-activating", hwnd)
+        activated = False
+        try:
+            activated = bool(hwnd_window.bring_to_front())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("focus guard: bring_to_front failed: %s", exc)
+        if not activated:
+            activated = _force_foreground(hwnd)
+        if activated:
+            logger.info("focus guard: game window re-activated (hwnd=%s)", hwnd)
+        else:
+            logger.warning(
+                "focus guard: still not foreground after activation attempts (hwnd=%s)",
+                hwnd,
+            )
+
+    def _check_log_stall(self) -> None:
+        if self._stall_reason:
+            return
+        log_path = _pick_okww_log(self.root)
+        signature = _file_signature(log_path)
+        if signature is None:
+            return
+        now = time.monotonic()
+        if signature != self._stall_signature:
+            self._stall_signature = signature
+            self._stall_since = now
+            return
+        quiet = now - (self._stall_since or now)
+        if quiet < STALL_LOG_SEC:
+            return
+        self._trigger_stall(log_path, quiet)
+
+    def _trigger_stall(self, log_path: Optional[Path], quiet: float) -> None:
+        task = self._current_task
+        name = task.name if task is not None else "?"
+        self._stall_reason = (
+            f"ok-ww 日志 {int(quiet)}s 无新增（疑似卡死，最后日志: "
+            f"{log_path.name if log_path else '未知'}），已强制停止"
+        )
+        logger.error(
+            "stall guard: %s; dumping thread stacks to runner log", self._stall_reason
+        )
+        try:
+            import faulthandler
+
+            faulthandler.dump_traceback(file=self._log_handle, all_threads=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("stall guard: thread dump failed: %s", exc)
+        try:
+            self.ok.task_executor.stop_current_task()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("stall guard: stop_current_task failed: %s", exc)
+        logger.error("stall guard: stop requested for %s", name)
+
     def _clear_client(self, client: "ClientConnection") -> None:
         with self._client_lock:
             if self._active_client is client:
                 self._active_client = None
+                self._client_gone_at = time.monotonic()
         if self._current_task is not None:
             logger.warning("control client disconnected while a task is running; stopping task")
             self.stop_task()
@@ -385,6 +638,9 @@ class ModuleRunner:
 
             self._errors = []
             self._stop_requested = False
+            self._stall_reason = ""
+            self._stall_signature = None
+            self._stall_since = None
             self._current_task = task
             self._task_started_at = time.monotonic()
             task.start_time = 0
@@ -426,6 +682,13 @@ class ModuleRunner:
 
             logger.info("run_task start: %s timeout=%ss close_game=%s", task.name, timeout, close_game)
             self._send_event("task_started", task=task.name, timeout=timeout)
+            task_log_path = _pick_okww_log(self.root)
+            try:
+                task_log_offset = (
+                    task_log_path.stat().st_size if task_log_path is not None else 0
+                )
+            except OSError:
+                task_log_offset = 0
             started = self.ok.headless_app.start_controller.do_start(task, exit_after=False)
             if not started:
                 raise RuntimeError(f"start task failed: {task.name}")
@@ -439,6 +702,9 @@ class ModuleRunner:
                         self.ok.task_executor.stop_current_task()
                     except Exception:
                         pass
+                    break
+                if self._stall_reason:
+                    logger.info("run_task stall stop: %s", self._stall_reason)
                     break
                 if task.running:
                     saw_running = True
@@ -464,17 +730,29 @@ class ModuleRunner:
                 task_error = str(task.info.get("Error") or "")
             except Exception:
                 task_error = ""
-            error = "\n".join(self._errors) or task_error
+            if not task_error and not self._stop_requested and not self._stall_reason:
+                # TaskDisabledException 不会写 task.info['Error']，只能从本次
+                # 任务新增的日志里认；给 QueueHandler 后台消费者足够时间落盘，
+                # 宁可多等 1 秒，也不能把失败当成功。
+                time.sleep(1.0)
+                delta = _read_log_since(task_log_path, task_log_offset)
+                task_error = _extract_task_disabled_error(delta)
+            error = self._stall_reason or "\n".join(self._errors) or task_error
             stopped = self._stop_requested
             completed = bool(getattr(task, "start_time", 0)) and not task.enabled and not task.running
             if not completed and not stopped and not error:
                 error = "task did not start (game window not ready or task was not queued)"
             success = completed and not stopped and not error
 
-            if success and not getattr(task, "exit_after_task", False):
+            if (
+                success
+                and self.runtime_name == "ok-ww"
+                and not getattr(task, "exit_after_task", False)
+            ):
                 # ok-ww 的 TaskExecutor 只在 exit_after=True 时打这个标记。
                 # 模块模式不退出 runner，但 game_auto 的日报解析器仍以它作为
-                # 整体成功标志，所以成功时补一行兼容标记。
+                # 整体成功标志，所以成功时补一行兼容标记。ok-hna 没有这个解析器，
+                # 不要往它的日志里写假标记。
                 try:
                     from ok import Logger  # type: ignore[import-not-found]
 
@@ -697,8 +975,12 @@ class ClientConnection:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Headless ok-ww module runner")
-    parser.add_argument("--okww-root", required=True, help="ok-ww working directory")
+    parser = argparse.ArgumentParser(
+        description="Headless ok-script module runner (ok-ww / ok-hna)")
+    parser.add_argument(
+        "--okww-root", "--root", dest="okww_root", required=True,
+        help="ok-script runtime root (ok-ww working/ or ok-hna project root)")
+    parser.add_argument("--runtime-name", default="ok-ww")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
     # token 走环境变量优先（审计 P3）：命令行参数对同用户的其他进程可读
@@ -722,6 +1004,7 @@ def main() -> int:
         ready_file=args.ready_file,
         log_file=args.log,
         humanize_config=args.humanize_config,
+        runtime_name=args.runtime_name,
     )
     return runner.run()
 

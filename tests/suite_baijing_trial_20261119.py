@@ -10,6 +10,8 @@
   [5] 打桩全流程状态机（主界面→活动中心→试玩→单槽战斗→返回）
   [6] 2026-11-22 #447/#456：活动中心 OCR 未命中不再抛 UnboundLocalError；
       收尾「返回」先判页——主界面上那个坐标是邮件图标（盲点会开邮件面板）
+  [7] 2026-11-25 #505 / 11-28 #536：试玩四个 OCR 区域统一 (x0,y0,x1,y1) 口径；
+      曾按 (x,y,宽,高) 写导致零面积区域，1.00 置信度「活动中心」被滤掉
 
 跑法：.venv\\Scripts\\python.exe -m pytest tests\\suite_baijing_trial_20261119.py -q
 """
@@ -275,6 +277,61 @@ def test_ocr_miss_no_crash():
     check("收尾仍恢复主界面", out.get("returned_main") is True, out.get("returned_main"))
 
 
+# ── [7] 2026-11-25 #505 / 11-28 #536：OCR 区域口径回归 ─────────────────
+def test_region_conventions():
+    print("[7] 试玩 OCR 区域是 (x0,y0,x1,y1) 且面积非零")
+    regions = {
+        "REGION_ACTIVITY_BTN": bt.REGION_ACTIVITY_BTN,
+        "REGION_TRIAL_TAB": bt.REGION_TRIAL_TAB,
+        "REGION_START_BTN": bt.REGION_START_BTN,
+        "REGION_CHAR_NAME": bt.REGION_CHAR_NAME,
+    }
+    for name, (x0, y0, x1, y1) in regions.items():
+        check(f"{name} 满足 x0<x1、y0<y1（零面积会把 OCR 候选全滤掉）",
+              0.0 <= x0 < x1 <= 1.0 and 0.0 <= y0 < y1 <= 1.0, f"{name}={regions[name]}")
+    # 11-25 #505 真实当帧：全窗 OCR 识别「活动中心」@ (1589,1006)，窗口 1919x1079
+    from game_auto.runtime import baijing_common as bc
+
+    clicks = []
+    with patch.object(bc, "_window_region", return_value=(0, 0, 1919, 1079)), \
+         patch.object(bc, "ocr_window_content",
+                      return_value=[{"text": "活动中心", "confidence": 1.0,
+                                     "center": (1589, 1006)}]), \
+         patch.object(bt, "_pyautogui_click_guarded",
+                      side_effect=lambda x, y: clicks.append((x, y))):
+        ok = bt._ocr_click(LOG, 123, "活动中心", "活动中心", bt.REGION_ACTIVITY_BTN)
+    check("真实当帧坐标（1589,1006）区域过滤后仍命中并点击",
+          ok is True and clicks == [(1589, 1006)], f"ok={ok} clicks={clicks}")
+
+
+def test_failure_frame_regression():
+    print("[7b] 11-28 #536 失败帧 OCR 回放：区域过滤后命中「活动中心」")
+    shot = ART / "flow_failures" / "20261128_153857_BaiJingTrial_打开活动中心.jpg"
+    if not shot.exists():
+        print("  SKIP 失败帧不存在（data/artifacts 被 gitignore）")
+        return
+    from PIL import Image
+
+    from game_auto.runtime import baijing_common as bc
+    from game_auto.runtime import ocr_click_tester as oc
+
+    getter = getattr(oc, "_get_onnxocr_engine", None)
+    engine = getter() if getter else None
+    if not engine:
+        print("  SKIP onnxocr v6 引擎不可用（当帧坐标桩测已覆盖区域口径）")
+        return
+    rows = _rows_from_image(engine, shot)
+    width, height = Image.open(shot).size
+    check("失败帧分类为主界面", bt.classify_trial_page(rows) == "main",
+          f"got={bt.classify_trial_page(rows)}")
+    with patch.object(bc, "_window_region", return_value=(0, 0, width, height)), \
+         patch.object(bc, "ocr_window_content", return_value=rows):
+        hit = bt._ocr_best_match(LOG, ["活动中心"], 123,
+                                 frac_region=bt.REGION_ACTIVITY_BTN, min_conf=bt.MIN_CONF)
+    check("失败帧「活动中心」不再被区域过滤掉",
+          bool(hit) and "活动中心" in str(hit.get("text")), hit)
+
+
 def main():
     test_text_matrix()
     test_screenshot_matrix()
@@ -284,6 +341,8 @@ def main():
     test_flow_done()
     test_flow_skip_slot()
     test_ocr_miss_no_crash()
+    test_region_conventions()
+    test_failure_frame_regression()
     print("-" * 60)
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} -> {FAILURES}")
